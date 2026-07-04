@@ -146,8 +146,7 @@ struct RawDone {
 /// Parse an `agents.toml` document into compiled agent configs, sorted by
 /// agent name.
 pub fn parse_agents(text: &str) -> Result<Vec<AgentConfig>, ConfigError> {
-    let raw: BTreeMap<String, RawAgent> =
-        toml::from_str(text).map_err(ConfigError::Toml)?;
+    let raw: BTreeMap<String, RawAgent> = toml::from_str(text).map_err(ConfigError::Toml)?;
     raw.into_iter()
         .map(|(name, agent)| compile_agent(name, agent))
         .collect()
@@ -170,7 +169,9 @@ fn compile_agent(name: String, raw: RawAgent) -> Result<AgentConfig, ConfigError
         reason_blocked,
         reason_working,
         done_after_activity: Duration::from_secs(
-            raw.done.after_activity_secs.unwrap_or(DEFAULT_DONE_AFTER_SECS),
+            raw.done
+                .after_activity_secs
+                .unwrap_or(DEFAULT_DONE_AFTER_SECS),
         ),
         name,
     })

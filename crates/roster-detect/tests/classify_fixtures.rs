@@ -28,12 +28,7 @@ fn classify_fresh(agent: &str, command: &str, name: &str) -> StateReading {
 /// Classify a fixture as if the agent produced a `working` reading
 /// `secs_ago` seconds ago and the screen has settled since (content
 /// unchanged between that frame and this one).
-fn classify_after_activity(
-    agent: &str,
-    command: &str,
-    name: &str,
-    secs_ago: u64,
-) -> StateReading {
+fn classify_after_activity(agent: &str, command: &str, name: &str, secs_ago: u64) -> StateReading {
     let detector = Detector::builtin();
     let kind = detector.identify(command).expect("command identifies");
     let grid = fixture(agent, name);

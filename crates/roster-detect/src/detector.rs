@@ -156,10 +156,7 @@ fn find_match(patterns: &[Regex], lines: &[String]) -> Option<PatternMatch> {
     for pattern in patterns {
         for (row, line) in lines.iter().enumerate().rev() {
             if let Some(captures) = pattern.captures(line) {
-                let text = captures
-                    .get(1)
-                    .map(|group| group.as_str())
-                    .unwrap_or(line);
+                let text = captures.get(1).map(|group| group.as_str()).unwrap_or(line);
                 return Some(PatternMatch {
                     row,
                     text: clean_line(text),
@@ -170,15 +167,9 @@ fn find_match(patterns: &[Regex], lines: &[String]) -> Option<PatternMatch> {
     None
 }
 
-fn reason_from(
-    source: ReasonSource,
-    found: &PatternMatch,
-    lines: &[String],
-) -> Option<String> {
+fn reason_from(source: ReasonSource, found: &PatternMatch, lines: &[String]) -> Option<String> {
     match source {
-        ReasonSource::MatchedLine => {
-            (!found.text.is_empty()).then(|| found.text.clone())
-        }
+        ReasonSource::MatchedLine => (!found.text.is_empty()).then(|| found.text.clone()),
         ReasonSource::LastNonempty => last_worded_line(lines),
     }
 }
@@ -279,9 +270,7 @@ mod tests {
         // it supplies the reason even though the menu row sits below it.
         let detector = Detector::builtin();
         let kind = detector.identify("claude").unwrap();
-        let grid = Grid::from_text(
-            "│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. No",
-        );
+        let grid = Grid::from_text("│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. No");
         let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
         assert_eq!(reading.state, AgentState::Blocked);
         assert_eq!(reading.reason.as_deref(), Some("Do you want to proceed?"));
@@ -332,7 +321,11 @@ mod tests {
     fn empty_and_blank_grids_read_as_idle() {
         let detector = Detector::builtin();
         let kind = detector.identify("claude").unwrap();
-        for grid in [Grid::new(0, 0), Grid::new(80, 24), Grid::from_text("\n\n\n")] {
+        for grid in [
+            Grid::new(0, 0),
+            Grid::new(80, 24),
+            Grid::from_text("\n\n\n"),
+        ] {
             let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
             assert_eq!(reading.state, AgentState::Idle);
             assert_eq!(reading.reason, None);

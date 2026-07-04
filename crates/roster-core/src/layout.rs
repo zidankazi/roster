@@ -113,14 +113,12 @@ impl LayoutNode {
                         first: Box::new(first),
                         second: Box::new(node),
                     }),
-                    RemoveOutcome::NotFound(second) => {
-                        RemoveOutcome::NotFound(LayoutNode::Split {
-                            direction,
-                            ratio,
-                            first: Box::new(first),
-                            second: Box::new(second),
-                        })
-                    }
+                    RemoveOutcome::NotFound(second) => RemoveOutcome::NotFound(LayoutNode::Split {
+                        direction,
+                        ratio,
+                        first: Box::new(first),
+                        second: Box::new(second),
+                    }),
                 },
             },
         }
@@ -180,24 +178,14 @@ fn divide(area: Rect, direction: SplitDirection, ratio: f32) -> (Rect, Rect) {
             let first_w = portion(area.width, ratio);
             (
                 Rect::new(area.x, area.y, first_w, area.height),
-                Rect::new(
-                    area.x + first_w,
-                    area.y,
-                    area.width - first_w,
-                    area.height,
-                ),
+                Rect::new(area.x + first_w, area.y, area.width - first_w, area.height),
             )
         }
         SplitDirection::Vertical => {
             let first_h = portion(area.height, ratio);
             (
                 Rect::new(area.x, area.y, area.width, first_h),
-                Rect::new(
-                    area.x,
-                    area.y + first_h,
-                    area.width,
-                    area.height - first_h,
-                ),
+                Rect::new(area.x, area.y + first_h, area.width, area.height - first_h),
             )
         }
     }

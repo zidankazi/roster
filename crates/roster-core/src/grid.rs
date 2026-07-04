@@ -105,11 +105,7 @@ impl Grid {
     pub fn from_text(text: &str) -> Self {
         let lines: Vec<&str> = text.lines().collect();
         let rows = lines.len();
-        let cols = lines
-            .iter()
-            .map(|l| l.chars().count())
-            .max()
-            .unwrap_or(0);
+        let cols = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
         let mut grid = Grid::new(cols, rows);
         for (row, line) in lines.iter().enumerate() {
             for (col, ch) in line.chars().enumerate() {

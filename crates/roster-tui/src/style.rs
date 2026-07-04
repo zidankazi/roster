@@ -25,9 +25,7 @@ pub fn state_label(state: AgentState) -> &'static str {
 
 /// Convert a grid cell's style into a ratatui [`Style`].
 pub fn cell_style(style: CellStyle) -> Style {
-    let mut out = Style::default()
-        .fg(color(style.fg))
-        .bg(color(style.bg));
+    let mut out = Style::default().fg(color(style.fg)).bg(color(style.bg));
     if style.bold {
         out = out.add_modifier(Modifier::BOLD);
     }

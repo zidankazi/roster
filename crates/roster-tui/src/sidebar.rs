@@ -42,9 +42,7 @@ pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> 
                 agent: detector.agent(kind).name.clone(),
                 state: pane.state,
                 reason: pane.reason.clone(),
-                age: pane
-                    .last_change
-                    .map(|at| now.saturating_duration_since(at)),
+                age: pane.last_change.map(|at| now.saturating_duration_since(at)),
             })
         })
         .collect();
@@ -149,8 +147,8 @@ impl Widget for Sidebar<'_> {
 
             let age = entry.age.map(format_age).unwrap_or_default();
             let text_width = usize::from(area.width)
-                .saturating_sub(2)                    // dot + space
-                .saturating_sub(age.len() + 1);       // gap + age
+                .saturating_sub(2) // dot + space
+                .saturating_sub(age.len() + 1); // gap + age
             let mut text = format!("{} {}", entry.agent, state_label(entry.state));
             if let Some(reason) = &entry.reason {
                 text.push_str(": ");

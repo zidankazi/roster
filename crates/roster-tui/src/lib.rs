@@ -15,9 +15,7 @@ mod sidebar;
 mod style;
 
 pub use pane::PaneView;
-pub use sidebar::{
-    format_age, sidebar_entries, Message, Sidebar, SidebarEntry, SidebarState,
-};
+pub use sidebar::{format_age, sidebar_entries, Message, Sidebar, SidebarEntry, SidebarState};
 pub use style::{cell_style, state_color, state_label};
 
 /// Columns reserved for the sidebar, when the terminal is wide enough to
@@ -48,12 +46,7 @@ pub fn render(frame: &mut Frame, view: &View) {
         let Some(grid) = view.grids.get(&id) else {
             continue;
         };
-        let target = Rect::new(
-            area.x + rect.x,
-            area.y + rect.y,
-            rect.width,
-            rect.height,
-        );
+        let target = Rect::new(area.x + rect.x, area.y + rect.y, rect.width, rect.height);
         frame.render_widget(PaneView::new(grid), target);
     }
 

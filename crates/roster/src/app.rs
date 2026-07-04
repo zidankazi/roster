@@ -148,8 +148,7 @@ impl App {
             self.sync_layout(size.width, size.height);
             self.detect_if_due();
 
-            self.last_entries =
-                sidebar_entries(&self.session, &self.detector, Instant::now());
+            self.last_entries = sidebar_entries(&self.session, &self.detector, Instant::now());
             let grids: HashMap<_, _> = self
                 .runtimes
                 .iter()
@@ -266,8 +265,7 @@ impl App {
                     self.sidebar.select_prev(self.last_entries.len());
                 }
                 KeyCode::Enter => {
-                    if let Some(Message::JumpToPane(id)) =
-                        self.sidebar.activate(&self.last_entries)
+                    if let Some(Message::JumpToPane(id)) = self.sidebar.activate(&self.last_entries)
                     {
                         self.session.focus(id);
                     }

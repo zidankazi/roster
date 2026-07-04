@@ -65,8 +65,8 @@ fn load_detector(config: Option<&Path>) -> Result<Detector, String> {
             path
         }
     };
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     Detector::from_toml(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
