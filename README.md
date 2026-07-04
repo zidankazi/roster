@@ -4,6 +4,22 @@ An agent-aware terminal multiplexer. Run your coding agents — Claude Code, Cod
 Aider — in real terminal panes, and see at a glance which one is 🔴 blocked,
 🟡 working, 🔵 done, or 🟢 idle, **plus what each one is waiting on**.
 
+```
+ roster                1 blocked │ ● Bash(cargo test)
+────────────────────────────────│   ⎿ running…
+ ● codex                     30s │
+   blocked · Approve command?    │ ╭──────────────────────────────╮
+ ✓ aider                      2s │ │ Do you want to proceed?       │
+   done · 3 files changed        │ │ ❯ 1. Yes                      │
+ ● claude-code                5s │ │   2. No                       │
+   working · compiling roster    │ ╰──────────────────────────────╯
+```
+
+The sidebar rolls every agent up to a colored glyph — blocked and done float
+to the top so whoever needs you is always in view — and, unlike a bare status
+dot, shows **the reason**: the exact prompt an agent is blocked on. Grouped by
+workspace, `ctrl-b j` to jump straight to a pane.
+
 ## Two toolchains, one repo
 
 This repo holds two independent build systems that do not share a package manager:
@@ -54,7 +70,8 @@ roster claude "codex exec 'fix the tests'" aider
 
 Each command gets a pane; the sidebar shows who's blocked / working / done /
 idle and why. Keys are tmux-flavored with a `ctrl-b` prefix — `roster --help`
-lists them. Agent detection rules live in
+lists them. The sidebar sits on the left by default (`--sidebar right` to flip
+it). Agent detection rules live in
 [`crates/roster-detect/agents.toml`](crates/roster-detect/agents.toml) and can
 be overridden at `~/.config/roster/agents.toml`.
 
