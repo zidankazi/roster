@@ -70,6 +70,87 @@ fn unreadable_config_fails_cleanly() {
 }
 
 #[test]
+fn launcher_spawns_an_agent_at_runtime() {
+    // Start roster with a plain long-running shell command — no agents.
+    // Open the launcher with ctrl-b c, type "cla" to filter to claude-code,
+    // press enter, and the fake claude (on PATH) must appear as a pane with
+    // a title bar and a sidebar card.
+    let dir = fake_agent_dir();
+    let path = format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    std::env::set_var("PATH", &path);
+
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty = Pty::spawn(&format!("'{}' 'sleep 60'", bin()), cols, rows).expect("spawn");
+    let mut reader = pty.reader().expect("reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut screen = Screen::new(cols, rows);
+    let drain_until = |screen: &mut Screen, needle: &str, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < DEADLINE {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => screen.advance(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+            if screen.grid().lines().iter().any(|l| l.contains(needle)) {
+                return true;
+            }
+        }
+        false
+    };
+
+    // Wait for the first frame (status line renders the hint text).
+    assert!(
+        drain_until(&mut screen, "ctrl-b", &rx),
+        "first frame never rendered:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // ctrl-b c → launcher; "cla" filters; enter launches.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"c").expect("open launcher");
+    assert!(
+        drain_until(&mut screen, "new agent", &rx),
+        "launcher never opened:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    pty.write(b"cla").expect("filter");
+    pty.write(b"\r").expect("launch");
+
+    // The fake agent's blocked prompt must reach a pane and the sidebar.
+    assert!(
+        drain_until(&mut screen, "blocked · Do y", &rx),
+        "launched agent never showed blocked:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    let lines = screen.grid().lines();
+    assert!(
+        lines.iter().any(|l| l.contains("● claude-code")),
+        "no claude-code title/card:\n{}",
+        lines.join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "roster exited with failure: {status:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn exited_pane_stays_until_closed() {
     let (cols, rows) = (100u16, 24u16);
     let mut pty =

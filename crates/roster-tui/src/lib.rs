@@ -12,10 +12,12 @@ use ratatui::style::{Modifier, Style};
 use ratatui::Frame;
 use roster_core::{Grid, PaneId, Session};
 
+mod launcher;
 mod pane;
 mod sidebar;
 mod style;
 
+pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
 pub use sidebar::{format_age, sidebar_entries, Message, Sidebar, SidebarEntry, SidebarState};
 pub use style::{cell_style, state_color, state_glyph, state_label};
@@ -52,6 +54,8 @@ pub struct View<'a> {
     pub selected: Option<usize>,
     /// Which edge the sidebar occupies.
     pub side: SidebarSide,
+    /// The agent launcher, when open: its items and input state.
+    pub launcher: Option<(&'a [LaunchItem], &'a LauncherState)>,
     /// Mode badge for the status line (e.g. `PREFIX`), when one is active.
     pub mode_badge: Option<&'a str>,
     /// Status line text, shown dim after the badge.
@@ -95,20 +99,20 @@ fn sidebar_area(frame_area: Rect, side: SidebarSide) -> Rect {
     )
 }
 
-/// The part of a laid-out pane rect its content actually occupies: one
-/// column is given up to a separator on the right edge and one row on the
-/// bottom edge, except where the pane touches the pane area's own boundary.
-/// `rect` and `area` share an origin; the inset is size-only.
+/// The part of a laid-out pane rect its content actually occupies: the top
+/// row is given to the pane's title bar, and one column to a separator on
+/// the right edge when another pane sits beyond it. Stacked panes need no
+/// horizontal rule — the lower pane's title bar is the divider. `rect` and
+/// `area` share an origin; the inset is size-only.
 pub fn content_rect(rect: roster_core::Rect, area: Rect) -> Rect {
     let mut width = rect.width;
-    let mut height = rect.height;
     if rect.x + rect.width < area.x + area.width {
         width = width.saturating_sub(1);
     }
-    if rect.y + rect.height < area.y + area.height {
-        height = height.saturating_sub(1);
+    if rect.height < 2 {
+        return Rect::new(rect.x, rect.y, width, rect.height);
     }
-    Rect::new(rect.x, rect.y, width, height)
+    Rect::new(rect.x, rect.y + 1, width, rect.height - 1)
 }
 
 /// The pane-local layout area: origin `(0, 0)`, sized to the pane region.
@@ -117,9 +121,10 @@ pub fn local_panes(panes: Rect) -> Rect {
     Rect::new(0, 0, panes.width, panes.height)
 }
 
-/// Draw one frame: the active window's panes, the sidebar, and the status
-/// line along the bottom. The terminal cursor lands on the focused pane's
-/// cursor when that pane's grid shows one.
+/// Draw one frame: the active window's panes (each under its title bar),
+/// the sidebar, and the status line along the bottom. The terminal cursor
+/// lands on the focused pane's cursor — or on the launcher's input when the
+/// launcher is open.
 pub fn render(frame: &mut Frame, view: &View) {
     let area = frame.area();
     let panes = panes_area(area, view.side);
@@ -134,9 +139,28 @@ pub fn render(frame: &mut Frame, view: &View) {
             content_local.width,
             content_local.height,
         );
-        let rect_abs =
-            roster_core::Rect::new(panes.x + rect.x, panes.y + rect.y, rect.width, rect.height);
-        draw_separators(frame.buffer_mut(), rect_abs, content, panes);
+
+        // Interior vertical separator to the pane's right.
+        if content_local.width < rect.width {
+            let x = panes.x + rect.x + rect.width - 1;
+            for y in panes.y + rect.y..panes.y + rect.y + rect.height {
+                if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
+                    cell.set_char('│');
+                    cell.set_style(Style::default().add_modifier(Modifier::DIM));
+                }
+            }
+        }
+
+        if rect.height >= 2 {
+            draw_title(
+                frame.buffer_mut(),
+                Rect::new(panes.x + rect.x, panes.y + rect.y, content.width, 1),
+                view,
+                id,
+                focused == Some(id),
+            );
+        }
+
         let Some(grid) = view.grids.get(&id) else {
             continue;
         };
@@ -152,7 +176,7 @@ pub fn render(frame: &mut Frame, view: &View) {
                 usize::from(content.width),
                 Style::default().add_modifier(Modifier::REVERSED),
             );
-        } else if focused == Some(id) && grid.cursor.visible {
+        } else if view.launcher.is_none() && focused == Some(id) && grid.cursor.visible {
             let (col, row) = (grid.cursor.col as u16, grid.cursor.row as u16);
             if col < content.width && row < content.height {
                 frame.set_cursor_position(Position::new(content.x + col, content.y + row));
@@ -166,30 +190,79 @@ pub fn render(frame: &mut Frame, view: &View) {
     );
 
     draw_status(frame.buffer_mut(), area, view);
+
+    if let Some((items, state)) = view.launcher {
+        let launcher = Launcher::new(items, state);
+        let modal = launcher.modal_rect(area);
+        // Cursor follows the launcher's input line.
+        let input_len = 2 + state.input().chars().count() as u16;
+        frame.set_cursor_position(Position::new(
+            (modal.x + 2 + input_len).min(modal.x + modal.width.saturating_sub(2)),
+            modal.y + 1,
+        ));
+        frame.render_widget(launcher, area);
+    }
 }
 
-/// Fill the separator gap to the right of and below a pane with rules.
-fn draw_separators(buf: &mut Buffer, rect: roster_core::Rect, content: Rect, panes: Rect) {
-    let style = Style::default().add_modifier(Modifier::DIM);
-    if content.width < rect.width {
-        let x = rect.x + rect.width - 1;
-        for y in rect.y..rect.y + rect.height {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char('│');
-                cell.set_style(style);
-            }
+/// One pane's title bar: a state glyph and the command, reversed when the
+/// pane has focus so the active pane is unmistakable.
+fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bool) {
+    if span.width == 0 {
+        return;
+    }
+    let entry = view.entries.iter().find(|e| e.pane == id);
+    let (glyph, glyph_style, label) = match entry {
+        Some(entry) => (
+            state_glyph(entry.state),
+            Style::default().fg(state_color(entry.state)),
+            entry.agent.clone(),
+        ),
+        None => {
+            let command = view
+                .session
+                .pane(id)
+                .and_then(|p| p.command.clone())
+                .unwrap_or_default();
+            let name = command.split_whitespace().next().unwrap_or("").to_string();
+            let name = name.rsplit('/').next().unwrap_or(&name).to_string();
+            ("○", Style::default().add_modifier(Modifier::DIM), name)
+        }
+    };
+
+    let base = if focused {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
+    for x in span.x..span.x + span.width {
+        if let Some(cell) = buf.cell_mut((x, span.y)) {
+            cell.set_char(' ');
+            cell.set_style(base);
         }
     }
-    if content.height < rect.height {
-        let y = rect.y + rect.height - 1;
-        for x in rect.x..rect.x + content.width {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_char('─');
-                cell.set_style(style);
-            }
-        }
-    }
-    let _ = panes;
+    buf.set_stringn(
+        span.x + 1,
+        span.y,
+        glyph,
+        usize::from(span.width.saturating_sub(1)),
+        if focused { base } else { glyph_style },
+    );
+    let text = if view.exited.contains_key(&id) {
+        format!("{label} · exited")
+    } else {
+        label
+    };
+    buf.set_stringn(
+        span.x + 3,
+        span.y,
+        text,
+        usize::from(span.width.saturating_sub(4)),
+        if focused {
+            base.add_modifier(Modifier::BOLD)
+        } else {
+            base
+        },
+    );
 }
 
 fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
@@ -225,22 +298,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn content_rect_insets_only_interior_edges() {
+    fn content_rect_reserves_title_row_and_interior_separator() {
         let area = Rect::new(0, 0, 48, 24);
-        // Left pane: another pane to its right, none below.
+        // Left pane: another pane to its right → separator column; title row
+        // always comes off the top.
         assert_eq!(
             content_rect(roster_core::Rect::new(0, 0, 24, 24), area),
-            Rect::new(0, 0, 23, 24)
+            Rect::new(0, 1, 23, 23)
         );
-        // Right pane touches the area's right edge.
+        // Right pane touches the area's right edge: full width, title row.
         assert_eq!(
             content_rect(roster_core::Rect::new(24, 0, 24, 12), area),
-            Rect::new(24, 0, 24, 11)
+            Rect::new(24, 1, 24, 11)
         );
-        // Bottom-right pane touches both boundaries.
+        // A one-row sliver has no room for a title.
         assert_eq!(
-            content_rect(roster_core::Rect::new(24, 12, 24, 12), area),
-            Rect::new(24, 12, 24, 12)
+            content_rect(roster_core::Rect::new(0, 0, 48, 1), area),
+            Rect::new(0, 0, 48, 1)
         );
     }
 

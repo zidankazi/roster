@@ -14,8 +14,8 @@ use roster_detect::{AgentKind, Detector, PaneTracker};
 use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
-    content_rect, local_panes, panes_area, render, sidebar_entries, Message, SidebarEntry,
-    SidebarSide, SidebarState, View,
+    content_rect, launch_items, local_panes, panes_area, render, sidebar_entries, LaunchItem,
+    LauncherState, Message, SidebarEntry, SidebarSide, SidebarState, View,
 };
 
 use crate::keys::encode_key;
@@ -42,6 +42,8 @@ enum Mode {
     Prefix,
     /// Arrow/vim keys drive the sidebar selection.
     Jump,
+    /// The agent launcher is open and owns typed input.
+    Launch(LauncherState),
 }
 
 /// Everything one live pane owns besides its model entry.
@@ -62,8 +64,10 @@ pub struct App {
     sidebar: SidebarState,
     side: SidebarSide,
     mode: Mode,
+    launchables: Vec<LaunchItem>,
     last_entries: Vec<SidebarEntry>,
     last_detect: Instant,
+    notice: Option<String>,
     quit: bool,
     output_tx: Sender<Output>,
     output_rx: Receiver<Output>,
@@ -71,18 +75,32 @@ pub struct App {
 
 impl App {
     /// Spawn one pane per command and assemble the initial layout,
-    /// alternating split directions for a usable mosaic.
-    pub fn new(detector: Detector, commands: &[String], side: SidebarSide) -> Result<App, String> {
+    /// alternating split directions for a usable mosaic. With
+    /// `open_launcher`, the agent launcher opens over the first frame — the
+    /// bare-`roster` greeting.
+    pub fn new(
+        detector: Detector,
+        commands: &[String],
+        side: SidebarSide,
+        open_launcher: bool,
+    ) -> Result<App, String> {
         let (output_tx, output_rx) = mpsc::channel();
+        let launchables = launch_items(&detector, &default_shell());
         let mut app = App {
             session: Session::new(),
             runtimes: HashMap::new(),
             detector,
             sidebar: SidebarState::new(),
             side,
-            mode: Mode::Normal,
+            mode: if open_launcher {
+                Mode::Launch(LauncherState::new())
+            } else {
+                Mode::Normal
+            },
+            launchables,
             last_entries: Vec::new(),
             last_detect: Instant::now() - DETECT_EVERY,
+            notice: None,
             quit: false,
             output_tx,
             output_rx,
@@ -171,6 +189,10 @@ impl App {
                 _ => None,
             };
             let (mode_badge, status) = self.status_line();
+            let launcher = match &self.mode {
+                Mode::Launch(state) => Some((self.launchables.as_slice(), state)),
+                _ => None,
+            };
             let view = View {
                 session: &self.session,
                 grids: &grids,
@@ -178,6 +200,7 @@ impl App {
                 entries: &self.last_entries,
                 selected,
                 side: self.side,
+                launcher,
                 mode_badge,
                 status: &status,
             };
@@ -269,6 +292,41 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        self.notice = None;
+        // The launcher owns its input state; take it out so launching can
+        // borrow the whole app, and put it back unless the mode ended.
+        if matches!(self.mode, Mode::Launch(_)) {
+            let Mode::Launch(mut state) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                unreachable!("matched Launch above");
+            };
+            match key.code {
+                KeyCode::Esc => {}
+                KeyCode::Enter => {
+                    if let Some(command) = state.command(&self.launchables) {
+                        self.launch(&command);
+                    }
+                }
+                code => {
+                    match code {
+                        KeyCode::Down => state.select_next(&self.launchables),
+                        KeyCode::Up => state.select_prev(&self.launchables),
+                        KeyCode::Backspace => state.backspace(),
+                        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            state.select_next(&self.launchables);
+                        }
+                        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            state.select_prev(&self.launchables);
+                        }
+                        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            state.push(c);
+                        }
+                        _ => {}
+                    }
+                    self.mode = Mode::Launch(state);
+                }
+            }
+            return;
+        }
         match self.mode {
             Mode::Normal => {
                 if is_prefix(&key) {
@@ -280,6 +338,7 @@ impl App {
             Mode::Prefix => {
                 self.mode = Mode::Normal;
                 match key.code {
+                    KeyCode::Char('c') => self.mode = Mode::Launch(LauncherState::new()),
                     KeyCode::Char('%') => self.split(SplitDirection::Horizontal),
                     KeyCode::Char('"') => self.split(SplitDirection::Vertical),
                     KeyCode::Char('o') => self.session.focus_next(),
@@ -316,6 +375,37 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
                 _ => {}
             },
+            Mode::Launch(_) => unreachable!("handled above"),
+        }
+    }
+
+    /// Start `command` in a new pane: split the focused pane along its
+    /// longer visual axis (cells are roughly twice as tall as wide), or
+    /// open a fresh window when nothing is left to split.
+    fn launch(&mut self, command: &str) {
+        let id = match self.session.focused() {
+            Some(target) => {
+                let direction = match self.runtimes.get(&target) {
+                    Some(rt) => {
+                        let (cols, rows) = rt.screen.size();
+                        if cols > rows * 2 {
+                            SplitDirection::Horizontal
+                        } else {
+                            SplitDirection::Vertical
+                        }
+                    }
+                    None => SplitDirection::Horizontal,
+                };
+                match self.session.split(target, direction) {
+                    Some(id) => id,
+                    None => return,
+                }
+            }
+            None => self.session.new_window(),
+        };
+        if let Err(error) = self.attach(id, command) {
+            self.session.close(id);
+            self.notice = Some(format!("launch failed: {error}"));
         }
     }
 
@@ -355,9 +445,12 @@ impl App {
     }
 
     /// The status line: a badge while a mode is armed, plus contextual key
-    /// hints.
+    /// hints — or the latest notice, until the next keypress clears it.
     fn status_line(&self) -> (Option<&'static str>, String) {
-        match self.mode {
+        if let Some(notice) = &self.notice {
+            return (Some("!"), notice.clone());
+        }
+        match &self.mode {
             Mode::Normal => {
                 let focused = self
                     .session
@@ -367,17 +460,22 @@ impl App {
                     .unwrap_or("");
                 (
                     None,
-                    format!("{focused}   ctrl-b: % \" split · o focus · j jump · x close · q quit"),
+                    format!("{focused}   ctrl-b: c new · j jump · o focus · x close · q quit"),
                 )
             }
             Mode::Prefix => (
                 Some("PREFIX"),
-                "%: split side · \": split stacked · o: focus · j: jump · x: close · q: quit"
+                "c: new agent · %/\": split shell · o: focus · j: jump · x: close · q: quit"
                     .to_string(),
             ),
             Mode::Jump => (
                 Some("JUMP"),
                 "j/k: move · enter: jump to pane · esc: cancel".to_string(),
+            ),
+            Mode::Launch(_) => (
+                Some("LAUNCH"),
+                "type to filter or enter a command · ↑/↓ select · enter: launch · esc: cancel"
+                    .to_string(),
             ),
         }
     }

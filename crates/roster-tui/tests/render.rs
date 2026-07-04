@@ -1,15 +1,16 @@
-//! Full-frame snapshot test: sidebar on one edge, panes on the other,
-//! status line below, rendered through a real ratatui `Terminal`.
+//! Full-frame snapshot test: sidebar on one edge, titled panes on the
+//! other, status line below, rendered through a real ratatui `Terminal`.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::style::Modifier;
 use ratatui::Terminal;
 use roster_core::{AgentState, Grid, Session, SplitDirection};
 use roster_detect::Detector;
-use roster_tui::{render, sidebar_entries, SidebarSide, View};
+use roster_tui::{launch_items, render, sidebar_entries, LauncherState, SidebarSide, View};
 
 fn region_text(buf: &Buffer, x0: u16, x1: u16, y: u16) -> String {
     (x0..x1)
@@ -41,18 +42,17 @@ fn two_agent_session(now: Instant) -> (Session, roster_core::PaneId, roster_core
 }
 
 #[test]
-fn left_sidebar_places_panes_to_the_right_with_cursor() {
+fn panes_get_title_bars_and_content_shifts_down() {
     let now = Instant::now();
-    let (mut session, _left, right) = two_agent_session(now);
+    let (mut session, left, right) = two_agent_session(now);
     session.focus(right);
 
-    // Focused (right) pane shows a visible cursor at grid (1, 0).
     let mut right_grid = Grid::from_text("right agent output");
     right_grid.cursor.col = 1;
     right_grid.cursor.row = 0;
     right_grid.cursor.visible = true;
     let mut grids = HashMap::new();
-    grids.insert(_left, Grid::from_text("left agent output"));
+    grids.insert(left, Grid::from_text("left agent output"));
     grids.insert(right, right_grid);
 
     let detector = Detector::builtin();
@@ -65,40 +65,60 @@ fn left_sidebar_places_panes_to_the_right_with_cursor() {
         entries: &entries,
         selected: None,
         side: SidebarSide::Left,
+        launcher: None,
         mode_badge: None,
-        status: "codex   ctrl-b: % \" split · o focus · j jump · x close · q quit",
+        status: "hints with ctrl-b",
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
     terminal.draw(|frame| render(frame, &view)).unwrap();
     let buf = terminal.backend().buffer().clone();
 
-    // Sidebar occupies the left 32 columns: title, rule, then the blocked
-    // agent's card floated to the top.
+    // Row 0 of the pane region holds title bars, not content: the working
+    // claude pane's title on the left half, blocked codex's on the right.
+    let left_title = region_text(&buf, 32, 55, 0);
+    assert!(
+        left_title.trim_start().starts_with("● claude-code"),
+        "left title: {left_title}"
+    );
+    let right_title = region_text(&buf, 56, 80, 0);
+    assert!(
+        right_title.trim_start().starts_with("● codex"),
+        "right title: {right_title}"
+    );
+
+    // The focused pane's title row is reversed; the unfocused one is not.
+    assert!(buf
+        .cell((56, 0))
+        .unwrap()
+        .style()
+        .add_modifier
+        .contains(Modifier::REVERSED));
+    assert!(!buf
+        .cell((32, 0))
+        .unwrap()
+        .style()
+        .add_modifier
+        .contains(Modifier::REVERSED));
+
+    // Content starts on row 1, under the titles.
+    assert_eq!(region_text(&buf, 32, 55, 1), "left agent output");
+    assert_eq!(region_text(&buf, 56, 80, 1), "right agent output");
+
+    // Separator between the halves spans the pane rows.
+    assert_eq!(buf.cell((55, 0)).unwrap().symbol(), "│");
+    assert_eq!(buf.cell((55, 5)).unwrap().symbol(), "│");
+
+    // Cursor lands one row lower than before, inside the focused content.
+    terminal.backend_mut().assert_cursor_position((57u16, 1u16));
+
+    // Sidebar + status still render.
     assert!(region_text(&buf, 0, 32, 0).starts_with(" roster"));
-    assert!(region_text(&buf, 0, 32, 1).starts_with("──"));
-    let card = region_text(&buf, 0, 32, 2);
-    assert!(card.trim_start().starts_with("● codex"), "card: {card}");
-    assert!(card.ends_with("12s"), "card: {card}");
-    assert!(region_text(&buf, 0, 32, 3)
-        .trim_start()
-        .starts_with("blocked · Approve"));
-
-    // Panes occupy columns 32..80 (two halves of 24). The pane area is 48
-    // wide; the left half loses a column to the separator.
-    assert_eq!(region_text(&buf, 32, 55, 0), "left agent output");
-    assert_eq!(region_text(&buf, 56, 80, 0), "right agent output");
-
-    // Cursor sits on the focused pane's grid cursor, offset into the pane
-    // region: panes start at x=32, right half at 32+24=56, grid col 1 → 57.
-    terminal.backend_mut().assert_cursor_position((57u16, 0u16));
-
-    // Status line spans the bottom row.
     assert!(region_text(&buf, 0, 80, 11).contains("ctrl-b"));
 }
 
 #[test]
-fn right_sidebar_places_panes_on_the_left() {
+fn launcher_modal_overlays_the_frame() {
     let now = Instant::now();
     let (session, left, right) = two_agent_session(now);
     let mut grids = HashMap::new();
@@ -108,28 +128,34 @@ fn right_sidebar_places_panes_on_the_left() {
     let detector = Detector::builtin();
     let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
+    let items = launch_items(&detector, "/bin/zsh");
+    let state = LauncherState::new();
     let view = View {
         session: &session,
         grids: &grids,
         exited: &exited,
         entries: &entries,
         selected: None,
-        side: SidebarSide::Right,
-        mode_badge: None,
-        status: "status",
+        side: SidebarSide::Left,
+        launcher: Some((&items, &state)),
+        mode_badge: Some("LAUNCH"),
+        status: "type to filter",
     };
 
-    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
     terminal.draw(|frame| render(frame, &view)).unwrap();
     let buf = terminal.backend().buffer().clone();
 
-    // Panes on the left starting at column 0; sidebar title in the right 32.
-    assert_eq!(region_text(&buf, 0, 23, 0), "left agent output");
-    assert!(region_text(&buf, 48, 80, 0).starts_with(" roster"));
+    let all: String = (0..20)
+        .map(|y| region_text(&buf, 0, 80, y) + "\n")
+        .collect();
+    assert!(all.contains("new agent"), "missing modal title:\n{all}");
+    assert!(all.contains("claude-code"), "missing item:\n{all}");
+    assert!(all.contains("shell"), "missing shell item:\n{all}");
 }
 
 #[test]
-fn exited_pane_shows_notice() {
+fn exited_pane_notice_and_title_marker() {
     let session = Session::new();
     let only = session.focused().unwrap();
     let mut grid = Grid::from_text("final output");
@@ -147,6 +173,7 @@ fn exited_pane_shows_notice() {
         entries: &[],
         selected: None,
         side: SidebarSide::Left,
+        launcher: None,
         mode_badge: Some("PREFIX"),
         status: "hints",
     };
@@ -155,16 +182,15 @@ fn exited_pane_shows_notice() {
     terminal.draw(|frame| render(frame, &view)).unwrap();
     let buf = terminal.backend().buffer().clone();
 
-    // Notice on the pane's bottom content row (pane area is 9 tall, panes
-    // start at column 32 with a left sidebar).
+    // Title marks the exit; notice sits on the pane's bottom content row.
+    let title = region_text(&buf, 32, 80, 0);
+    assert!(title.contains("exited"), "title: {title}");
     let notice = region_text(&buf, 32, 80, 8);
     assert!(
         notice.starts_with(" exited (3) — ctrl-b x to close"),
         "notice: {notice}"
     );
 
-    // Badge renders at the left of the status line.
     let status = region_text(&buf, 0, 80, 9);
     assert!(status.starts_with(" PREFIX "), "status: {status}");
-    assert!(status.contains("hints"), "status: {status}");
 }

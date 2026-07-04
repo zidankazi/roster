@@ -41,7 +41,10 @@ fn run() -> Result<(), String> {
     }
 
     let detector = load_detector(args.config.as_deref())?;
-    let commands = if args.commands.is_empty() {
+    // Bare `roster` opens a shell pane with the agent launcher over it —
+    // agents are picked interactively, not supplied up front.
+    let bare_start = args.commands.is_empty();
+    let commands = if bare_start {
         vec![app::default_shell()]
     } else {
         args.commands
@@ -51,7 +54,7 @@ fn run() -> Result<(), String> {
         Some(cli::Side::Left) | None => SidebarSide::Left,
     };
 
-    let mut app = app::App::new(detector, &commands, side)?;
+    let mut app = app::App::new(detector, &commands, side, bare_start)?;
     let mut terminal = ratatui::init();
     let result = app.run(&mut terminal);
     ratatui::restore();
