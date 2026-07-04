@@ -58,6 +58,14 @@ lists them. Agent detection rules live in
 [`crates/roster-detect/agents.toml`](crates/roster-detect/agents.toml) and can
 be overridden at `~/.config/roster/agents.toml`.
 
+Agent detection is tuned against **Claude Code 2.1**, Codex, and Aider, and
+verified against live Claude Code sessions. To customize, start from the
+built-in config:
+
+```sh
+roster --print-config > ~/.config/roster/agents.toml
+```
+
 ## Building from source
 
 ```sh
