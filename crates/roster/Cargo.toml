@@ -1,11 +1,18 @@
 [package]
 name = "roster"
+description = "Agent-aware terminal multiplexer: run coding agents in panes, see who needs you and why"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
+ratatui = "0.30.2"
+roster-core = { path = "../roster-core" }
+roster-detect = { path = "../roster-detect" }
+roster-pty = { path = "../roster-pty" }
+roster-term = { path = "../roster-term" }
+roster-tui = { path = "../roster-tui" }
 
 [lints]
 workspace = true
