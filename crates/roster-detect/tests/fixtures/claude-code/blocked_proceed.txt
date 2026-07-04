@@ -1,0 +1,8 @@
+● Edit(src/config.ts)
+  ⎿ Updated src/config.ts with 2 additions
+
+╭──────────────────────────────────────────────────
+│ Do you want to proceed?
+│ ❯ 1. Yes
+│   2. No, and tell Claude what to do differently
+╰──────────────────────────────────────────────────

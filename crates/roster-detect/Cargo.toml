@@ -7,7 +7,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+regex = "1.12.4"
 roster-core = { path = "../roster-core" }
+serde = { version = "1.0.228", features = ["derive"] }
+toml = "1.1.2"
 
 [lints]
 workspace = true

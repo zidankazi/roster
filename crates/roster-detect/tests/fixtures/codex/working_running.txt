@@ -1,0 +1,5 @@
+╭ OpenAI Codex
+
+• Fixing the failing assertion in tests/api.rs
+
+  Running cargo check…

@@ -1,0 +1,4 @@
+aider v0.85.0
+Model: claude-sonnet-5 with diff edit format
+
+Add src/utils/helpers.py to the chat? (Y)es/(N)o [Yes]:

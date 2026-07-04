@@ -1,0 +1,34 @@
+# Per-agent detection rules — the shipped defaults for roster.
+#
+# New agents are added here as data, not code. Patterns are regular
+# expressions evaluated against the visible grid rows (trailing whitespace
+# trimmed), bottom rows first; within a state, patterns are tried in the
+# order listed. Priority when several states match: blocked > working > idle.
+# See docs/02-state-detection.md.
+
+[claude-code]
+match_command = ["claude"]
+blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d\. Yes']
+working = ['esc to interrupt', 'Thinking', '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]']  # spinner glyphs
+idle    = ['│\s*>\s*$']                                       # empty prompt line
+reason.blocked = "matched_line"
+reason.working = "last_nonempty"
+done.after_activity_secs = 8
+
+[codex]
+match_command = ["codex"]
+blocked = ['Approve this command\?', 'Allow\?']
+working = ['Running', '\bthinking\b']
+# rows are matched with trailing whitespace trimmed, so the prompt pattern
+# ends in \s*$ rather than a literal trailing space
+idle    = ['^\S+ ❯\s*$']
+reason.blocked = "matched_line"
+done.after_activity_secs = 6
+
+[aider]
+match_command = ["aider"]
+blocked = ['\(Y\)es/\(N\)o', 'Add .* to the chat\?']
+working = ['Applying edit', 'Committing']
+idle    = ['^>\s*$']
+reason.blocked = "matched_line"
+done.after_activity_secs = 5
