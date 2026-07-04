@@ -1,9 +1,48 @@
 # Build report
 
-Two unattended runs. Run 1 covered the agent-safe crates (`roster-core`,
-`roster-detect`, `roster-tui`). Run 2, on your go-ahead, built the rest:
-`roster-term`, `roster-pty`, the `roster` binary, and the install path
-(GitHub releases + Homebrew tap).
+Three unattended runs. Run 1 covered the agent-safe crates (`roster-core`,
+`roster-detect`, `roster-tui`). Run 2 built the rest: `roster-term`,
+`roster-pty`, the `roster` binary, and the install path. Run 3 was the
+prod-readiness pass: verifying detection against live Claude Code, binary
+UX, a hardened process lifecycle, and shipping v0.1.1.
+
+## Run 3 — prod readiness
+
+**Detection verified against real Claude Code 2.1.** Added a `capture`
+example (`crates/roster/examples/capture.rs`) that runs an agent in a PTY
+through `roster-term` and dumps the screen. Using it against a live
+`claude`, plus driving the real binary end to end, I found and fixed the
+divergence the earlier report flagged: Claude Code's idle prompt is `❯`
+between horizontal rules, **not** the box-bordered `> ` the shipped pattern
+assumed — so idle/done never detected on real Claude Code. Working keys on
+`esc to interrupt` / `ctrl+c to interrupt`; blocked (`Do you want to
+proceed?` over a `❯ 1. Yes` menu) and done were confirmed accurate. Also
+added a per-agent `reason.ignore` chrome list so working/done reasons are
+real content (the spinner status, the last result line) instead of the
+model status bar, the input prompt, interrupt/shortcut hints, or
+notification banners. Fixtures were rebuilt from the real captures.
+
+Verified live: driving the actual binary against real Claude Code, roster's
+sidebar showed `● claude-code blocked: Do yo…` within ~2s of a permission
+prompt, and `● claude-code done: ✻ Sautée…` after a task settled — the
+dot-plus-reason thesis, confirmed against reality.
+
+**Binary UX.** Dim separators between panes; the real terminal cursor lands
+on the focused pane; a bottom status line shows a mode badge (`PREFIX` /
+`JUMP`) and contextual key hints. Panes whose process exits now stay
+visible with an `exited (N) — ctrl-b x to close` notice instead of
+vanishing. Added `--print-config` to seed a user `agents.toml`. New
+snapshot and e2e tests cover all of it.
+
+**Hardened process lifecycle.** `Pty::drop` now escalates `SIGHUP` →
+`SIGKILL` to the child's process group. This was a real hang: agents like
+Claude Code trap `SIGHUP`, so the previous polite-signal-only drop could
+block forever waiting on a child that ignored it (caught via a stuck
+capture, then reproduced in a test). Panes also run in roster's working
+directory instead of `$HOME`.
+
+**Shipped v0.1.1.** Version bumped, tagged, released with binaries for four
+targets, formula updated, `brew upgrade` verified locally.
 
 ## Run 2 — plumbing, binary, packaging
 
