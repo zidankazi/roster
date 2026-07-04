@@ -138,7 +138,7 @@ fn launcher_spawns_an_agent_at_runtime() {
     );
     let lines = screen.grid().lines();
     assert!(
-        lines.iter().any(|l| l.contains("● claude-code")),
+        lines.iter().any(|l| l.contains("◉ claude-code")),
         "no claude-code title/card:\n{}",
         lines.join("\n")
     );

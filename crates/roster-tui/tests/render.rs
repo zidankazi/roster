@@ -10,7 +10,7 @@ use ratatui::style::Modifier;
 use ratatui::Terminal;
 use roster_core::{AgentState, Grid, Session, SplitDirection};
 use roster_detect::Detector;
-use roster_tui::{launch_items, render, sidebar_entries, LauncherState, SidebarSide, View};
+use roster_tui::{launch_items, render, sidebar_entries, LauncherState, SidebarSide, View, ACCENT};
 
 fn region_text(buf: &Buffer, x0: u16, x1: u16, y: u16) -> String {
     (x0..x1)
@@ -68,6 +68,7 @@ fn panes_get_title_bars_and_content_shifts_down() {
         launcher: None,
         mode_badge: None,
         status: "hints with ctrl-b",
+        tick: 0,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
@@ -75,27 +76,26 @@ fn panes_get_title_bars_and_content_shifts_down() {
     let buf = terminal.backend().buffer().clone();
 
     // Row 0 of the pane region holds title bars, not content: the working
-    // claude pane's title on the left half, blocked codex's on the right.
+    // claude pane's title on the left half (spinner frame at tick 0),
+    // blocked codex's on the right.
     let left_title = region_text(&buf, 32, 55, 0);
     assert!(
-        left_title.trim_start().starts_with("● claude-code"),
+        left_title.trim_start().starts_with("⠋ claude-code"),
         "left title: {left_title}"
     );
     let right_title = region_text(&buf, 56, 80, 0);
     assert!(
-        right_title.trim_start().starts_with("● codex"),
+        right_title.contains("◉ codex"),
         "right title: {right_title}"
     );
 
-    // The focused pane's title row is reversed; the unfocused one is not.
-    assert!(buf
-        .cell((56, 0))
-        .unwrap()
-        .style()
-        .add_modifier
-        .contains(Modifier::REVERSED));
+    // Focus reads as an accent marker and accent-colored name — not a
+    // heavy inverse bar.
+    assert_eq!(buf.cell((56, 0)).unwrap().symbol(), "▎");
+    assert_eq!(buf.cell((60, 0)).unwrap().style().fg, Some(ACCENT));
+    assert_ne!(buf.cell((32, 0)).unwrap().symbol(), "▎");
     assert!(!buf
-        .cell((32, 0))
+        .cell((56, 0))
         .unwrap()
         .style()
         .add_modifier
@@ -112,8 +112,10 @@ fn panes_get_title_bars_and_content_shifts_down() {
     // Cursor lands one row lower than before, inside the focused content.
     terminal.backend_mut().assert_cursor_position((57u16, 1u16));
 
-    // Sidebar + status still render.
-    assert!(region_text(&buf, 0, 32, 0).starts_with(" roster"));
+    // Sidebar header, the sidebar/pane rule, and the status line render.
+    assert!(region_text(&buf, 0, 31, 0).trim().starts_with("agents"));
+    assert_eq!(buf.cell((31, 0)).unwrap().symbol(), "│");
+    assert_eq!(buf.cell((31, 9)).unwrap().symbol(), "│");
     assert!(region_text(&buf, 0, 80, 11).contains("ctrl-b"));
 }
 
@@ -140,6 +142,7 @@ fn launcher_modal_overlays_the_frame() {
         launcher: Some((&items, &state)),
         mode_badge: Some("LAUNCH"),
         status: "type to filter",
+        tick: 0,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -176,6 +179,7 @@ fn exited_pane_notice_and_title_marker() {
         launcher: None,
         mode_badge: Some("PREFIX"),
         status: "hints",
+        tick: 0,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();

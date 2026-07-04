@@ -125,17 +125,25 @@ pub struct Sidebar<'a> {
     entries: &'a [SidebarEntry],
     selected: Option<usize>,
     workspaces: usize,
+    tick: u64,
 }
 
 impl<'a> Sidebar<'a> {
     /// A sidebar over `entries`, highlighting `selected` when given.
     /// `workspaces` is the session's window count; workspace headers are
-    /// shown only when there is more than one.
-    pub fn new(entries: &'a [SidebarEntry], selected: Option<usize>, workspaces: usize) -> Self {
+    /// shown only when there is more than one. `tick` animates the working
+    /// spinner.
+    pub fn new(
+        entries: &'a [SidebarEntry],
+        selected: Option<usize>,
+        workspaces: usize,
+        tick: u64,
+    ) -> Self {
         Sidebar {
             entries,
             selected,
             workspaces,
+            tick,
         }
     }
 
@@ -157,36 +165,31 @@ impl Widget for Sidebar<'_> {
         let bottom = area.y + area.height;
         let mut y = area.y;
 
-        // Title: "roster" left, agent count right (blocked count in red).
+        // Quiet header: lowercase, dim; the blocked count appears on the
+        // right only when someone actually needs you.
         let blocked = self.blocked_count();
-        let summary = if blocked > 0 {
-            format!("{} blocked", blocked)
-        } else {
-            format!("{} agents", self.entries.len())
-        };
-        let summary_style = if blocked > 0 {
-            Style::default()
-                .fg(state_color(AgentState::Blocked))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().add_modifier(Modifier::DIM)
-        };
-        draw_split(
-            buf,
-            Rect::new(area.x, y, area.width, 1),
-            (" roster", Style::default().add_modifier(Modifier::BOLD)),
-            (&summary, summary_style),
+        buf.set_stringn(
+            area.x + 1,
+            y,
+            "agents",
+            width.saturating_sub(1),
+            Style::default().add_modifier(Modifier::DIM),
         );
-        y += 1;
-        if y < bottom {
-            buf.set_string(
-                area.x,
-                y,
-                "─".repeat(width),
-                Style::default().add_modifier(Modifier::DIM),
-            );
-            y += 1;
+        if blocked > 0 {
+            let summary = format!("{blocked} blocked");
+            let len = summary.chars().count() as u16;
+            if len + 2 < area.width {
+                buf.set_string(
+                    area.x + area.width - 1 - len,
+                    y,
+                    &summary,
+                    Style::default()
+                        .fg(state_color(AgentState::Blocked))
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
         }
+        y += 2;
 
         let mut last_window: Option<usize> = None;
         for (index, entry) in self.entries.iter().enumerate() {
@@ -195,10 +198,10 @@ impl Widget for Sidebar<'_> {
             }
             if self.workspaces > 1 && last_window != Some(entry.window) {
                 buf.set_stringn(
-                    area.x,
+                    area.x + 1,
                     y,
-                    format!(" workspace {}", entry.window + 1),
-                    width,
+                    format!("workspace {}", entry.window + 1),
+                    width.saturating_sub(1),
                     Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC),
                 );
                 last_window = Some(entry.window);
@@ -208,64 +211,71 @@ impl Widget for Sidebar<'_> {
                 }
             }
 
-            let card_top = y;
-            // Line 1: glyph + agent name, age right-aligned.
+            let selected = self.selected == Some(index);
+            let marker_style = Style::default().fg(crate::style::ACCENT);
+            if selected {
+                buf.set_string(area.x, y, "❯", marker_style);
+            }
+
+            // Line 1: glyph + agent name (bold; accented when selected),
+            // age right-aligned and dim.
             buf.set_string(
-                area.x + 1,
+                area.x + 2,
                 y,
-                state_glyph(entry.state),
+                state_glyph(entry.state, self.tick),
                 Style::default().fg(state_color(entry.state)),
             );
             let age = entry.age.map(format_age).unwrap_or_default();
-            let name_width = width.saturating_sub(3).saturating_sub(age.len() + 1);
+            let name_width = width.saturating_sub(4).saturating_sub(age.len() + 1);
+            let name_style = if selected {
+                Style::default()
+                    .fg(crate::style::ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            };
             buf.set_string(
-                area.x + 3,
+                area.x + 4,
                 y,
                 truncate(&entry.agent, name_width),
-                Style::default().add_modifier(Modifier::BOLD),
+                name_style,
             );
             if !age.is_empty() {
-                let x = area.x + area.width - age.len() as u16;
+                let x = area.x + area.width - 1 - age.len() as u16;
                 buf.set_string(x, y, &age, Style::default().add_modifier(Modifier::DIM));
             }
             y += 1;
 
-            // Line 2: state word, then reason if present.
+            // Line 2: the state word in its own color — the signal — with
+            // the reason dimmed after it.
             if y < bottom {
-                let mut detail = state_label(entry.state).to_string();
-                if let Some(reason) = &entry.reason {
-                    detail.push_str(" · ");
-                    detail.push_str(reason);
-                }
+                let label = state_label(entry.state);
                 buf.set_stringn(
-                    area.x + 3,
+                    area.x + 4,
                     y,
-                    truncate(&detail, width.saturating_sub(3)),
-                    width.saturating_sub(3),
-                    Style::default().add_modifier(Modifier::DIM),
+                    label,
+                    width.saturating_sub(4),
+                    Style::default().fg(state_color(entry.state)),
                 );
+                if let Some(reason) = &entry.reason {
+                    let used = 4 + label.chars().count();
+                    let rest = width.saturating_sub(used + 1);
+                    if rest > 4 {
+                        buf.set_stringn(
+                            area.x + used as u16,
+                            y,
+                            format!(" · {}", truncate(reason, rest.saturating_sub(3))),
+                            rest,
+                            Style::default().add_modifier(Modifier::DIM),
+                        );
+                    }
+                }
                 y += 1;
             }
 
-            if self.selected == Some(index) {
-                for row in card_top..y {
-                    buf.set_style(
-                        Rect::new(area.x, row, area.width, 1),
-                        Style::default().add_modifier(Modifier::REVERSED),
-                    );
-                }
-            }
+            // Breathing room between cards.
+            y += 1;
         }
-    }
-}
-
-/// Draw `left` from the left edge and `right` flush to the right edge of
-/// `span`'s first row, each in its own style.
-fn draw_split(buf: &mut Buffer, span: Rect, left: (&str, Style), right: (&str, Style)) {
-    buf.set_stringn(span.x, span.y, left.0, usize::from(span.width), left.1);
-    let right_len = right.0.chars().count() as u16;
-    if right_len < span.width {
-        buf.set_string(span.x + span.width - right_len, span.y, right.0, right.1);
     }
 }
 
@@ -437,39 +447,64 @@ mod tests {
     }
 
     #[test]
-    fn renders_title_rule_and_agent_cards() {
+    fn renders_header_and_spaced_state_colored_cards() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 12));
-        Sidebar::new(&entries, None, session.window_count())
-            .render(Rect::new(0, 0, 32, 12), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
 
-        // Title with a blocked-count summary, then a rule.
-        let title = buffer_row(&buf, 0);
-        assert!(title.starts_with(" roster"), "title: {title}");
-        assert!(title.ends_with("1 blocked"), "title: {title}");
-        assert!(buffer_row(&buf, 1).starts_with("──"));
+        // Quiet lowercase header with the blocked count on the right.
+        let header = buffer_row(&buf, 0);
+        assert!(header.starts_with(" agents"), "header: {header}");
+        assert!(header.ends_with("1 blocked"), "header: {header}");
 
-        // First card: blocked codex on top (glyph, name, age; then detail).
-        assert_eq!(buffer_row(&buf, 2), " ● codex                     30s");
-        assert_eq!(buffer_row(&buf, 3), "   blocked · Approve this comma…");
+        // Cards start after a blank row: blocked codex first (glyph, bold
+        // name, right-aligned age; state word + dim reason below), then a
+        // blank spacer before the next card.
+        let name_row = buffer_row(&buf, 2);
+        assert!(name_row.starts_with("  ◉ codex"), "row: {name_row}");
+        assert!(name_row.ends_with("30s"), "row: {name_row}");
+        let detail_row = buffer_row(&buf, 3);
+        assert!(
+            detail_row.starts_with("    blocked · Approve"),
+            "row: {detail_row}"
+        );
+        assert_eq!(buffer_row(&buf, 4), "");
+        assert!(buffer_row(&buf, 5).contains("aider"), "second card follows");
+
+        // The state word is colored, the reason after it is not.
+        assert_eq!(
+            buf.cell((4, 3)).unwrap().style().fg,
+            Some(state_color(AgentState::Blocked))
+        );
     }
 
     #[test]
-    fn dot_carries_the_state_color() {
+    fn glyphs_carry_state_color_and_working_spins() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 12));
-        Sidebar::new(&entries, None, session.window_count())
-            .render(Rect::new(0, 0, 32, 12), &mut buf);
-        // The glyph sits at column 1 of the blocked card's first row (row 2).
-        assert_eq!(buf.cell((1, 2)).unwrap().symbol(), "●");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        // Blocked ring at the first card's glyph column.
+        assert_eq!(buf.cell((2, 2)).unwrap().symbol(), "◉");
         assert_eq!(
-            buf.cell((1, 2)).unwrap().style().fg,
+            buf.cell((2, 2)).unwrap().style().fg,
             Some(state_color(AgentState::Blocked))
         );
+
+        // The working card's glyph changes with the tick.
+        let glyph_at = |tick: u64| -> String {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+            Sidebar::new(&entries, None, session.window_count(), tick)
+                .render(Rect::new(0, 0, 32, 14), &mut buf);
+            // Working card is third: rows 8/9; glyph at (2, 8).
+            buf.cell((2, 8)).unwrap().symbol().to_string()
+        };
+        assert_ne!(glyph_at(0), glyph_at(1));
     }
 
     #[test]
@@ -484,41 +519,43 @@ mod tests {
         session.set_reading(b, AgentState::Working, Some("go".into()), now);
 
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
-        Sidebar::new(&entries, None, session.window_count())
-            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 16));
+        Sidebar::new(&entries, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 16), &mut buf);
 
-        let rows: Vec<String> = (0..14).map(|y| buffer_row(&buf, y)).collect();
-        assert!(rows.iter().any(|r| r == " workspace 1"), "rows: {rows:#?}");
-        assert!(rows.iter().any(|r| r == " workspace 2"), "rows: {rows:#?}");
+        let rows: Vec<String> = (0..16).map(|y| buffer_row(&buf, y)).collect();
+        assert!(
+            rows.iter().any(|r| r.trim() == "workspace 1"),
+            "rows: {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.trim() == "workspace 2"),
+            "rows: {rows:#?}"
+        );
     }
 
     #[test]
-    fn selected_card_is_reversed_on_both_lines() {
+    fn selected_card_shows_accent_marker() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 12));
-        Sidebar::new(&entries, Some(0), session.window_count())
-            .render(Rect::new(0, 0, 32, 12), &mut buf);
-        // Card 0 occupies rows 2 and 3.
-        assert!(buf
-            .cell((0, 2))
-            .unwrap()
-            .style()
-            .add_modifier
-            .contains(Modifier::REVERSED));
-        assert!(buf
-            .cell((0, 3))
-            .unwrap()
-            .style()
-            .add_modifier
-            .contains(Modifier::REVERSED));
-        assert!(!buf
-            .cell((0, 4))
-            .unwrap()
-            .style()
-            .add_modifier
-            .contains(Modifier::REVERSED));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, Some(0), session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        // Marker on the selected card's name row; name in the accent color.
+        assert_eq!(buf.cell((0, 2)).unwrap().symbol(), "❯");
+        assert_eq!(
+            buf.cell((0, 2)).unwrap().style().fg,
+            Some(crate::style::ACCENT)
+        );
+        assert_eq!(
+            buf.cell((4, 2)).unwrap().style().fg,
+            Some(crate::style::ACCENT)
+        );
+        // Unselected cards keep the default name color.
+        assert_ne!(
+            buf.cell((4, 5)).unwrap().style().fg,
+            Some(crate::style::ACCENT)
+        );
     }
 }

@@ -20,7 +20,7 @@ mod style;
 pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
 pub use sidebar::{format_age, sidebar_entries, Message, Sidebar, SidebarEntry, SidebarState};
-pub use style::{cell_style, state_color, state_glyph, state_label};
+pub use style::{cell_style, state_color, state_glyph, state_label, ACCENT};
 
 /// Columns reserved for the sidebar, when the terminal is wide enough to
 /// afford them; narrower terminals give it up to half the width.
@@ -60,6 +60,8 @@ pub struct View<'a> {
     pub mode_badge: Option<&'a str>,
     /// Status line text, shown dim after the badge.
     pub status: &'a str,
+    /// Frame counter; animates the working spinner.
+    pub tick: u64,
 }
 
 /// The sidebar width for a frame of `total_width`: the fixed width, or half
@@ -184,9 +186,32 @@ pub fn render(frame: &mut Frame, view: &View) {
         }
     }
 
+    // The sidebar, with a full-height rule separating it from the panes.
+    let bar = sidebar_area(area, view.side);
+    let (bar_inner, rule_x) = match view.side {
+        SidebarSide::Left => (
+            Rect::new(bar.x, bar.y, bar.width.saturating_sub(1), bar.height),
+            bar.x + bar.width.saturating_sub(1),
+        ),
+        SidebarSide::Right => (
+            Rect::new(bar.x + 1, bar.y, bar.width.saturating_sub(1), bar.height),
+            bar.x,
+        ),
+    };
+    for y in bar.y..bar.y + bar.height {
+        if let Some(cell) = frame.buffer_mut().cell_mut((rule_x, y)) {
+            cell.set_char('│');
+            cell.set_style(Style::default().add_modifier(Modifier::DIM));
+        }
+    }
     frame.render_widget(
-        Sidebar::new(view.entries, view.selected, view.session.window_count()),
-        sidebar_area(area, view.side),
+        Sidebar::new(
+            view.entries,
+            view.selected,
+            view.session.window_count(),
+            view.tick,
+        ),
+        bar_inner,
     );
 
     draw_status(frame.buffer_mut(), area, view);
@@ -204,8 +229,9 @@ pub fn render(frame: &mut Frame, view: &View) {
     }
 }
 
-/// One pane's title bar: a state glyph and the command, reversed when the
-/// pane has focus so the active pane is unmistakable.
+/// One pane's title bar: an accent marker on the focused pane, a live state
+/// glyph, and the agent or command name. Focus reads as color, not a heavy
+/// inverse bar.
 fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bool) {
     if span.width == 0 {
         return;
@@ -213,7 +239,7 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
     let entry = view.entries.iter().find(|e| e.pane == id);
     let (glyph, glyph_style, label) = match entry {
         Some(entry) => (
-            state_glyph(entry.state),
+            state_glyph(entry.state, view.tick),
             Style::default().fg(state_color(entry.state)),
             entry.agent.clone(),
         ),
@@ -229,39 +255,34 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
         }
     };
 
-    let base = if focused {
-        Style::default().add_modifier(Modifier::REVERSED)
-    } else {
-        Style::default().add_modifier(Modifier::DIM)
-    };
-    for x in span.x..span.x + span.width {
-        if let Some(cell) = buf.cell_mut((x, span.y)) {
-            cell.set_char(' ');
-            cell.set_style(base);
-        }
+    if focused {
+        buf.set_string(span.x, span.y, "▎", Style::default().fg(style::ACCENT));
     }
     buf.set_stringn(
-        span.x + 1,
+        span.x + 2,
         span.y,
         glyph,
-        usize::from(span.width.saturating_sub(1)),
-        if focused { base } else { glyph_style },
+        usize::from(span.width.saturating_sub(2)),
+        glyph_style,
     );
     let text = if view.exited.contains_key(&id) {
         format!("{label} · exited")
     } else {
         label
     };
+    let text_style = if focused {
+        Style::default()
+            .fg(style::ACCENT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
     buf.set_stringn(
-        span.x + 3,
+        span.x + 4,
         span.y,
         text,
-        usize::from(span.width.saturating_sub(4)),
-        if focused {
-            base.add_modifier(Modifier::BOLD)
-        } else {
-            base
-        },
+        usize::from(span.width.saturating_sub(5)),
+        text_style,
     );
 }
 

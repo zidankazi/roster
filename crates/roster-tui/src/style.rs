@@ -23,13 +23,20 @@ pub fn state_label(state: AgentState) -> &'static str {
     }
 }
 
-/// The status glyph for an agent state: a filled dot demands attention
-/// (blocked, working), a check marks a finish (done), a hollow ring reads
-/// as at-rest (idle).
-pub fn state_glyph(state: AgentState) -> &'static str {
+/// The accent color for focus and interactive chrome (focused pane title,
+/// launcher frame, selection markers).
+pub const ACCENT: Color = Color::Cyan;
+
+/// Spinner frames for the working state, advanced by the frame tick.
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// The status glyph for an agent state: a ringed dot demands attention
+/// (blocked), a live spinner shows motion (working — animated by `tick`),
+/// a check marks a finish (done), a hollow ring reads as at-rest (idle).
+pub fn state_glyph(state: AgentState, tick: u64) -> &'static str {
     match state {
-        AgentState::Blocked => "●",
-        AgentState::Working => "●",
+        AgentState::Blocked => "◉",
+        AgentState::Working => SPINNER[(tick as usize) % SPINNER.len()],
         AgentState::Done => "✓",
         AgentState::Idle => "○",
     }
@@ -102,10 +109,19 @@ mod tests {
     }
 
     #[test]
-    fn done_and_idle_have_distinct_glyphs() {
-        assert_eq!(state_glyph(AgentState::Done), "✓");
-        assert_eq!(state_glyph(AgentState::Idle), "○");
-        assert_eq!(state_glyph(AgentState::Blocked), "●");
+    fn glyphs_are_distinct_and_working_animates() {
+        assert_eq!(state_glyph(AgentState::Done, 0), "✓");
+        assert_eq!(state_glyph(AgentState::Idle, 0), "○");
+        assert_eq!(state_glyph(AgentState::Blocked, 0), "◉");
+        // The working glyph cycles with the tick.
+        assert_ne!(
+            state_glyph(AgentState::Working, 0),
+            state_glyph(AgentState::Working, 1)
+        );
+        assert_eq!(
+            state_glyph(AgentState::Working, 0),
+            state_glyph(AgentState::Working, 10)
+        );
     }
 
     #[test]

@@ -11,8 +11,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Widget;
 use roster_detect::Detector;
 
-use crate::style::state_color;
-use roster_core::AgentState;
+use crate::style::ACCENT;
 
 /// One launchable item: a display name and the command it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -233,9 +232,9 @@ fn fill(buf: &mut Buffer, rect: Rect) {
     }
 }
 
-/// Draw a rounded border with a title, colored like a working agent.
+/// Draw a rounded border with a title, in the accent color.
 fn frame(buf: &mut Buffer, rect: Rect, title: &str) {
-    let style = Style::default().fg(state_color(AgentState::Working));
+    let style = Style::default().fg(ACCENT);
     let (left, right, top, bottom) = (
         rect.x,
         rect.x + rect.width - 1,

@@ -167,6 +167,7 @@ impl App {
 
     /// Drive the loop until quit or every pane is gone.
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        let started = Instant::now();
         while !self.quit && !self.session.is_empty() {
             self.drain_output();
             let size = terminal.size()?;
@@ -203,6 +204,9 @@ impl App {
                 launcher,
                 mode_badge,
                 status: &status,
+                // ~8 spinner frames per second, derived from wall time so
+                // the cadence is stable regardless of input polling.
+                tick: started.elapsed().as_millis() as u64 / 125,
             };
             terminal.draw(|frame| render(frame, &view))?;
 
