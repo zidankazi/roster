@@ -1,5 +1,10 @@
 # Build report
 
+> **Versioning note:** releases were renumbered to a 0.0.x pre-release line
+> on 2026-07-04 — the four early tags (v0.1.0, v0.1.1, v0.2.0, v0.3.0) were
+> deleted and the same code now continues as v0.0.4. Mentions of the old
+> numbers below are historical.
+
 Four unattended runs. Run 1 covered the agent-safe crates (`roster-core`,
 `roster-detect`, `roster-tui`). Run 2 built the rest: `roster-term`,
 `roster-pty`, the `roster` binary, and the install path. Run 3 was the
