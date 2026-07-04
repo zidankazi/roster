@@ -1,10 +1,44 @@
 # Build report
 
-Three unattended runs. Run 1 covered the agent-safe crates (`roster-core`,
+Four unattended runs. Run 1 covered the agent-safe crates (`roster-core`,
 `roster-detect`, `roster-tui`). Run 2 built the rest: `roster-term`,
 `roster-pty`, the `roster` binary, and the install path. Run 3 was the
 prod-readiness pass: verifying detection against live Claude Code, binary
-UX, a hardened process lifecycle, and shipping v0.1.1.
+UX, a hardened process lifecycle, and shipping v0.1.1. Run 4 redesigned the
+sidebar to match herdr and shipped v0.2.0.
+
+## Run 4 — herdr-style sidebar (v0.2.0)
+
+Researched herdr (herdr.dev / the GitHub repo) and reworked roster's sidebar
+to match its look while keeping roster's differentiator — the *reason*,
+which herdr doesn't show:
+
+- **Per-state glyphs + color:** blocked/working `●`, done `✓`, idle `○`,
+  each colored (red/yellow/blue/green).
+- **Two-line agent cards:** glyph + agent name + age on top; the state word
+  and its reason below. herdr shows `name state · tool`; roster shows
+  `state · reason`, which is strictly more informative.
+- **A title row** (`roster` + a live agent/blocked count, the count red when
+  anything is blocked) over a rule.
+- **Workspace grouping:** agents group under `workspace N` headers when more
+  than one window is open (herdr groups by workspace); within a group,
+  blocked and done still float to the top.
+- **Sidebar on the left by default** to match herdr, with `--sidebar right`
+  to flip it. This meant threading a `SidebarSide` through the layout math
+  (panes and the separator/cursor offsets now shift with the sidebar).
+
+Verified live: driving the real binary against Claude Code 2.1, the sidebar
+renders
+
+```
+ roster                1 blocked
+────────────────────────────────
+ ● claude-code                3s
+   blocked · Do you want to pro…
+```
+
+with panes to its right. `cargo test --workspace`: 149 passing. Shipped
+v0.2.0 through the same release + Homebrew path (upgrade verified locally).
 
 ## Run 3 — prod readiness
 
