@@ -5,20 +5,23 @@ Aider — in real terminal panes, and see at a glance which one is 🔴 blocked,
 🟡 working, 🔵 done, or 🟢 idle, **plus what each one is waiting on**.
 
 ```
- roster                1 blocked │ ● Bash(cargo test)
-────────────────────────────────│   ⎿ running…
- ● codex                     30s │
-   blocked · Approve command?    │ ╭──────────────────────────────╮
- ✓ aider                      2s │ │ Do you want to proceed?       │
-   done · 3 files changed        │ │ ❯ 1. Yes                      │
- ● claude-code                5s │ │   2. No                       │
-   working · compiling roster    │ ╰──────────────────────────────╯
+ roster                1 blocked │ ● claude-code        │ ● codex
+─────────────────────────────────│ ✳ Compiling…         │ Do you want to proceed?
+ ● codex                     30s │                      │ ❯ 1. Yes
+   blocked · Approve command?    │ ╭─ new agent ──────╮ │   2. No
+ ● claude-code                5s │ │ ❯ cla            │ │
+   working · compiling roster    │ │ ❯ claude-code    │ │
+                                 │ ╰──────────────────╯ │
 ```
 
 The sidebar rolls every agent up to a colored glyph — blocked and done float
 to the top so whoever needs you is always in view — and, unlike a bare status
-dot, shows **the reason**: the exact prompt an agent is blocked on. Grouped by
-workspace, `ctrl-b j` to jump straight to a pane.
+dot, shows **the reason**: the exact prompt an agent is blocked on. Every pane
+gets a title bar with its agent's live state; the focused pane is highlighted.
+
+Start bare and pick agents interactively — `roster` greets you with the
+launcher; `ctrl-b c` opens it any time. Type to filter the configured agents,
+or type any command to run it in a new pane. `ctrl-b j` jumps via the sidebar.
 
 ## Two toolchains, one repo
 
@@ -76,13 +79,14 @@ destination.
 ## Use
 
 ```sh
-roster claude "codex exec 'fix the tests'" aider
+roster                # start with the launcher, add agents as you go
+roster claude codex   # or give each command its own pane up front
 ```
 
-Each command gets a pane; the sidebar shows who's blocked / working / done /
-idle and why. Keys are tmux-flavored with a `ctrl-b` prefix — `roster --help`
-lists them. The sidebar sits on the left by default (`--sidebar right` to flip
-it). Agent detection rules live in
+The sidebar shows who's blocked / working / done / idle and why. Keys are
+tmux-flavored with a `ctrl-b` prefix — `roster --help` lists them. The
+sidebar sits on the left by default (`--sidebar right` to flip it). Agent
+detection rules live in
 [`crates/roster-detect/agents.toml`](crates/roster-detect/agents.toml) and can
 be overridden at `~/.config/roster/agents.toml`.
 
