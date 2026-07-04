@@ -49,18 +49,29 @@ Architecture docs live in [`docs/`](docs) — start with
 
 ## Install
 
+One line, prebuilt binary, no toolchain needed (macOS arm64/x86_64, Linux
+x86_64/arm64 — checksum-verified, installs to `~/.local/bin`):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/zidankazi/roster/main/install.sh | sh
+```
+
+Homebrew:
+
 ```sh
 brew install zidankazi/roster/roster
 ```
 
-Or with cargo:
+Cargo:
 
 ```sh
 cargo install --git https://github.com/zidankazi/roster roster
 ```
 
-Prebuilt binaries for macOS (Apple Silicon + Intel) and Linux (x86_64 +
-arm64) are attached to each [release](https://github.com/zidankazi/roster/releases).
+Prebuilt tarballs are attached to each
+[release](https://github.com/zidankazi/roster/releases); the installer takes
+`ROSTER_VERSION=vX.Y.Z` to pin one and `ROSTER_BINDIR=…` to change the
+destination.
 
 ## Use
 
