@@ -1,0 +1,5 @@
+╭ OpenAI Codex
+
+• Planning the refactor
+
+  codex is thinking about the change

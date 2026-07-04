@@ -152,6 +152,15 @@ fn codex_working_while_running() {
 }
 
 #[test]
+fn codex_working_while_thinking() {
+    assert_reading(
+        classify_fresh("codex", "codex", "working_thinking.txt"),
+        AgentState::Working,
+        Some("codex is thinking about the change"),
+    );
+}
+
+#[test]
 fn codex_idle_at_shell_style_prompt() {
     assert_reading(
         classify_fresh("codex", "codex", "idle_prompt.txt"),
@@ -198,6 +207,15 @@ fn aider_working_while_applying_edit() {
         classify_fresh("aider", "aider", "working_applying.txt"),
         AgentState::Working,
         Some("Applying edit to src/app.py"),
+    );
+}
+
+#[test]
+fn aider_working_while_committing() {
+    assert_reading(
+        classify_fresh("aider", "aider", "working_committing.txt"),
+        AgentState::Working,
+        Some("Committing src/app.py with message \"fix: handle empty input\""),
     );
 }
 

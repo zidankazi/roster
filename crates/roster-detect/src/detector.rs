@@ -318,6 +318,38 @@ mod tests {
     }
 
     #[test]
+    fn every_spinner_glyph_reads_as_working() {
+        let detector = Detector::builtin();
+        let kind = detector.identify("claude").unwrap();
+        for glyph in ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] {
+            let grid = Grid::from_text(&format!("{glyph} Working on it…"));
+            let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
+            assert_eq!(reading.state, AgentState::Working, "glyph {glyph}");
+        }
+    }
+
+    #[test]
+    fn empty_and_blank_grids_read_as_idle() {
+        let detector = Detector::builtin();
+        let kind = detector.identify("claude").unwrap();
+        for grid in [Grid::new(0, 0), Grid::new(80, 24), Grid::from_text("\n\n\n")] {
+            let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
+            assert_eq!(reading.state, AgentState::Idle);
+            assert_eq!(reading.reason, None);
+        }
+    }
+
+    #[test]
+    fn blocked_prompt_on_the_last_row_is_found() {
+        let detector = Detector::builtin();
+        let kind = detector.identify("claude").unwrap();
+        let grid = Grid::from_text("output\nmore output\nAllow rm -rf target/?");
+        let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
+        assert_eq!(reading.state, AgentState::Blocked);
+        assert_eq!(reading.reason.as_deref(), Some("Allow rm -rf target/?"));
+    }
+
+    #[test]
     fn first_frame_is_not_evidence_of_activity() {
         let detector = Detector::builtin();
         let kind = detector.identify("claude").unwrap();
