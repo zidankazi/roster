@@ -23,6 +23,24 @@ Start bare and pick agents interactively — `roster` greets you with the
 launcher; `ctrl-b c` opens it any time. Type to filter the configured agents,
 or type any command to run it in a new pane. `ctrl-b j` jumps via the sidebar.
 
+**Mouse-native:** click any pane to focus it, click a sidebar card to jump to
+that agent, click launcher rows to launch, drag pane dividers to resize, and
+scroll the pane under your cursor. Keyboard equivalents exist for everything.
+
+## How it compares
+
+|                        | tmux | GUI managers | roster |
+|------------------------|------|--------------|--------|
+| agent awareness        | —    | ✓            | ✓      |
+| shows *why* (reasons)  | —    | —            | ✓      |
+| panes, workspaces      | ✓    | ✓            | ✓      |
+| lives in your terminal | ✓    | —            | ✓      |
+| real terminal views    | ✓    | —            | ✓      |
+| mouse-native           | —    | ✓            | ✓      |
+| lightweight binary     | ✓    | —            | ✓ (~4 MB) |
+| persistent sessions    | ✓    | —            | planned |
+| detach / reattach      | ✓    | —            | planned |
+
 ## Two toolchains, one repo
 
 This repo holds two independent build systems that do not share a package manager:

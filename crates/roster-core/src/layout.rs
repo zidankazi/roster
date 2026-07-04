@@ -131,6 +131,87 @@ impl LayoutNode {
         out
     }
 
+    /// The direction of the divider under (`x`, `y`) when this tree is laid
+    /// out in `area`: the last column of a horizontal split's first half, or
+    /// the first row of a vertical split's second half (where the lower
+    /// pane's title bar sits). Deeper splits shadow shallower ones only in
+    /// regions they own, so positions are unambiguous.
+    pub(crate) fn divider_at(&self, area: Rect, x: u16, y: u16) -> Option<SplitDirection> {
+        let LayoutNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } = self
+        else {
+            return None;
+        };
+        let (a, b) = divide(area, *direction, *ratio);
+        match direction {
+            SplitDirection::Horizontal
+                if a.width > 0 && x == a.x + a.width - 1 && y >= a.y && y < a.y + a.height =>
+            {
+                Some(SplitDirection::Horizontal)
+            }
+            SplitDirection::Vertical if y == b.y && x >= b.x && x < b.x + b.width => {
+                Some(SplitDirection::Vertical)
+            }
+            _ => first
+                .divider_at(a, x, y)
+                .or_else(|| second.divider_at(b, x, y)),
+        }
+    }
+
+    /// Move the divider under (`from_x`, `from_y`) so it lands as close to
+    /// `to` as the layout allows. Returns the divider's new position, or
+    /// `None` when nothing draggable is there.
+    pub(crate) fn drag_divider(
+        &mut self,
+        area: Rect,
+        from: (u16, u16),
+        to: (u16, u16),
+    ) -> Option<(u16, u16)> {
+        let LayoutNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } = self
+        else {
+            return None;
+        };
+        let (a, b) = divide(area, *direction, *ratio);
+        let owned = match direction {
+            SplitDirection::Horizontal => {
+                a.width > 0
+                    && from.0 == a.x + a.width - 1
+                    && from.1 >= a.y
+                    && from.1 < a.y + a.height
+            }
+            SplitDirection::Vertical => from.1 == b.y && from.0 >= b.x && from.0 < b.x + b.width,
+        };
+        if !owned {
+            return first
+                .drag_divider(a, from, to)
+                .or_else(|| second.drag_divider(b, from, to));
+        }
+        match direction {
+            SplitDirection::Horizontal if area.width >= 2 => {
+                let target = (to.0.saturating_sub(area.x) + 1) as f32 / f32::from(area.width);
+                *ratio = target.clamp(0.05, 0.95);
+                let first_w = portion(area.width, *ratio);
+                Some((area.x + first_w - 1, from.1))
+            }
+            SplitDirection::Vertical if area.height >= 2 => {
+                let target = to.1.saturating_sub(area.y) as f32 / f32::from(area.height);
+                *ratio = target.clamp(0.05, 0.95);
+                let first_h = portion(area.height, *ratio);
+                Some((from.0, area.y + first_h))
+            }
+            _ => None,
+        }
+    }
+
     fn collect_leaves(&self, out: &mut Vec<PaneId>) {
         match self {
             LayoutNode::Leaf(id) => out.push(*id),

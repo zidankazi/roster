@@ -12,11 +12,13 @@ use ratatui::style::{Modifier, Style};
 use ratatui::Frame;
 use roster_core::{Grid, PaneId, Session};
 
+mod hit;
 mod launcher;
 mod pane;
 mod sidebar;
 mod style;
 
+pub use hit::{hit_test, Hit};
 pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
 pub use sidebar::{format_age, sidebar_entries, Message, Sidebar, SidebarEntry, SidebarState};
@@ -99,6 +101,16 @@ fn sidebar_area(frame_area: Rect, side: SidebarSide) -> Rect {
         bar,
         frame_area.height.saturating_sub(STATUS_HEIGHT),
     )
+}
+
+/// The sidebar's content region (the sidebar area minus its rule column),
+/// and where clicks on agent cards land.
+pub fn sidebar_inner(frame_area: Rect, side: SidebarSide) -> Rect {
+    let bar = sidebar_area(frame_area, side);
+    match side {
+        SidebarSide::Left => Rect::new(bar.x, bar.y, bar.width.saturating_sub(1), bar.height),
+        SidebarSide::Right => Rect::new(bar.x + 1, bar.y, bar.width.saturating_sub(1), bar.height),
+    }
 }
 
 /// The part of a laid-out pane rect its content actually occupies: the top
@@ -188,15 +200,10 @@ pub fn render(frame: &mut Frame, view: &View) {
 
     // The sidebar, with a full-height rule separating it from the panes.
     let bar = sidebar_area(area, view.side);
-    let (bar_inner, rule_x) = match view.side {
-        SidebarSide::Left => (
-            Rect::new(bar.x, bar.y, bar.width.saturating_sub(1), bar.height),
-            bar.x + bar.width.saturating_sub(1),
-        ),
-        SidebarSide::Right => (
-            Rect::new(bar.x + 1, bar.y, bar.width.saturating_sub(1), bar.height),
-            bar.x,
-        ),
+    let bar_inner = sidebar_inner(area, view.side);
+    let rule_x = match view.side {
+        SidebarSide::Left => bar.x + bar.width.saturating_sub(1),
+        SidebarSide::Right => bar.x,
     };
     for y in bar.y..bar.y + bar.height {
         if let Some(cell) = frame.buffer_mut().cell_mut((rule_x, y)) {

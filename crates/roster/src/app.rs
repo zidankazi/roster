@@ -6,7 +6,10 @@ use std::io::{self, Read};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
 use ratatui::layout::Rect;
 use ratatui::DefaultTerminal;
 use roster_core::{AgentState, PaneId, Session, SplitDirection};
@@ -14,8 +17,8 @@ use roster_detect::{AgentKind, Detector, PaneTracker};
 use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
-    content_rect, launch_items, local_panes, panes_area, render, sidebar_entries, LaunchItem,
-    LauncherState, Message, SidebarEntry, SidebarSide, SidebarState, View,
+    content_rect, hit_test, launch_items, local_panes, panes_area, render, sidebar_entries, Hit,
+    LaunchItem, Launcher, LauncherState, Message, SidebarEntry, SidebarSide, SidebarState, View,
 };
 
 use crate::keys::encode_key;
@@ -67,6 +70,10 @@ pub struct App {
     launchables: Vec<LaunchItem>,
     last_entries: Vec<SidebarEntry>,
     last_detect: Instant,
+    /// The frame area of the most recent draw, for mouse hit-testing.
+    last_area: Rect,
+    /// A grabbed split divider, in pane-local coordinates, while dragging.
+    dragging: Option<(u16, u16)>,
     notice: Option<String>,
     quit: bool,
     output_tx: Sender<Output>,
@@ -100,6 +107,8 @@ impl App {
             launchables,
             last_entries: Vec::new(),
             last_detect: Instant::now() - DETECT_EVERY,
+            last_area: Rect::new(0, 0, SPAWN_COLS, SPAWN_ROWS),
+            dragging: None,
             notice: None,
             quit: false,
             output_tx,
@@ -171,7 +180,8 @@ impl App {
         while !self.quit && !self.session.is_empty() {
             self.drain_output();
             let size = terminal.size()?;
-            self.sync_layout(Rect::new(0, 0, size.width, size.height));
+            self.last_area = Rect::new(0, 0, size.width, size.height);
+            self.sync_layout(self.last_area);
             self.detect_if_due();
 
             self.last_entries = sidebar_entries(&self.session, &self.detector, Instant::now());
@@ -215,6 +225,7 @@ impl App {
                     Event::Key(key) if key.kind != KeyEventKind::Release => {
                         self.handle_key(key);
                     }
+                    Event::Mouse(mouse) => self.handle_mouse(mouse),
                     // Resizes are picked up from terminal.size() next frame.
                     _ => {}
                 }
@@ -380,6 +391,109 @@ impl App {
                 _ => {}
             },
             Mode::Launch(_) => unreachable!("handled above"),
+        }
+    }
+
+    /// Translate mouse input into the same intents keys produce: click a
+    /// sidebar card to jump, a pane to focus it, a launcher row to launch;
+    /// drag a divider to resize; scroll to nudge the pane under the cursor.
+    fn handle_mouse(&mut self, mouse: MouseEvent) {
+        let (x, y) = (mouse.column, mouse.row);
+
+        // The launcher owns the mouse while open.
+        if let Mode::Launch(state) = &mut self.mode {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let launcher = Launcher::new(&self.launchables, state);
+                    if let Some(index) = launcher.item_at(self.last_area, x, y) {
+                        state.select(index);
+                        let command = state.command(&self.launchables);
+                        self.mode = Mode::Normal;
+                        if let Some(command) = command {
+                            self.launch(&command);
+                        }
+                    } else if !launcher.contains(self.last_area, x, y) {
+                        self.mode = Mode::Normal;
+                    }
+                }
+                MouseEventKind::ScrollDown => state.select_next(&self.launchables),
+                MouseEventKind::ScrollUp => state.select_prev(&self.launchables),
+                _ => {}
+            }
+            return;
+        }
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.notice = None;
+                match hit_test(
+                    self.last_area,
+                    &self.session,
+                    self.side,
+                    &self.last_entries,
+                    x,
+                    y,
+                ) {
+                    Hit::SidebarEntry(index) => {
+                        if let Some(entry) = self.last_entries.get(index) {
+                            self.session.focus(entry.pane);
+                        }
+                    }
+                    Hit::PaneTitle(id) | Hit::Pane(id) => {
+                        self.session.focus(id);
+                        // Title rows and separator columns double as split
+                        // dividers; grab one if it's there.
+                        let panes = panes_area(self.last_area, self.side);
+                        if x >= panes.x && y >= panes.y {
+                            let local = (x - panes.x, y - panes.y);
+                            if self
+                                .session
+                                .divider_at(panes.width, panes.height, local.0, local.1)
+                                .is_some()
+                            {
+                                self.dragging = Some(local);
+                            }
+                        }
+                    }
+                    Hit::Sidebar | Hit::Status | Hit::Outside => {}
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(from) = self.dragging {
+                    let panes = panes_area(self.last_area, self.side);
+                    let to = (x.saturating_sub(panes.x), y.saturating_sub(panes.y));
+                    if let Some(new_pos) =
+                        self.session
+                            .drag_divider(panes.width, panes.height, from, to)
+                    {
+                        self.dragging = Some(new_pos);
+                    }
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.dragging = None,
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                let hit = hit_test(
+                    self.last_area,
+                    &self.session,
+                    self.side,
+                    &self.last_entries,
+                    x,
+                    y,
+                );
+                if let Hit::Pane(id) | Hit::PaneTitle(id) = hit {
+                    let bytes: &[u8] = if mouse.kind == MouseEventKind::ScrollUp {
+                        b"\x1b[A\x1b[A\x1b[A"
+                    } else {
+                        b"\x1b[B\x1b[B\x1b[B"
+                    };
+                    if let Some(rt) = self.runtimes.get_mut(&id) {
+                        if rt.exited.is_none() {
+                            let _ = rt.pty.write(bytes);
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 

@@ -12,6 +12,32 @@ prod-readiness pass: verifying detection against live Claude Code, binary
 UX, a hardened process lifecycle, and shipping v0.1.1. Run 4 redesigned the
 sidebar to match herdr and shipped v0.2.0.
 
+## Run 6 — mouse-native
+
+The remaining gap against herdr's comparison table (besides persistence,
+which the docs schedule after v1):
+
+- **Click** a pane or its title bar to focus it; click a sidebar card to
+  jump straight to that agent; click a launcher row to launch it; click
+  outside the launcher to dismiss it.
+- **Drag** the divider between panes to resize the split — split ratios in
+  `roster-core` are now adjustable (`Session::divider_at` /
+  `drag_divider`), with clamping so a pane can't be dragged out of
+  existence. Horizontal dividers are the separator rules; vertical
+  dividers are the lower pane's title bar.
+- **Scroll** nudges the pane under the cursor (three arrow-key steps per
+  wheel notch, the alt-screen convention), without changing focus.
+- Hit-testing (`roster_tui::hit_test`) mirrors the render geometry exactly
+  and is unit-tested against it; mouse capture is enabled at startup and
+  released on exit.
+
+All of it is covered end to end by a test that drives the real binary with
+raw SGR mouse escape sequences: it clicks a pane and watches focus move,
+drags the divider and watches the separator column relocate, clicks a
+launcher row and watches the fake agent go blocked, then clicks the
+sidebar card and watches focus jump to it. 163 tests total. Not released —
+on main, per the no-release-per-change rule.
+
 ## Run 5 — runtime launcher + pane chrome (v0.3.0)
 
 The awkwardness this run removed: agents no longer have to be named at

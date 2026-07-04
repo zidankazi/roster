@@ -48,10 +48,16 @@ OPTIONS:
   -V, --version        Print the version
 
 KEYS (prefix: ctrl-b):
+  prefix c   new agent (launcher)      prefix x   close pane
   prefix %   split side by side        prefix \"   split stacked
-  prefix o   focus next pane           prefix x   close pane
+  prefix o   focus next pane           prefix q   quit
   prefix j   jump via sidebar (j/k move, enter jump, esc cancel)
-  prefix q   quit                      prefix ctrl-b  send a literal ctrl-b
+  prefix ctrl-b  send a literal ctrl-b
+
+MOUSE:
+  click a pane or its title to focus it; click a sidebar card to jump to
+  that agent; click launcher rows to launch; drag the divider between
+  panes to resize; scroll to nudge the pane under the cursor.
 ";
 
 /// Parse arguments (excluding argv\[0\]).

@@ -276,6 +276,33 @@ impl Session {
             .iter()
             .position(|w| w.root.leaves().contains(&target))
     }
+
+    /// The direction of the split divider under (`x`, `y`) in the active
+    /// window, laid out at `cols` × `rows`. Horizontal splits own the last
+    /// column of their first half; vertical splits own the first row of
+    /// their second half.
+    pub fn divider_at(&self, cols: u16, rows: u16, x: u16, y: u16) -> Option<SplitDirection> {
+        self.windows
+            .get(self.active)?
+            .root
+            .divider_at(Rect::new(0, 0, cols, rows), x, y)
+    }
+
+    /// Drag the divider under `from` toward `to`, resizing the split.
+    /// Returns the divider's new position, or `None` when `from` holds no
+    /// divider.
+    pub fn drag_divider(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        from: (u16, u16),
+        to: (u16, u16),
+    ) -> Option<(u16, u16)> {
+        self.windows
+            .get_mut(self.active)?
+            .root
+            .drag_divider(Rect::new(0, 0, cols, rows), from, to)
+    }
 }
 
 impl Default for Session {
@@ -448,6 +475,47 @@ mod tests {
             None,
             Instant::now()
         ));
+    }
+
+    #[test]
+    fn dividers_are_found_and_draggable() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        s.split(a, SplitDirection::Horizontal).unwrap();
+        // 80 wide at ratio 0.5 → first half 0..40, divider at column 39.
+        assert_eq!(
+            s.divider_at(80, 24, 39, 5),
+            Some(SplitDirection::Horizontal)
+        );
+        assert_eq!(s.divider_at(80, 24, 20, 5), None);
+
+        // Drag the divider to column 20: the first pane shrinks.
+        let new_pos = s.drag_divider(80, 24, (39, 5), (20, 5)).unwrap();
+        assert_eq!(new_pos, (20, 5));
+        let rects = s.layout(80, 24);
+        assert_eq!(rects[0].1.width, 21);
+        assert_eq!(rects[1].1.width, 59);
+
+        // Extreme drags clamp instead of collapsing a pane.
+        s.drag_divider(80, 24, (20, 5), (0, 5)).unwrap();
+        let rects = s.layout(80, 24);
+        assert!(rects[0].1.width >= 1, "width: {}", rects[0].1.width);
+    }
+
+    #[test]
+    fn vertical_divider_sits_on_the_lower_panes_top_row() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        s.split(a, SplitDirection::Vertical).unwrap();
+        // 24 tall at 0.5 → first half rows 0..12, divider at row 12.
+        assert_eq!(s.divider_at(80, 24, 10, 12), Some(SplitDirection::Vertical));
+        assert_eq!(s.divider_at(80, 24, 10, 11), None);
+
+        let new_pos = s.drag_divider(80, 24, (10, 12), (10, 6)).unwrap();
+        assert_eq!(new_pos, (10, 6));
+        let rects = s.layout(80, 24);
+        assert_eq!(rects[0].1.height, 6);
+        assert_eq!(rects[1].1.height, 18);
     }
 
     #[test]

@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use ratatui::crossterm;
 use roster_detect::Detector;
 use roster_tui::SidebarSide;
 
@@ -56,7 +57,10 @@ fn run() -> Result<(), String> {
 
     let mut app = app::App::new(detector, &commands, side, bare_start)?;
     let mut terminal = ratatui::init();
+    // Mouse-native: capture clicks, drags, and the wheel.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
     let result = app.run(&mut terminal);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
     result.map_err(|e| e.to_string())
 }

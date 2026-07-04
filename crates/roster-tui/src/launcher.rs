@@ -116,6 +116,12 @@ impl LauncherState {
         let typed = self.input.trim();
         (!typed.is_empty()).then(|| typed.to_string())
     }
+
+    /// Select the row at `index` in the filtered list (clamped by
+    /// [`LauncherState::selected`] when out of range).
+    pub fn select(&mut self, index: usize) {
+        self.selected = index;
+    }
 }
 
 /// The launcher modal widget, drawn centered inside a given area.
@@ -139,6 +145,24 @@ impl<'a> Launcher<'a> {
         let x = area.x + (area.width.saturating_sub(width)) / 2;
         let y = area.y + (area.height.saturating_sub(height)) / 3;
         Rect::new(x, y, width, height)
+    }
+
+    /// Whether (`x`, `y`) falls inside the modal.
+    pub fn contains(&self, area: Rect, x: u16, y: u16) -> bool {
+        let modal = self.modal_rect(area);
+        x >= modal.x && x < modal.x + modal.width && y >= modal.y && y < modal.y + modal.height
+    }
+
+    /// The filtered item row under (`x`, `y`), when one is there. Item rows
+    /// start below the border and the input line.
+    pub fn item_at(&self, area: Rect, x: u16, y: u16) -> Option<usize> {
+        let modal = self.modal_rect(area);
+        if !self.contains(area, x, y) || y < modal.y + 2 {
+            return None;
+        }
+        let index = usize::from(y - modal.y - 2);
+        let _ = x;
+        (index < self.state.filtered(self.items).len()).then_some(index)
     }
 }
 

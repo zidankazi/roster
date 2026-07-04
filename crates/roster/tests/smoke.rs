@@ -150,6 +150,139 @@ fn launcher_spawns_an_agent_at_runtime() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// SGR mouse press+release at 1-based (col, row).
+fn click(col: u16, row: u16) -> Vec<u8> {
+    format!("\x1b[<0;{col};{row}M\x1b[<0;{col};{row}m").into_bytes()
+}
+
+#[test]
+fn mouse_clicks_focus_launch_and_jump() {
+    let dir = fake_agent_dir();
+    let path = format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    std::env::set_var("PATH", &path);
+
+    // 120x30 frame: sidebar 0..32 (rule at col 31), panes 32..120, status
+    // row 30 (1-based). Two shell panes split 44/44 at local x 0..44/44..88.
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty =
+        Pty::spawn(&format!("'{}' 'sleep 60' 'sleep 70'", bin()), cols, rows).expect("spawn");
+    let mut reader = pty.reader().expect("reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut screen = Screen::new(cols, rows);
+    let drain_until = |screen: &mut Screen, needle: &str, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < DEADLINE {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => screen.advance(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+            if screen.grid().lines().iter().any(|l| l.contains(needle)) {
+                return true;
+            }
+        }
+        false
+    };
+
+    // The second command has focus at startup; the status line names it.
+    assert!(
+        drain_until(&mut screen, "sleep 70   ctrl-b", &rx),
+        "first frame:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Click inside the first pane's content (absolute col ~40, row 10) —
+    // focus follows the mouse click.
+    pty.write(&click(40, 10)).expect("click left pane");
+    assert!(
+        drain_until(&mut screen, "sleep 60   ctrl-b", &rx),
+        "click did not focus the left pane:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Drag the divider between the halves (local col 43 → absolute 1-based
+    // 76) to the left; the separator must land near local col 23 (absolute
+    // 0-based 55).
+    pty.write(b"\x1b[<0;76;10M").expect("grab divider");
+    pty.write(b"\x1b[<32;66;10M").expect("drag");
+    pty.write(b"\x1b[<32;56;10M").expect("drag");
+    pty.write(b"\x1b[<0;56;10m").expect("release");
+    let start = Instant::now();
+    let mut moved = false;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if screen
+            .grid()
+            .lines()
+            .get(5)
+            .is_some_and(|l| l.chars().nth(55) == Some('│'))
+        {
+            moved = true;
+            break;
+        }
+    }
+    assert!(
+        moved,
+        "divider never moved to column 55; row 5 was:\n{:?}",
+        screen.grid().lines().get(5)
+    );
+
+    // ctrl-b c opens the launcher; click the claude-code row to launch it.
+    // Modal at 120x30: width 44 → x 38..82; height 8 → y 7..15 (0-based);
+    // items start at y 9, claude-code is the second row → y 10 → 1-based 11.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"c").expect("open launcher");
+    assert!(
+        drain_until(&mut screen, "new agent", &rx),
+        "launcher never opened:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    pty.write(&click(45, 11)).expect("click claude-code row");
+    assert!(
+        drain_until(&mut screen, "blocked · Do y", &rx),
+        "clicked launch never went blocked:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // The launched agent has focus; click its sidebar card (rows 3-4,
+    // 1-based) after clicking back into a shell pane first.
+    pty.write(&click(40, 10)).expect("refocus shell");
+    assert!(
+        drain_until(&mut screen, "sleep 60   ctrl-b", &rx),
+        "refocus failed:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    pty.write(&click(5, 3)).expect("click sidebar card");
+    assert!(
+        drain_until(&mut screen, "claude   ctrl-b", &rx),
+        "sidebar click did not jump to the agent:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn exited_pane_stays_until_closed() {
     let (cols, rows) = (100u16, 24u16);
