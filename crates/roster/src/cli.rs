@@ -9,12 +9,23 @@ pub struct Args {
     pub config: Option<PathBuf>,
     /// One shell command per pane. Empty means a single `$SHELL` pane.
     pub commands: Vec<String>,
+    /// Which edge the sidebar occupies, when set on the command line.
+    pub sidebar: Option<Side>,
     /// Print usage and exit.
     pub help: bool,
     /// Print the version and exit.
     pub version: bool,
     /// Print the built-in agents.toml and exit.
     pub print_config: bool,
+}
+
+/// The sidebar edge requested on the command line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// Sidebar on the left (the default).
+    Left,
+    /// Sidebar on the right.
+    Right,
 }
 
 /// Usage text for `--help`.
@@ -30,6 +41,7 @@ commands, roster opens a single shell pane.
 OPTIONS:
   -c, --config <PATH>  Use PATH as agents.toml instead of the default lookup
                        (~/.config/roster/agents.toml, then built-in defaults)
+      --sidebar <SIDE> Place the sidebar on the left (default) or right
       --print-config   Print the built-in agents.toml (pipe it to
                        ~/.config/roster/agents.toml to customize)
   -h, --help           Print this help
@@ -61,6 +73,16 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
                     .next()
                     .ok_or_else(|| format!("{arg} requires a path"))?;
                 parsed.config = Some(PathBuf::from(value));
+            }
+            "--sidebar" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| format!("{arg} requires left or right"))?;
+                parsed.sidebar = Some(match value.as_str() {
+                    "left" => Side::Left,
+                    "right" => Side::Right,
+                    other => return Err(format!("--sidebar expects left or right, got {other}")),
+                });
             }
             "--" => positional_only = true,
             flag if flag.starts_with('-') && flag.len() > 1 => {
@@ -115,5 +137,22 @@ mod tests {
     fn help_and_version_flags() {
         assert!(parse(strings(&["-h"])).unwrap().help);
         assert!(parse(strings(&["--version"])).unwrap().version);
+    }
+
+    #[test]
+    fn sidebar_side_parses() {
+        assert_eq!(parse(strings(&[])).unwrap().sidebar, None);
+        assert_eq!(
+            parse(strings(&["--sidebar", "right"])).unwrap().sidebar,
+            Some(Side::Right)
+        );
+        assert_eq!(
+            parse(strings(&["--sidebar", "left", "claude"]))
+                .unwrap()
+                .sidebar,
+            Some(Side::Left)
+        );
+        assert!(parse(strings(&["--sidebar", "top"])).is_err());
+        assert!(parse(strings(&["--sidebar"])).is_err());
     }
 }

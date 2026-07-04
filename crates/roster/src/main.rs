@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use roster_detect::Detector;
+use roster_tui::SidebarSide;
 
 mod app;
 mod cli;
@@ -45,8 +46,12 @@ fn run() -> Result<(), String> {
     } else {
         args.commands
     };
+    let side = match args.sidebar {
+        Some(cli::Side::Right) => SidebarSide::Right,
+        Some(cli::Side::Left) | None => SidebarSide::Left,
+    };
 
-    let mut app = app::App::new(detector, &commands)?;
+    let mut app = app::App::new(detector, &commands, side)?;
     let mut terminal = ratatui::init();
     let result = app.run(&mut terminal);
     ratatui::restore();

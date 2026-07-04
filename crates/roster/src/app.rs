@@ -14,7 +14,8 @@ use roster_detect::{AgentKind, Detector, PaneTracker};
 use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
-    content_rect, panes_area, render, sidebar_entries, Message, SidebarEntry, SidebarState, View,
+    content_rect, local_panes, panes_area, render, sidebar_entries, Message, SidebarEntry,
+    SidebarSide, SidebarState, View,
 };
 
 use crate::keys::encode_key;
@@ -59,6 +60,7 @@ pub struct App {
     runtimes: HashMap<PaneId, PaneRuntime>,
     detector: Detector,
     sidebar: SidebarState,
+    side: SidebarSide,
     mode: Mode,
     last_entries: Vec<SidebarEntry>,
     last_detect: Instant,
@@ -70,13 +72,14 @@ pub struct App {
 impl App {
     /// Spawn one pane per command and assemble the initial layout,
     /// alternating split directions for a usable mosaic.
-    pub fn new(detector: Detector, commands: &[String]) -> Result<App, String> {
+    pub fn new(detector: Detector, commands: &[String], side: SidebarSide) -> Result<App, String> {
         let (output_tx, output_rx) = mpsc::channel();
         let mut app = App {
             session: Session::new(),
             runtimes: HashMap::new(),
             detector,
             sidebar: SidebarState::new(),
+            side,
             mode: Mode::Normal,
             last_entries: Vec::new(),
             last_detect: Instant::now() - DETECT_EVERY,
@@ -174,6 +177,7 @@ impl App {
                 exited: &exited,
                 entries: &self.last_entries,
                 selected,
+                side: self.side,
                 mode_badge,
                 status: &status,
             };
@@ -230,9 +234,10 @@ impl App {
 
     /// Bring every pane's PTY and emulator to its laid-out size.
     fn sync_layout(&mut self, area: Rect) {
-        let panes = panes_area(area);
+        let panes = panes_area(area, self.side);
+        let local = local_panes(panes);
         for (id, rect) in self.session.layout(panes.width, panes.height) {
-            let content = content_rect(rect, panes);
+            let content = content_rect(rect, local);
             if content.width == 0 || content.height == 0 {
                 continue;
             }

@@ -170,13 +170,12 @@ fn full_pipeline_shows_blocked_agent_and_quits() {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        // The 32-column sidebar truncates the reason with an ellipsis, so
-        // assert the state and the reason's head rather than the full text.
+        // The sidebar card is two lines: the agent name on one, the state
+        // and reason (truncated) on the next.
         let lines = screen.grid().lines();
-        if lines
-            .iter()
-            .any(|l| l.contains("claude-code blocked: Do y"))
-        {
+        let has_name = lines.iter().any(|l| l.contains("claude-code"));
+        let has_reason = lines.iter().any(|l| l.contains("blocked · Do y"));
+        if has_name && has_reason {
             saw_blocked = true;
             break;
         }
@@ -193,7 +192,7 @@ fn full_pipeline_shows_blocked_agent_and_quits() {
             .grid()
             .lines()
             .iter()
-            .any(|l| l.starts_with("Do you want to proceed?")),
+            .any(|l| l.contains("Do you want to proceed?")),
         "pane content missing; screen was:\n{}",
         screen.grid().lines().join("\n")
     );

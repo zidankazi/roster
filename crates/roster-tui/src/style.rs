@@ -23,6 +23,18 @@ pub fn state_label(state: AgentState) -> &'static str {
     }
 }
 
+/// The status glyph for an agent state: a filled dot demands attention
+/// (blocked, working), a check marks a finish (done), a hollow ring reads
+/// as at-rest (idle).
+pub fn state_glyph(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Blocked => "●",
+        AgentState::Working => "●",
+        AgentState::Done => "✓",
+        AgentState::Idle => "○",
+    }
+}
+
 /// Convert a grid cell's style into a ratatui [`Style`].
 pub fn cell_style(style: CellStyle) -> Style {
     let mut out = Style::default().fg(color(style.fg)).bg(color(style.bg));
@@ -87,6 +99,13 @@ mod tests {
             Some(Color::Indexed(4))
         );
         assert_eq!(cell_style(CellStyle::default()).fg, Some(Color::Reset));
+    }
+
+    #[test]
+    fn done_and_idle_have_distinct_glyphs() {
+        assert_eq!(state_glyph(AgentState::Done), "✓");
+        assert_eq!(state_glyph(AgentState::Idle), "○");
+        assert_eq!(state_glyph(AgentState::Blocked), "●");
     }
 
     #[test]

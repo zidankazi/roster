@@ -269,7 +269,9 @@ impl Session {
         true
     }
 
-    fn window_of(&self, target: PaneId) -> Option<usize> {
+    /// The index of the window containing `target`, or `None` if no window
+    /// holds it.
+    pub fn window_of(&self, target: PaneId) -> Option<usize> {
         self.windows
             .iter()
             .position(|w| w.root.leaves().contains(&target))
@@ -446,6 +448,18 @@ mod tests {
             None,
             Instant::now()
         ));
+    }
+
+    #[test]
+    fn window_of_locates_panes_across_windows() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        let b = s.split(a, SplitDirection::Horizontal).unwrap();
+        let c = s.new_window();
+        assert_eq!(s.window_of(a), Some(0));
+        assert_eq!(s.window_of(b), Some(0));
+        assert_eq!(s.window_of(c), Some(1));
+        assert_eq!(s.window_of(PaneId::from_raw(999)), None);
     }
 
     #[test]
