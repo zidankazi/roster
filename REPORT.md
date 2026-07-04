@@ -1,8 +1,50 @@
-# Build report — agent-safe crates (milestones 1–3)
+# Build report
 
-Unattended run covering `roster-core`, `roster-detect`, and `roster-tui`, per
-`docs/03-build-sequence.md`. `roster-pty`, `roster-term`, and the binary event
-loop were not touched, as instructed.
+Two unattended runs. Run 1 covered the agent-safe crates (`roster-core`,
+`roster-detect`, `roster-tui`). Run 2, on your go-ahead, built the rest:
+`roster-term`, `roster-pty`, the `roster` binary, and the install path
+(GitHub releases + Homebrew tap).
+
+## Run 2 — plumbing, binary, packaging
+
+**roster-term** (12 tests). `Screen` wraps `alacritty_terminal` 0.26: feed
+PTY bytes, snapshot a `roster_core::Grid`. Colors (ANSI/256/truecolor),
+attributes, cursor state, wrapping, and — the critical one for full-screen
+agents — alternate-screen switch/restore are all covered by tests that
+drive real escape sequences through the parser. Scrollback is off by design
+(detection and rendering only read the visible screen).
+
+**roster-pty** (8 tests). `Pty::spawn` runs a command line via `sh -c`
+inside a `portable-pty` PTY (env inherited, `TERM=xterm-256color`); reader
+cloning, input writes, resize (verified via `stty size` from a live child),
+exit codes, kill, and drop-kills-the-child are all integration-tested
+against real processes.
+
+**roster binary** (16 tests incl. e2e). Event loop wiring output → emulator
+→ detection (400ms cadence) → model → repaint (50ms input poll); tmux-style
+`ctrl-b` prefix (`%`/`"` split, `o` focus, `x` close, `j` sidebar jump mode,
+`q` quit); key encoding to PTY byte sequences (unit-tested); config lookup
+at `~/.config/roster/agents.toml` with built-in fallback. The smoke test is
+end-to-end and headless: it plants a fake `claude` on `PATH` that prints a
+blocked prompt, runs the real binary inside a PTY, parses roster's own
+output with `roster-term`, asserts the sidebar shows
+`● claude-code blocked: Do y… ⏱`, then quits via prefix-q and checks a
+clean exit.
+
+**Packaging.** MIT license; `ci.yml` (fmt + clippy -D warnings + tests on
+macOS/Linux — green on GitHub); `release.yml` builds tarballs for
+aarch64/x86_64 macOS and Linux on `v*` tags. `v0.1.0` is tagged and
+released with all four artifacts + sha256s. The Homebrew tap
+`zidankazi/homebrew-roster` has a formula that builds from the tagged
+source. **Verified end to end on this machine:**
+`brew install zidankazi/roster/roster` poured the rust toolchain, built
+roster in 24s, and the installed binary answers `roster 0.1.0`; `brew test
+roster` passes.
+
+## Run 1 — agent-safe crates (milestones 1–3)
+
+Covered `roster-core`, `roster-detect`, and `roster-tui`, per
+`docs/03-build-sequence.md`.
 
 ## What was built
 
@@ -38,8 +80,11 @@ truncation with ellipsis; selection highlight), `SidebarState` emitting
 
 ## State
 
-`cargo test --workspace`: 100 passed, 0 failed. `cargo clippy
---all-targets`: clean. Six commits, each green, pushed to `main`.
+`cargo test --workspace`: 136 passed, 0 failed (100 from run 1 + 36 from
+run 2). `cargo fmt --check` and `cargo clippy --all-targets -- -D
+warnings`: clean, enforced by CI (green on GitHub for macOS and Linux).
+Every commit green and pushed to `main`; `v0.1.0` released with binaries
+for four targets; Homebrew install verified locally.
 
 ## Decisions you should review
 
