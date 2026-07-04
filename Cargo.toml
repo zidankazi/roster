@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = [
+members = ["crates/roster",
     "crates/roster-core",
-    "crates/roster-detect",
+    "crates/roster-detect", "crates/roster-pty", "crates/roster-term",
     "crates/roster-tui",
 ]
 
