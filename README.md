@@ -31,7 +31,34 @@ artifact the site reads at build time — that is the only bridge.
 Architecture docs live in [`docs/`](docs) — start with
 [`docs/00-architecture.md`](docs/00-architecture.md).
 
-## Building
+## Install
+
+```sh
+brew install zidankazi/roster/roster
+```
+
+Or with cargo:
+
+```sh
+cargo install --git https://github.com/zidankazi/roster roster
+```
+
+Prebuilt binaries for macOS (Apple Silicon + Intel) and Linux (x86_64 +
+arm64) are attached to each [release](https://github.com/zidankazi/roster/releases).
+
+## Use
+
+```sh
+roster claude "codex exec 'fix the tests'" aider
+```
+
+Each command gets a pane; the sidebar shows who's blocked / working / done /
+idle and why. Keys are tmux-flavored with a `ctrl-b` prefix — `roster --help`
+lists them. Agent detection rules live in
+[`crates/roster-detect/agents.toml`](crates/roster-detect/agents.toml) and can
+be overridden at `~/.config/roster/agents.toml`.
+
+## Building from source
 
 ```sh
 cargo build
