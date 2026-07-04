@@ -16,14 +16,14 @@ text fixtures via `Grid::from_text`), the binary split tree with layout math
 `Session` (windows, split/close/focus with collapse-and-refocus semantics,
 `set_reading` that moves `last_change` only on real state changes).
 
-**roster-detect** (43 tests). `Detector` with `identify` (basename matching
+**roster-detect** (48 tests). `Detector` with `identify` (basename matching
 of the pane command) and `classify` (per-frame reading); `agents.toml`
 parsing with strict validation (unknown keys, bad regexes, and unknown
 reason sources all fail loudly); `History` (content-change fingerprint +
 last-activity recency); `Debouncer` (K=2 to commit, K=1 into blocked);
 `PaneTracker` bundling the per-pane loop. Signal priority: blocked pattern >
 working pattern > content changed since last frame > idle pattern (read as
-done within the per-agent recency window) > idle. 14 fixture screens for
+done within the per-agent recency window) > idle. 16 fixture screens for
 Claude Code / Codex / Aider drive the contract suite, including a
 full-lifecycle test (idle → working → blocked → working → done → idle) that
 asserts the committed state at every frame, debounce lags included.
@@ -38,8 +38,8 @@ truncation with ellipsis; selection highlight), `SidebarState` emitting
 
 ## State
 
-`cargo test --workspace`: 95 passed, 0 failed. `cargo clippy --all-targets`:
-clean. Four commits, each green, pushed to `main`.
+`cargo test --workspace`: 100 passed, 0 failed. `cargo clippy
+--all-targets`: clean. Six commits, each green, pushed to `main`.
 
 ## Decisions you should review
 
