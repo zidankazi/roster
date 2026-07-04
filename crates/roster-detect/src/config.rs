@@ -58,6 +58,10 @@ pub struct AgentConfig {
     pub reason_blocked: ReasonSource,
     /// Reason source for `working` readings.
     pub reason_working: ReasonSource,
+    /// Lines matching any of these are treated as UI chrome (status bars,
+    /// interrupt hints, shortcut legends) and skipped when a `last_nonempty`
+    /// reason is chosen, so the reason is real content rather than framing.
+    pub reason_ignore: Vec<Regex>,
     /// An idle prompt appearing within this window after activity reads as
     /// `done` rather than `idle`.
     pub done_after_activity: Duration,
@@ -135,6 +139,8 @@ struct RawAgent {
 struct RawReason {
     blocked: Option<String>,
     working: Option<String>,
+    #[serde(default)]
+    ignore: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -165,6 +171,7 @@ fn compile_agent(name: String, raw: RawAgent) -> Result<AgentConfig, ConfigError
         blocked: compile_patterns(&name, raw.blocked)?,
         working: compile_patterns(&name, raw.working)?,
         idle: compile_patterns(&name, raw.idle)?,
+        reason_ignore: compile_patterns(&name, raw.reason.ignore)?,
         match_command: raw.match_command,
         reason_blocked,
         reason_working,

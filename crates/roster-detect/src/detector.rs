@@ -111,19 +111,19 @@ impl Detector {
         if let Some(found) = find_match(&config.blocked, &lines) {
             return StateReading {
                 state: AgentState::Blocked,
-                reason: reason_from(config.reason_blocked, &found, &lines),
+                reason: reason_from(config.reason_blocked, &found, &lines, &config.reason_ignore),
             };
         }
         if let Some(found) = find_match(&config.working, &lines) {
             return StateReading {
                 state: AgentState::Working,
-                reason: reason_from(config.reason_working, &found, &lines),
+                reason: reason_from(config.reason_working, &found, &lines, &config.reason_ignore),
             };
         }
         if history.content_changed(grid) == Some(true) {
             return StateReading {
                 state: AgentState::Working,
-                reason: last_worded_line(&lines),
+                reason: last_worded_line(&lines, &config.reason_ignore),
             };
         }
         if let Some(found) = find_match(&config.idle, &lines) {
@@ -133,7 +133,7 @@ impl Detector {
             return if recently_active {
                 StateReading {
                     state: AgentState::Done,
-                    reason: last_worded_line(&lines[..found.row]),
+                    reason: last_worded_line(&lines[..found.row], &config.reason_ignore),
                 }
             } else {
                 StateReading {
@@ -173,20 +173,27 @@ fn find_match(patterns: &[Regex], lines: &[String]) -> Option<PatternMatch> {
     None
 }
 
-fn reason_from(source: ReasonSource, found: &PatternMatch, lines: &[String]) -> Option<String> {
+fn reason_from(
+    source: ReasonSource,
+    found: &PatternMatch,
+    lines: &[String],
+    ignore: &[Regex],
+) -> Option<String> {
     match source {
         ReasonSource::MatchedLine => (!found.text.is_empty()).then(|| found.text.clone()),
-        ReasonSource::LastNonempty => last_worded_line(lines),
+        ReasonSource::LastNonempty => last_worded_line(lines, ignore),
     }
 }
 
-/// The bottom-most line containing a word character, cleaned. Lines of pure
-/// box-drawing and punctuation are pane chrome, not reasons.
-fn last_worded_line(lines: &[String]) -> Option<String> {
+/// The bottom-most content line, cleaned. Lines of pure box-drawing and
+/// punctuation are skipped (pane chrome), as are lines matching any of the
+/// agent's `reason.ignore` patterns (status bars, interrupt hints).
+fn last_worded_line(lines: &[String], ignore: &[Regex]) -> Option<String> {
     lines
         .iter()
         .rev()
-        .find(|line| line.chars().any(char::is_alphanumeric))
+        .filter(|line| line.chars().any(char::is_alphanumeric))
+        .find(|line| !ignore.iter().any(|pattern| pattern.is_match(line)))
         .map(|line| clean_line(line))
 }
 
@@ -313,14 +320,32 @@ mod tests {
     }
 
     #[test]
-    fn every_spinner_glyph_reads_as_working() {
+    fn interrupt_hints_read_as_working() {
         let detector = Detector::builtin();
         let kind = detector.identify("claude").unwrap();
-        for glyph in ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] {
-            let grid = Grid::from_text(&format!("{glyph} Working on it…"));
+        for hint in [
+            "esc to interrupt",
+            "ctrl+c to interrupt",
+            "Ctrl+C to interrupt",
+        ] {
+            let grid = Grid::from_text(&format!("✶ Flowing…\n{hint}"));
             let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
-            assert_eq!(reading.state, AgentState::Working, "glyph {glyph}");
+            assert_eq!(reading.state, AgentState::Working, "hint {hint}");
         }
+    }
+
+    #[test]
+    fn working_reason_skips_interrupt_and_status_chrome() {
+        // The reason should be the spinner status line, not the model status
+        // bar (`● …/effort`), the input prompt (`❯`), or the interrupt hint.
+        let detector = Detector::builtin();
+        let kind = detector.identify("claude").unwrap();
+        let grid = Grid::from_text(
+            "❯ do the thing\n✶ Flowing…\n                    ● high · /effort\n❯\n  esc to interrupt",
+        );
+        let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
+        assert_eq!(reading.state, AgentState::Working);
+        assert_eq!(reading.reason.as_deref(), Some("✶ Flowing…"));
     }
 
     #[test]

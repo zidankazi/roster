@@ -72,19 +72,21 @@ fn claude_blocked_outranks_visible_spinner() {
 
 #[test]
 fn claude_working_from_esc_hint() {
+    // "esc to interrupt" drives the state; the reason skips that chrome and
+    // the status bar to report the spinner status line.
     assert_reading(
         classify_fresh("claude-code", "claude", "working_esc_hint.txt"),
         AgentState::Working,
-        Some("✳ Compiling roster-core… (esc to interrupt)"),
+        Some("✶ Flowing…"),
     );
 }
 
 #[test]
-fn claude_working_from_spinner_glyph() {
+fn claude_working_from_ctrl_c_hint() {
     assert_reading(
         classify_fresh("claude-code", "claude", "working_spinner.txt"),
         AgentState::Working,
-        Some("⠹ Reticulating… (ctrl+c to interrupt)"),
+        Some("⠹ Reticulating…"),
     );
 }
 
@@ -102,7 +104,7 @@ fn claude_done_shortly_after_activity() {
     assert_reading(
         classify_after_activity("claude-code", "claude", "done_after_task.txt", 3),
         AgentState::Done,
-        Some("✓ Done. 3 files changed, 120 insertions."),
+        Some("✻ Cogitated for 3s"),
     );
 }
 
@@ -261,10 +263,7 @@ fn pane_tracker_full_lifecycle() {
     assert_eq!(seen.state, AgentState::Idle);
     let seen = tracker.update(&detector, kind, &working, at(2));
     assert_eq!(seen.state, AgentState::Working);
-    assert_eq!(
-        seen.reason.as_deref(),
-        Some("✳ Compiling roster-core… (esc to interrupt)")
-    );
+    assert_eq!(seen.reason.as_deref(), Some("✶ Flowing…"));
 
     // A permission prompt appears: blocked commits on the first frame.
     let seen = tracker.update(&detector, kind, &blocked, at(3));
@@ -285,10 +284,7 @@ fn pane_tracker_full_lifecycle() {
     assert_eq!(seen.state, AgentState::Working);
     let seen = tracker.update(&detector, kind, &done, at(8));
     assert_eq!(seen.state, AgentState::Done);
-    assert_eq!(
-        seen.reason.as_deref(),
-        Some("✓ Done. 3 files changed, 120 insertions.")
-    );
+    assert_eq!(seen.reason.as_deref(), Some("✻ Cogitated for 3s"));
 
     // Long after the done window (8s for claude-code), the pane goes idle.
     let seen = tracker.update(&detector, kind, &done, at(20));

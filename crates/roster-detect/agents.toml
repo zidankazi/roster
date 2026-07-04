@@ -5,14 +5,24 @@
 # trimmed), bottom rows first; within a state, patterns are tried in the
 # order listed. Priority when several states match: blocked > working > idle.
 # See docs/02-state-detection.md.
+#
+# The claude-code patterns are tuned against Claude Code 2.1 captured live
+# (see crates/roster/examples/capture.rs). Its permission prompts show
+# "Do you want to proceed?" over a "❯ 1. Yes" menu; while working it shows
+# "esc to interrupt"; at rest the input line is "❯" between horizontal
+# rules (not a box-bordered "> ").
 
 [claude-code]
 match_command = ["claude"]
-blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d\. Yes']
-working = ['esc to interrupt', 'Thinking', '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]']  # spinner glyphs
-idle    = ['│\s*>\s*$']                                       # empty prompt line
+blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d+\. Yes']
+working = ['esc to interrupt', '(?i)ctrl\+c to interrupt']
+idle    = ['^❯']                                              # input prompt line
 reason.blocked = "matched_line"
 reason.working = "last_nonempty"
+# Skip UI chrome so a working/done reason is real content (e.g. the spinner
+# status or the last result line), not the model status bar, the input
+# prompt, or the interrupt/shortcut hints.
+reason.ignore = ['^\s*●', 'to interrupt$', '\? for shortcuts', '^\s*⎿', '^\s*❯', '^\s*▎']
 done.after_activity_secs = 8
 
 [codex]

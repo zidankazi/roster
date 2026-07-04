@@ -1,7 +1,7 @@
-● The config needs a new flag before tests can pass.
-
-╭──────────────────────────────────────────────────
-│ Allow edit to src/config.ts?
-│ ❯ 1. Yes
-│   2. No
-╰──────────────────────────────────────────────────
+⏺ The config needs a new flag before tests can pass.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Edit file
+   src/config.ts
+ Allow edit to src/config.ts?
+ ❯ 1. Yes
+   2. No
