@@ -1,0 +1,13 @@
+[package]
+name = "roster-detect"
+description = "Agent identification, state classification, and per-agent config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+roster-core = { path = "../roster-core" }
+
+[lints]
+workspace = true

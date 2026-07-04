@@ -1,0 +1,9 @@
+# Rust
+target/
+
+# Website (isolated pnpm project)
+website/node_modules/
+website/.next/
+
+# OS
+.DS_Store
