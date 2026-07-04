@@ -7,6 +7,31 @@ prod-readiness pass: verifying detection against live Claude Code, binary
 UX, a hardened process lifecycle, and shipping v0.1.1. Run 4 redesigned the
 sidebar to match herdr and shipped v0.2.0.
 
+## Run 5 — runtime launcher + pane chrome (v0.3.0)
+
+The awkwardness this run removed: agents no longer have to be named at
+launch time.
+
+- **Agent launcher.** `ctrl-b c` opens a centered modal listing the
+  configured agents plus a shell; typing filters; input that matches
+  nothing runs verbatim as a command (`npx some-agent --flag` works).
+  Enter splits the focused pane along its longer *visual* axis (cells are
+  ~2:1) and spawns. Bare `roster` now starts straight into the launcher
+  over a shell pane. Launch failures surface as a status-line notice
+  instead of vanishing.
+- **Pane title bars.** Every pane has a one-row title: state glyph (live,
+  colored) + agent name, reversed on the focused pane. Stacked panes are
+  divided by the lower pane's title bar; side-by-side panes by a thin
+  rule. Exited panes are marked in the title. The launcher owns the
+  terminal cursor while open.
+
+Verified live end to end: bare start → launcher greeting → typed `cla` ⏎ →
+real Claude Code 2.1 running in a titled split with the sidebar tracking
+it. The launcher flow is also covered by a headless e2e test that drives
+the real binary with keystrokes. 157 tests. Shipped v0.3.0: released,
+formula bumped, `brew upgrade` and the curl installer both verified
+resolving 0.3.0.
+
 ## Run 4 — herdr-style sidebar (v0.2.0)
 
 Researched herdr (herdr.dev / the GitHub repo) and reworked roster's sidebar
