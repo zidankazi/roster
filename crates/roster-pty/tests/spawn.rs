@@ -82,6 +82,15 @@ fn child_sees_the_requested_size() {
 }
 
 #[test]
+fn child_runs_in_the_current_directory() {
+    let mut pty = Pty::spawn("pwd", 80, 24).expect("spawn");
+    let rx = pump(&pty);
+    let expected = std::env::current_dir().expect("cwd");
+    read_until(&rx, &expected.to_string_lossy());
+    assert!(pty.wait().expect("wait").success);
+}
+
+#[test]
 fn term_is_advertised() {
     let mut pty = Pty::spawn("echo TERM=$TERM", 80, 24).expect("spawn");
     let rx = pump(&pty);
@@ -110,6 +119,37 @@ fn kill_stops_a_long_running_child() {
     let status = pty.wait().expect("wait");
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(!status.success);
+}
+
+#[test]
+fn drop_kills_a_sighup_immune_child() {
+    // Agents like Claude Code trap SIGHUP; drop must escalate to SIGKILL
+    // and take the whole process group with it.
+    let pty = Pty::spawn("trap '' HUP; sleep 30", 80, 24).expect("spawn");
+    let pid = pty.process_id().expect("pid").to_string();
+    let started = Instant::now();
+    drop(pty);
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "drop took {:?}",
+        started.elapsed()
+    );
+
+    // The process group must actually be gone (kill -0 fails once the
+    // shell and its sleep child are dead and reaped).
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &pid])
+            .status()
+            .expect("run kill -0")
+            .success();
+        if !alive {
+            break;
+        }
+        assert!(Instant::now() < deadline, "child {pid} still alive");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[test]

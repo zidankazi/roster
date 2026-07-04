@@ -39,6 +39,18 @@ fn help_flag_prints_usage() {
 }
 
 #[test]
+fn print_config_dumps_builtin_agents() {
+    let output = Command::new(bin())
+        .arg("--print-config")
+        .output()
+        .expect("run");
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[claude-code]"), "stdout: {stdout}");
+    assert!(stdout.contains("match_command"), "stdout: {stdout}");
+}
+
+#[test]
 fn unknown_flag_fails_with_message() {
     let output = Command::new(bin()).arg("--bogus").output().expect("run");
     assert!(!output.status.success());
@@ -55,6 +67,54 @@ fn unreadable_config_fails_cleanly() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("reading"), "stderr: {stderr}");
+}
+
+#[test]
+fn exited_pane_stays_until_closed() {
+    let (cols, rows) = (100u16, 24u16);
+    let mut pty =
+        Pty::spawn(&format!("'{}' 'echo done'", bin()), cols, rows).expect("spawn roster");
+    let mut reader = pty.reader().expect("reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut screen = Screen::new(cols, rows);
+    let start = Instant::now();
+    let mut saw_notice = false;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if screen
+            .grid()
+            .lines()
+            .iter()
+            .any(|l| l.contains("exited (0)"))
+        {
+            saw_notice = true;
+            break;
+        }
+    }
+    assert!(
+        saw_notice,
+        "exited notice never appeared; screen was:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Closing the only (exited) pane ends the session.
+    pty.write(&[0x02]).expect("write prefix");
+    pty.write(b"x").expect("write x");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "roster exited with failure: {status:?}");
 }
 
 /// Create an executable fake agent named `claude` that shows a blocked

@@ -13,6 +13,8 @@ pub struct Args {
     pub help: bool,
     /// Print the version and exit.
     pub version: bool,
+    /// Print the built-in agents.toml and exit.
+    pub print_config: bool,
 }
 
 /// Usage text for `--help`.
@@ -28,6 +30,8 @@ commands, roster opens a single shell pane.
 OPTIONS:
   -c, --config <PATH>  Use PATH as agents.toml instead of the default lookup
                        (~/.config/roster/agents.toml, then built-in defaults)
+      --print-config   Print the built-in agents.toml (pipe it to
+                       ~/.config/roster/agents.toml to customize)
   -h, --help           Print this help
   -V, --version        Print the version
 
@@ -51,6 +55,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
         match arg.as_str() {
             "-h" | "--help" => parsed.help = true,
             "-V" | "--version" => parsed.version = true,
+            "--print-config" => parsed.print_config = true,
             "-c" | "--config" => {
                 let value = iter
                     .next()

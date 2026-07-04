@@ -7,13 +7,14 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::layout::Rect;
 use ratatui::DefaultTerminal;
-use roster_core::{PaneId, Session, SplitDirection};
+use roster_core::{AgentState, PaneId, Session, SplitDirection};
 use roster_detect::{AgentKind, Detector, PaneTracker};
 use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
-    render, sidebar_entries, Message, SidebarEntry, SidebarState, View, SIDEBAR_WIDTH,
+    content_rect, panes_area, render, sidebar_entries, Message, SidebarEntry, SidebarState, View,
 };
 
 use crate::keys::encode_key;
@@ -48,6 +49,8 @@ struct PaneRuntime {
     screen: Screen,
     tracker: PaneTracker,
     kind: Option<AgentKind>,
+    /// Exit code, once the child has ended; the pane stays visible.
+    exited: Option<u32>,
 }
 
 /// The running multiplexer.
@@ -132,6 +135,7 @@ impl App {
                 screen: Screen::new(SPAWN_COLS, SPAWN_ROWS),
                 tracker: PaneTracker::new(),
                 kind: self.detector.identify(command),
+                exited: None,
             },
         );
         if let Some(pane) = self.session.pane_mut(id) {
@@ -145,7 +149,7 @@ impl App {
         while !self.quit && !self.session.is_empty() {
             self.drain_output();
             let size = terminal.size()?;
-            self.sync_layout(size.width, size.height);
+            self.sync_layout(Rect::new(0, 0, size.width, size.height));
             self.detect_if_due();
 
             self.last_entries = sidebar_entries(&self.session, &self.detector, Instant::now());
@@ -154,15 +158,24 @@ impl App {
                 .iter()
                 .map(|(id, rt)| (*id, rt.screen.grid()))
                 .collect();
+            let exited: HashMap<_, _> = self
+                .runtimes
+                .iter()
+                .filter_map(|(id, rt)| rt.exited.map(|code| (*id, code)))
+                .collect();
             let selected = match self.mode {
                 Mode::Jump => self.sidebar.selected(self.last_entries.len()),
                 _ => None,
             };
+            let (mode_badge, status) = self.status_line();
             let view = View {
                 session: &self.session,
                 grids: &grids,
+                exited: &exited,
                 entries: &self.last_entries,
                 selected,
+                mode_badge,
+                status: &status,
             };
             terminal.draw(|frame| render(frame, &view))?;
 
@@ -187,24 +200,48 @@ impl App {
                         rt.screen.advance(&bytes);
                     }
                 }
-                Output::Eof(id) => self.close_pane(id),
+                Output::Eof(id) => self.mark_exited(id),
             }
         }
     }
 
+    /// The pane's process ended: keep its final screen on display with an
+    /// exited notice, and stop treating it as a live agent.
+    fn mark_exited(&mut self, id: PaneId) {
+        let Some(rt) = self.runtimes.get_mut(&id) else {
+            return;
+        };
+        if rt.exited.is_some() {
+            return;
+        }
+        let code = match rt.pty.try_wait() {
+            Ok(Some(status)) => status.code,
+            _ => 1,
+        };
+        rt.exited = Some(code);
+        rt.kind = None;
+        self.session.set_reading(
+            id,
+            AgentState::Idle,
+            Some(format!("exited ({code})")),
+            Instant::now(),
+        );
+    }
+
     /// Bring every pane's PTY and emulator to its laid-out size.
-    fn sync_layout(&mut self, width: u16, height: u16) {
-        let sidebar_width = SIDEBAR_WIDTH.min(width / 2);
-        for (id, rect) in self.session.layout(width - sidebar_width, height) {
-            if rect.width == 0 || rect.height == 0 {
+    fn sync_layout(&mut self, area: Rect) {
+        let panes = panes_area(area);
+        for (id, rect) in self.session.layout(panes.width, panes.height) {
+            let content = content_rect(rect, panes);
+            if content.width == 0 || content.height == 0 {
                 continue;
             }
             let Some(rt) = self.runtimes.get_mut(&id) else {
                 continue;
             };
-            if rt.screen.size() != (rect.width, rect.height) {
-                rt.screen.resize(rect.width, rect.height);
-                let _ = rt.pty.resize(rect.width, rect.height);
+            if rt.screen.size() != (content.width, content.height) {
+                rt.screen.resize(content.width, content.height);
+                let _ = rt.pty.resize(content.width, content.height);
             }
         }
     }
@@ -304,8 +341,39 @@ impl App {
         let Some(rt) = self.runtimes.get_mut(&id) else {
             return;
         };
+        if rt.exited.is_some() {
+            return;
+        }
         if rt.pty.write(bytes).is_err() {
-            self.close_pane(id);
+            self.mark_exited(id);
+        }
+    }
+
+    /// The status line: a badge while a mode is armed, plus contextual key
+    /// hints.
+    fn status_line(&self) -> (Option<&'static str>, String) {
+        match self.mode {
+            Mode::Normal => {
+                let focused = self
+                    .session
+                    .focused()
+                    .and_then(|id| self.session.pane(id))
+                    .and_then(|pane| pane.command.as_deref())
+                    .unwrap_or("");
+                (
+                    None,
+                    format!("{focused}   ctrl-b: % \" split · o focus · j jump · x close · q quit"),
+                )
+            }
+            Mode::Prefix => (
+                Some("PREFIX"),
+                "%: split side · \": split stacked · o: focus · j: jump · x: close · q: quit"
+                    .to_string(),
+            ),
+            Mode::Jump => (
+                Some("JUMP"),
+                "j/k: move · enter: jump to pane · esc: cancel".to_string(),
+            ),
         }
     }
 }

@@ -51,6 +51,12 @@ impl Detector {
         Detector::from_toml(BUILTIN_AGENTS).expect("embedded agents.toml is valid")
     }
 
+    /// The shipped default `agents.toml`, verbatim — a starting point for a
+    /// user's own config.
+    pub fn builtin_toml() -> &'static str {
+        BUILTIN_AGENTS
+    }
+
     /// The configured agents, in name order.
     pub fn agents(&self) -> impl Iterator<Item = &AgentConfig> {
         self.agents.iter()

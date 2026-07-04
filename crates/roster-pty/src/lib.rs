@@ -75,6 +75,11 @@ impl Pty {
         builder.arg("-c");
         builder.arg(command);
         builder.env("TERM", TERM);
+        // Without an explicit cwd, portable-pty falls back to $HOME; panes
+        // must run where roster was launched.
+        if let Ok(cwd) = std::env::current_dir() {
+            builder.cwd(cwd);
+        }
 
         let child = pair
             .slave
@@ -140,11 +145,34 @@ impl Pty {
 }
 
 impl Drop for Pty {
+    /// Terminate the child with escalation: `SIGHUP` first (what
+    /// `portable-pty` sends on unix), a short grace period, then `SIGKILL`
+    /// to the child's process group. Agents like Claude Code ignore
+    /// `SIGHUP`, so the polite signal alone can leave the child — and a
+    /// blocking `wait()` — hanging forever; the group kill also takes out
+    /// grandchildren the agent spawned.
     fn drop(&mut self) {
-        if let Ok(None) = self.child.try_wait() {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+        match self.child.try_wait() {
+            Ok(Some(_)) => return,
+            Err(_) => return,
+            Ok(None) => {}
         }
+        let _ = self.child.kill();
+        for _ in 0..10 {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        #[cfg(unix)]
+        if let Some(pid) = self.child.process_id() {
+            // The child is its pty session's leader, so its pid names the
+            // process group; negative pid signals the whole group.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+        }
+        let _ = self.child.wait();
     }
 }
 

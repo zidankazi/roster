@@ -34,6 +34,10 @@ fn run() -> Result<(), String> {
         println!("roster {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    if args.print_config {
+        print!("{}", Detector::builtin_toml());
+        return Ok(());
+    }
 
     let detector = load_detector(args.config.as_deref())?;
     let commands = if args.commands.is_empty() {
