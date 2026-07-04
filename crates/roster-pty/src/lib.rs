@@ -9,7 +9,7 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 /// The terminal type advertised to spawned agents.
 const TERM: &str = "xterm-256color";
