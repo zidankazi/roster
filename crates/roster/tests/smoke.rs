@@ -529,12 +529,9 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
         "welcome screen never appeared:\n{}",
         screen.grid().lines().join("\n")
     );
+    // The wordmark sweeps in over ~1s; wait for its leading glyphs.
     assert!(
-        screen
-            .grid()
-            .lines()
-            .iter()
-            .any(|l| l.contains(r"| '__/ _ \/ __| __/ _ \ '__|")),
+        drain_until(&mut screen, "7Mb,od8", &rx),
         "no wordmark:\n{}",
         screen.grid().lines().join("\n")
     );

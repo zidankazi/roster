@@ -124,13 +124,16 @@ impl LauncherState {
     }
 }
 
-/// The ASCII wordmark shown on the bare-start welcome screen.
-const WORDMARK: [&str; 5] = [
-    r"                _            ",
-    r" _ __ ___  ___| |_ ___ _ __  ",
-    r"| '__/ _ \/ __| __/ _ \ '__| ",
-    r"| | | (_) \__ \ ||  __/ |    ",
-    r"|_|  \___/|___/ \__\___|_|   ",
+/// The ASCII wordmark shown on the bare-start welcome screen: solid
+/// character-fill lettering (figlet Georgia11).
+const WORDMARK: [&str; 7] = [
+    r#"                            mm                   "#,
+    r#"                            MM                   "#,
+    r#"`7Mb,od8 ,pW"Wq.  ,pP"Ybd mmMMmm .gP"Ya `7Mb,od8 "#,
+    r#"  MM' "'6W'   `Wb 8I   `"   MM  ,M'   Yb  MM' "' "#,
+    r#"  MM    8M     M8 `YMMMa.   MM  8M""""""  MM     "#,
+    r#"  MM    YA.   ,A9 L.   I8   MM  YM.    ,  MM     "#,
+    r#".JMML.   `Ybmd9'  M9mmmP'   `Mbmo`Mbmmd'.JMML.   "#,
 ];
 
 /// Rows from the greeting block's top to its first item row: wordmark,
@@ -146,6 +149,7 @@ pub struct Launcher<'a> {
     items: &'a [LaunchItem],
     state: &'a LauncherState,
     welcome: bool,
+    tick: u64,
 }
 
 impl<'a> Launcher<'a> {
@@ -155,12 +159,19 @@ impl<'a> Launcher<'a> {
             items,
             state,
             welcome: false,
+            tick: u64::MAX / 2,
         }
     }
 
     /// Render as the bare-start welcome screen instead of the modal.
     pub fn welcome(mut self, on: bool) -> Self {
         self.welcome = on;
+        self
+    }
+
+    /// The frame tick, driving the wordmark's reveal and shine.
+    pub fn tick(mut self, tick: u64) -> Self {
+        self.tick = tick;
         self
     }
 
@@ -172,12 +183,13 @@ impl<'a> Launcher<'a> {
         }
     }
 
-    /// The centered rect the launcher occupies within `area`.
+    /// The centered rect the launcher occupies within `area`. The welcome
+    /// block is dead-centered; the modal sits in the upper third.
     pub fn modal_rect(&self, area: Rect) -> Rect {
         let rows = (self.state.filtered(self.items).len() as u16).max(1);
         let (width, height) = if self.welcome {
             // wordmark + tagline + input + items + hint block
-            (48u16, self.items_offset() + rows + 3)
+            (53u16, self.items_offset() + rows + 3)
         } else {
             // border + title + input + rows + border
             (44u16, rows + 4)
@@ -185,7 +197,11 @@ impl<'a> Launcher<'a> {
         let width = width.min(area.width.saturating_sub(2)).max(20);
         let height = height.clamp(5, area.height.saturating_sub(2).max(5));
         let x = area.x + (area.width.saturating_sub(width)) / 2;
-        let y = area.y + (area.height.saturating_sub(height)) / 3;
+        let y = if self.welcome {
+            area.y + (area.height.saturating_sub(height)) / 2
+        } else {
+            area.y + (area.height.saturating_sub(height)) / 3
+        };
         Rect::new(x, y, width, height)
     }
 
@@ -227,24 +243,43 @@ impl Widget for Launcher<'_> {
         fill(buf, modal);
         let mut y = modal.y;
         if self.welcome {
-            // The opening screen: wordmark, tagline, then the picker.
-            let mark_width = WORDMARK[1].trim_end().chars().count() as u16;
+            // The opening screen: the wordmark sweeps in left to right,
+            // then a band of shine drifts across it on a slow loop.
+            let mark_width = WORDMARK
+                .iter()
+                .map(|row| row.trim_end().chars().count())
+                .max()
+                .unwrap_or(0) as u16;
             let mark_x = modal.x + (modal.width.saturating_sub(mark_width)) / 2;
+            let revealed = self.tick.saturating_mul(6).min(u64::from(mark_width)) as u16;
+            let shine_cycle = u64::from(mark_width) + 32;
+            let shine = ((self.tick * 2) % shine_cycle) as i32 - 16;
             for (row, text) in WORDMARK.iter().enumerate() {
-                buf.set_stringn(
-                    mark_x,
-                    modal.y + row as u16,
-                    *text,
-                    usize::from(modal.width),
-                    Style::default().fg(ACCENT),
-                );
+                for (col, ch) in text.chars().enumerate() {
+                    if col as u16 >= revealed || ch == ' ' {
+                        continue;
+                    }
+                    let mut style = Style::default().fg(ACCENT);
+                    if revealed >= mark_width && (0..6).contains(&(col as i32 - shine)) {
+                        style = Style::default()
+                            .fg(ratatui::style::Color::White)
+                            .add_modifier(Modifier::BOLD);
+                    }
+                    let (x, y) = (mark_x + col as u16, modal.y + row as u16);
+                    if let Some(cell) = buf.cell_mut((x, y)) {
+                        cell.set_char(ch);
+                        cell.set_style(style);
+                    }
+                }
             }
             y += WORDMARK.len() as u16 + 1;
+            let tagline = "run your coding agents — see who needs you";
+            let tag_x = modal.x + (modal.width.saturating_sub(tagline.chars().count() as u16)) / 2;
             buf.set_stringn(
-                modal.x + 2,
+                tag_x,
                 y,
-                "run your coding agents — see who needs you",
-                usize::from(modal.width.saturating_sub(4)),
+                tagline,
+                usize::from(modal.width),
                 Style::default().add_modifier(Modifier::DIM),
             );
             y += 2;

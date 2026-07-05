@@ -325,7 +325,8 @@ fn welcome_screen_shows_wordmark_picker_and_any_command_hint() {
         welcome: true,
         mode_badge: Some("LAUNCH"),
         status: "type to filter",
-        tick: 0,
+        // Past the reveal: the wordmark is fully on screen.
+        tick: 99,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
@@ -335,17 +336,63 @@ fn welcome_screen_shows_wordmark_picker_and_any_command_hint() {
         .map(|y| region_text(&buf, 0, 100, y) + "\n")
         .collect();
 
-    // The wordmark, tagline, picker, and the any-command hint all render.
-    assert!(
-        all.contains(r"| '__/ _ \/ __| __/ _ \ '__|"),
-        "screen:\n{all}"
-    );
+    // The solid-fill wordmark, tagline, picker, and the any-command hint
+    // all render.
+    assert!(all.contains("7Mb,od8"), "screen:\n{all}");
     assert!(all.contains("run your coding agents"), "screen:\n{all}");
     assert!(all.contains("claude-code"), "screen:\n{all}");
     assert!(all.contains("type any command"), "screen:\n{all}");
-    // No modal chrome, and the placeholder shell's prompt is hidden.
+    // Nothing else on screen: no modal chrome, no sidebar, no status
+    // line, and the placeholder shell's prompt is hidden.
     assert!(!all.contains("new agent ─"), "screen:\n{all}");
+    assert!(!all.contains("+ new agent"), "screen:\n{all}");
+    assert!(!all.contains("type to filter"), "screen:\n{all}");
     assert!(!all.contains("zidan@mac"), "screen:\n{all}");
+}
+
+#[test]
+fn welcome_wordmark_reveals_with_the_tick() {
+    let session = Session::new();
+    let only = session.focused().unwrap();
+    let mut grids = HashMap::new();
+    grids.insert(only, Grid::from_text(""));
+    let detector = Detector::builtin();
+    let exited = HashMap::new();
+    let items = launch_items(&detector, "/bin/zsh");
+    let state = LauncherState::new();
+
+    let draw = |tick: u64| -> String {
+        let view = View {
+            session: &session,
+            grids: &grids,
+            exited: &exited,
+            entries: &[],
+            selected: None,
+            hover: None,
+            zoomed: false,
+            side: SidebarSide::Left,
+            launcher: Some((&items, &state)),
+            welcome: true,
+            mode_badge: None,
+            status: "",
+            tick,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|frame| render(frame, &view)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..24)
+            .map(|y| region_text(&buf, 0, 100, y) + "\n")
+            .collect()
+    };
+
+    // At tick 0 none of the wordmark is on screen; by tick 2 its leading
+    // columns are; late ticks show the whole mark.
+    assert!(!draw(0).contains("7Mb"), "tick 0 leaked wordmark");
+    assert!(draw(2).contains("7Mb"), "tick 2 missing leading columns");
+    let full = draw(50);
+    assert!(full.contains("`Mbmo`Mbmmd'"), "tick 50 incomplete:\n{full}");
+    // The picker is usable from the first frame regardless.
+    assert!(draw(0).contains("claude-code"), "picker not immediate");
 }
 
 #[test]

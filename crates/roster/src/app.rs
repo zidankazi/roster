@@ -493,13 +493,7 @@ impl App {
         // The launcher owns the mouse while open: hovering a row selects
         // it, clicking launches it.
         let welcome = self.placeholder.is_some();
-        // The welcome screen lays out against the pane region; the modal
-        // against the whole frame. Hit-testing must match render.
-        let launch_area = if welcome {
-            panes_area(self.last_area, self.side)
-        } else {
-            self.last_area
-        };
+        let launch_area = self.last_area;
         if let Mode::Launch(state) = &mut self.mode {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {

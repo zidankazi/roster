@@ -184,6 +184,19 @@ pub fn local_panes(panes: Rect) -> Rect {
 /// launcher is open.
 pub fn render(frame: &mut Frame, view: &View) {
     let area = frame.area();
+
+    // The bare-start opening screen owns the whole frame: the animated
+    // wordmark over the picker, dead-centered — no sidebar, no status.
+    if view.welcome {
+        if let Some((items, state)) = view.launcher {
+            let launcher = Launcher::new(items, state).welcome(true).tick(view.tick);
+            let (cursor_x, cursor_y) = launcher.input_position(area);
+            frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+            frame.render_widget(launcher, area);
+            return;
+        }
+    }
+
     let panes = panes_area(area, view.side);
     let local = local_panes(panes);
     let focused = view.session.focused();
@@ -335,26 +348,11 @@ pub fn render(frame: &mut Frame, view: &View) {
     draw_status(frame.buffer_mut(), area, view);
 
     if let Some((items, state)) = view.launcher {
-        let launcher = Launcher::new(items, state).welcome(view.welcome);
-        // The welcome screen centers over (and owns) the pane region — the
-        // placeholder shell underneath stays out of sight; the modal
-        // centers over the whole frame.
-        let launch_area = if view.welcome {
-            for y in panes.y..panes.y + panes.height {
-                for x in panes.x..panes.x + panes.width {
-                    if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
-                        cell.reset();
-                    }
-                }
-            }
-            panes
-        } else {
-            area
-        };
+        let launcher = Launcher::new(items, state);
         // Cursor follows the launcher's input line.
-        let (cursor_x, cursor_y) = launcher.input_position(launch_area);
+        let (cursor_x, cursor_y) = launcher.input_position(area);
         frame.set_cursor_position(Position::new(cursor_x, cursor_y));
-        frame.render_widget(launcher, launch_area);
+        frame.render_widget(launcher, area);
     }
 }
 
