@@ -26,13 +26,18 @@ pinned **+ new agent** button to open the launcher, a title bar's **✕** to
 close that pane. Drag the dividers to resize, and scroll the pane under your
 cursor. Closing the last pane quits.
 
+**Two layouts.** The grid tiles every pane; a title bar's **⤢** switches to
+solo view — one agent at a time, full size, with the sidebar as the
+switcher: click cards on the left to flip between agents. **⤢** again
+returns to the grid.
+
 Start bare — `roster` greets you with the launcher. Type to filter the
 configured agents, click a row (or press enter) to launch, or type any
 command to run it in a new pane.
 
 Keyboard equivalents exist for everything (`ctrl-b` is the prefix — `c` new
-agent, `j` jump, `o` focus, `x` close, `q` quit); the status bar keeps the
-hints on screen.
+agent, `z` solo, `j` jump, `o` focus, `x` close, `q` quit); the status bar
+keeps the hints on screen.
 
 ## How it compares
 
