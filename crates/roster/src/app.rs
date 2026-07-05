@@ -85,6 +85,8 @@ pub struct App {
     placeholder: Option<PaneId>,
     /// Attachment counter feeding [`PaneRuntime::generation`].
     next_generation: u64,
+    /// Solo view: show only the focused pane; the sidebar switches.
+    zoomed: bool,
     /// The last known mouse position, for hover affordances.
     last_mouse: Option<(u16, u16)>,
     /// The pointer shape most recently told to the terminal.
@@ -126,6 +128,7 @@ impl App {
             dragging: None,
             placeholder: None,
             next_generation: 0,
+            zoomed: false,
             last_mouse: None,
             pointer: Pointer::Default,
             notice: None,
@@ -237,6 +240,7 @@ impl App {
                         &self.session,
                         self.side,
                         &self.last_entries,
+                        self.zoomed_pane(),
                         x,
                         y,
                     )
@@ -254,6 +258,7 @@ impl App {
                 entries: &self.last_entries,
                 selected,
                 hover,
+                zoomed: self.zoomed,
                 side: self.side,
                 launcher,
                 mode_badge,
@@ -332,11 +337,26 @@ impl App {
         );
     }
 
-    /// Bring every pane's PTY and emulator to its laid-out size.
+    /// The solo pane, when solo view is active: it follows focus.
+    fn zoomed_pane(&self) -> Option<PaneId> {
+        if self.zoomed {
+            self.session.focused()
+        } else {
+            None
+        }
+    }
+
+    /// Bring every pane's PTY and emulator to its laid-out size. In solo
+    /// view only the shown pane is resized; hidden panes keep their last
+    /// size until they are shown again.
     fn sync_layout(&mut self, area: Rect) {
         let panes = panes_area(area, self.side);
         let local = local_panes(panes);
-        for (id, rect) in self.session.layout(panes.width, panes.height) {
+        let layout = match self.zoomed_pane() {
+            Some(id) => vec![(id, roster_core::Rect::new(0, 0, panes.width, panes.height))],
+            None => self.session.layout(panes.width, panes.height),
+        };
+        for (id, rect) in layout {
             let content = content_rect(rect, local);
             if content.width == 0 || content.height == 0 {
                 continue;
@@ -419,6 +439,7 @@ impl App {
                     KeyCode::Char('%') => self.split(SplitDirection::Horizontal),
                     KeyCode::Char('"') => self.split(SplitDirection::Vertical),
                     KeyCode::Char('o') => self.session.focus_next(),
+                    KeyCode::Char('z') => self.zoomed = !self.zoomed,
                     KeyCode::Char('x') => {
                         if let Some(id) = self.session.focused() {
                             self.close_pane(id);
@@ -512,6 +533,7 @@ impl App {
                     &self.session,
                     self.side,
                     &self.last_entries,
+                    self.zoomed_pane(),
                     x,
                     y,
                 ) {
@@ -524,12 +546,17 @@ impl App {
                         self.mode = Mode::Launch(LauncherState::new());
                     }
                     Hit::PaneClose(id) => self.close_pane(id),
+                    Hit::PaneZoom(id) => {
+                        self.session.focus(id);
+                        self.zoomed = !self.zoomed;
+                    }
                     Hit::PaneTitle(id) | Hit::Pane(id) => {
                         self.session.focus(id);
                         // Title rows and separator columns double as split
-                        // dividers; grab one if it's there.
+                        // dividers; grab one if it's there. Solo view has
+                        // no dividers.
                         let panes = panes_area(self.last_area, self.side);
-                        if x >= panes.x && y >= panes.y {
+                        if !self.zoomed && x >= panes.x && y >= panes.y {
                             let local = (x - panes.x, y - panes.y);
                             if self
                                 .session
@@ -566,10 +593,13 @@ impl App {
                     &self.session,
                     self.side,
                     &self.last_entries,
+                    self.zoomed_pane(),
                     x,
                     y,
                 );
-                if let Hit::Pane(id) | Hit::PaneTitle(id) | Hit::PaneClose(id) = hit {
+                if let Hit::Pane(id) | Hit::PaneTitle(id) | Hit::PaneZoom(id) | Hit::PaneClose(id) =
+                    hit
+                {
                     let bytes: &[u8] = if mouse.kind == MouseEventKind::ScrollUp {
                         b"\x1b[A\x1b[A\x1b[A"
                     } else {
@@ -596,17 +626,23 @@ impl App {
             &self.session,
             self.side,
             &self.last_entries,
+            self.zoomed_pane(),
             x,
             y,
         );
         if matches!(
             hit,
-            Hit::PaneClose(_) | Hit::SidebarNewAgent | Hit::SidebarEntry(_)
+            Hit::PaneClose(_) | Hit::PaneZoom(_) | Hit::SidebarNewAgent | Hit::SidebarEntry(_)
         ) {
             return Pointer::Hand;
         }
         let panes = panes_area(self.last_area, self.side);
-        if x >= panes.x && y >= panes.y && x < panes.x + panes.width && y < panes.y + panes.height {
+        if !self.zoomed
+            && x >= panes.x
+            && y >= panes.y
+            && x < panes.x + panes.width
+            && y < panes.y + panes.height
+        {
             if let Some(direction) =
                 self.session
                     .divider_at(panes.width, panes.height, x - panes.x, y - panes.y)
@@ -724,16 +760,25 @@ impl App {
                     .and_then(|id| self.session.pane(id))
                     .and_then(|pane| pane.command.as_deref())
                     .unwrap_or("");
-                (
-                    None,
-                    format!(
-                        "{focused}   click a pane to focus · ✕ closes · drag borders to resize · ctrl-b for keys"
-                    ),
-                )
+                if self.zoomed {
+                    (
+                        Some("SOLO"),
+                        format!(
+                            "{focused}   click agents on the left to switch · ⤢ back to grid · ctrl-b for keys"
+                        ),
+                    )
+                } else {
+                    (
+                        None,
+                        format!(
+                            "{focused}   click a pane to focus · ⤢ solo · ✕ closes · drag borders to resize · ctrl-b for keys"
+                        ),
+                    )
+                }
             }
             Mode::Prefix => (
                 Some("PREFIX"),
-                "c: new agent · %/\": split shell · o: focus · j: jump · x: close · q: quit"
+                "c: new agent · z: solo · %/\": split shell · o: focus · j: jump · x: close · q: quit"
                     .to_string(),
             ),
             Mode::Jump => (

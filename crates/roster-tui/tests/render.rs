@@ -67,6 +67,7 @@ fn panes_get_title_bars_and_content_shifts_down() {
         entries: &entries,
         selected: None,
         hover: None,
+        zoomed: false,
         side: SidebarSide::Left,
         launcher: None,
         mode_badge: None,
@@ -147,6 +148,7 @@ fn hover_lights_up_interactive_chrome() {
             entries: &entries,
             selected: None,
             hover,
+            zoomed: false,
             side: SidebarSide::Left,
             launcher: None,
             mode_badge: None,
@@ -194,6 +196,55 @@ fn hover_lights_up_interactive_chrome() {
 }
 
 #[test]
+fn solo_view_fills_the_pane_region_with_the_focused_pane() {
+    let now = Instant::now();
+    let (mut session, left, right) = two_agent_session(now);
+    session.focus(right);
+    let mut grids = HashMap::new();
+    grids.insert(left, Grid::from_text("left agent output"));
+    grids.insert(right, Grid::from_text("right agent output"));
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+    let exited = HashMap::new();
+    let view = View {
+        session: &session,
+        grids: &grids,
+        exited: &exited,
+        entries: &entries,
+        selected: None,
+        hover: None,
+        zoomed: true,
+        side: SidebarSide::Left,
+        launcher: None,
+        mode_badge: Some("SOLO"),
+        status: "click agents on the left to switch",
+        tick: 0,
+    };
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+    terminal.draw(|frame| render(frame, &view)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    // One full-width title — the focused pane's — and no interior
+    // separator column.
+    let title = region_text(&buf, 32, 80, 0);
+    assert!(title.contains("◉ codex"), "title: {title}");
+    assert!(!title.contains("claude-code"), "title: {title}");
+    assert_ne!(buf.cell((55, 5)).unwrap().symbol(), "│");
+
+    // The solo pane's content spans the whole region; the hidden pane's
+    // content is nowhere.
+    assert_eq!(region_text(&buf, 32, 80, 1), "right agent output");
+    let all: String = (0..12)
+        .map(|y| region_text(&buf, 0, 80, y) + "\n")
+        .collect();
+    assert!(!all.contains("left agent output"), "screen:\n{all}");
+
+    // Sidebar still lists every agent — it is the switcher.
+    assert!(all.contains("claude-code"), "screen:\n{all}");
+}
+
+#[test]
 fn launcher_modal_overlays_the_frame() {
     let now = Instant::now();
     let (session, left, right) = two_agent_session(now);
@@ -213,6 +264,7 @@ fn launcher_modal_overlays_the_frame() {
         entries: &entries,
         selected: None,
         hover: None,
+        zoomed: false,
         side: SidebarSide::Left,
         launcher: Some((&items, &state)),
         mode_badge: Some("LAUNCH"),
@@ -251,6 +303,7 @@ fn exited_pane_notice_and_title_marker() {
         entries: &[],
         selected: None,
         hover: None,
+        zoomed: false,
         side: SidebarSide::Left,
         launcher: None,
         mode_badge: Some("PREFIX"),

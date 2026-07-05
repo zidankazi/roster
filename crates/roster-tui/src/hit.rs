@@ -9,8 +9,8 @@ use roster_core::{PaneId, Session};
 
 use crate::sidebar::SidebarEntry;
 use crate::{
-    close_button_cols, local_panes, panes_area, sidebar_button_row, sidebar_inner, SidebarSide,
-    STATUS_HEIGHT,
+    close_button_cols, local_panes, panes_area, sidebar_button_row, sidebar_inner,
+    zoom_button_cols, SidebarSide, STATUS_HEIGHT,
 };
 
 /// What a screen position corresponds to.
@@ -24,6 +24,8 @@ pub enum Hit {
     Sidebar,
     /// A pane's title bar.
     PaneTitle(PaneId),
+    /// A pane title's `⤢` solo/grid toggle.
+    PaneZoom(PaneId),
     /// A pane title's `✕` close button.
     PaneClose(PaneId),
     /// A pane's content area (or its separator column).
@@ -70,20 +72,25 @@ impl Pointer {
 /// on top by the caller, which knows the split geometry.
 pub fn pointer_for(hit: Hit) -> Pointer {
     match hit {
-        Hit::SidebarEntry(_) | Hit::SidebarNewAgent | Hit::PaneTitle(_) | Hit::PaneClose(_) => {
-            Pointer::Hand
-        }
+        Hit::SidebarEntry(_)
+        | Hit::SidebarNewAgent
+        | Hit::PaneTitle(_)
+        | Hit::PaneZoom(_)
+        | Hit::PaneClose(_) => Pointer::Hand,
         Hit::Pane(_) => Pointer::Text,
         Hit::Sidebar | Hit::Status | Hit::Outside => Pointer::Default,
     }
 }
 
-/// Resolve what sits under (`x`, `y`) for a frame of `area`.
+/// Resolve what sits under (`x`, `y`) for a frame of `area`. With `zoomed`,
+/// the solo pane owns the whole pane region and the tiled layout is
+/// ignored — mirroring what `render` draws in solo view.
 pub fn hit_test(
     area: Rect,
     session: &Session,
     side: SidebarSide,
     entries: &[SidebarEntry],
+    zoomed: Option<PaneId>,
     x: u16,
     y: u16,
 ) -> Hit {
@@ -118,13 +125,20 @@ pub fn hit_test(
     if x >= panes.x && x < panes.x + panes.width && y >= panes.y && y < panes.y + panes.height {
         let local = local_panes(panes);
         let (lx, ly) = (x - panes.x, y - panes.y);
-        for (id, rect) in session.layout(panes.width, panes.height) {
+        let rects = match zoomed {
+            Some(id) => vec![(id, roster_core::Rect::new(0, 0, panes.width, panes.height))],
+            None => session.layout(panes.width, panes.height),
+        };
+        for (id, rect) in rects {
             if lx >= rect.x && lx < rect.x + rect.width && ly >= rect.y && ly < rect.y + rect.height
             {
                 return if rect.height >= 2 && ly == rect.y {
-                    match close_button_cols(rect, local) {
-                        Some(cols) if cols.contains(&lx) => Hit::PaneClose(id),
-                        _ => Hit::PaneTitle(id),
+                    if close_button_cols(rect, local).is_some_and(|cols| cols.contains(&lx)) {
+                        Hit::PaneClose(id)
+                    } else if zoom_button_cols(rect, local).is_some_and(|cols| cols.contains(&lx)) {
+                        Hit::PaneZoom(id)
+                    } else {
+                        Hit::PaneTitle(id)
                     }
                 } else {
                     Hit::Pane(id)
@@ -188,39 +202,39 @@ mod tests {
         let area = Rect::new(0, 0, 120, 30);
         // 120 wide → sidebar 0..32 (rule at 31), panes 32..120, status row 29.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 5, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 0),
             Hit::Sidebar
         );
         // First card rows are 2 and 3 (header + blank above).
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 5, 2),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 2),
             Hit::SidebarEntry(0)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 5, 3),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 3),
             Hit::SidebarEntry(0)
         );
         // Spacer row, then the second card.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 5, 4),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 4),
             Hit::Sidebar
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 5, 5),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 5),
             Hit::SidebarEntry(1)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 5, 29),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 29),
             Hit::Status
         );
         // The pinned + new agent button owns the sidebar's bottom row; the
         // breathing row above it is background.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 5, 28),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 28),
             Hit::SidebarNewAgent
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 5, 27),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 27),
             Hit::Sidebar
         );
     }
@@ -234,20 +248,20 @@ mod tests {
 
         // Pane area starts at x=32. Row 0 is the title, rows below content.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 40, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 40, 0),
             Hit::PaneTitle(left_id)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 40, 10),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 40, 10),
             Hit::Pane(left_id)
         );
         // Right half begins at local x 44 → absolute 76.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 80, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 80, 0),
             Hit::PaneTitle(right_id)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 80, 20),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 80, 20),
             Hit::Pane(right_id)
         );
     }
@@ -262,28 +276,74 @@ mod tests {
         // Left pane: local rect 0..44, content width 43 (separator column),
         // so the ✕ target is local cols 40..43 → absolute 72..75.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 72, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 72, 0),
             Hit::PaneClose(left_id)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 74, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 74, 0),
             Hit::PaneClose(left_id)
         );
+        // The ⤢ solo toggle sits just left of the ✕: local cols 38..40 →
+        // absolute 70..72; left of that is plain title.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 71, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 70, 0),
+            Hit::PaneZoom(left_id)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 71, 0),
+            Hit::PaneZoom(left_id)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 69, 0),
             Hit::PaneTitle(left_id)
         );
         // Below the title row the same columns are pane content.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 74, 5),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 74, 5),
             Hit::Pane(left_id)
         );
         // Right pane: local rect 44..88, content width 44 (touches the
         // edge), ✕ target local 85..88 → absolute 117..120.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 118, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 118, 0),
             Hit::PaneClose(right_id)
         );
+    }
+
+    #[test]
+    fn solo_view_maps_the_whole_pane_region_to_the_zoomed_pane() {
+        let (session, entries) = setup();
+        let area = Rect::new(0, 0, 120, 30);
+        let panes = session.layout(88, 29);
+        let (left_id, right_id) = (panes[0].0, panes[1].0);
+
+        // With the left pane solo, positions that belong to the right pane
+        // in the grid all resolve to the solo pane.
+        let zoomed = Some(left_id);
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, zoomed, 80, 10),
+            Hit::Pane(left_id)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, zoomed, 80, 0),
+            Hit::PaneTitle(left_id)
+        );
+        // Full-width title: content width 88 → ✕ at local 85..88 (absolute
+        // 117..120), ⤢ at local 83..85 (absolute 115..117).
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, zoomed, 118, 0),
+            Hit::PaneClose(left_id)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, zoomed, 116, 0),
+            Hit::PaneZoom(left_id)
+        );
+        // The sidebar still resolves normally, so cards switch panes.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, zoomed, 5, 2),
+            Hit::SidebarEntry(0)
+        );
+        let _ = right_id;
     }
 
     #[test]
@@ -291,11 +351,11 @@ mod tests {
         let (session, entries) = setup();
         let area = Rect::new(0, 0, 120, 30);
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 121, 5),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 121, 5),
             Hit::Outside
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, 5, 30),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 30),
             Hit::Outside
         );
     }

@@ -58,6 +58,9 @@ pub struct View<'a> {
     /// it lights up, the + new agent button inverts, sidebar cards get a
     /// hover marker.
     pub hover: Option<Hit>,
+    /// Solo view: the focused pane fills the whole pane region and the
+    /// sidebar becomes the switcher. `false` shows the tiled grid.
+    pub zoomed: bool,
     /// Which edge the sidebar occupies.
     pub side: SidebarSide,
     /// The agent launcher, when open: its items and input state.
@@ -134,6 +137,14 @@ pub fn close_button_cols(rect: roster_core::Rect, area: Rect) -> Option<std::ops
         .then(|| rect.x + content.width - 3..rect.x + content.width)
 }
 
+/// The columns of a pane's title row occupied by its `⤢` solo/grid toggle,
+/// just left of the ✕. `None` when the title is too narrow to host both.
+pub fn zoom_button_cols(rect: roster_core::Rect, area: Rect) -> Option<std::ops::Range<u16>> {
+    let content = content_rect(rect, area);
+    (rect.height >= 2 && content.width >= 16)
+        .then(|| rect.x + content.width - 5..rect.x + content.width - 3)
+}
+
 /// The part of a laid-out pane rect its content actually occupies: the top
 /// row is given to the pane's title bar, and one column to a separator on
 /// the right edge when another pane sits beyond it. Stacked panes need no
@@ -166,7 +177,12 @@ pub fn render(frame: &mut Frame, view: &View) {
     let local = local_panes(panes);
     let focused = view.session.focused();
 
-    for (id, rect) in view.session.layout(panes.width, panes.height) {
+    // Solo view shows only the focused pane, full size; the grid otherwise.
+    let rects: Vec<(PaneId, roster_core::Rect)> = match (view.zoomed, focused) {
+        (true, Some(id)) => vec![(id, roster_core::Rect::new(0, 0, panes.width, panes.height))],
+        _ => view.session.layout(panes.width, panes.height),
+    };
+    for (id, rect) in rects {
         let content_local = content_rect(rect, local);
         let content = Rect::new(
             panes.x + content_local.x,
@@ -328,9 +344,13 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
     } else {
         Style::default().add_modifier(Modifier::DIM)
     };
-    // Leave room for the ✕ close button at the right edge when it fits.
+    // Leave room for the ✕ close and ⤢ solo buttons at the right edge
+    // when they fit.
     let close = span.width >= 12;
-    let text_width = if close {
+    let zoom = span.width >= 16;
+    let text_width = if zoom {
+        span.width.saturating_sub(11)
+    } else if close {
         span.width.saturating_sub(8)
     } else {
         span.width.saturating_sub(5)
@@ -342,6 +362,17 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
         usize::from(text_width),
         text_style,
     );
+    if zoom {
+        // The ⤢ brightens under the pointer.
+        let style = if view.hover == Some(Hit::PaneZoom(id)) {
+            Style::default()
+                .fg(style::ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
+        buf.set_string(span.x + span.width - 4, span.y, "⤢", style);
+    }
     if close {
         // The ✕ lights up red under the pointer.
         let style = if view.hover == Some(Hit::PaneClose(id)) {

@@ -307,6 +307,97 @@ fn mouse_clicks_focus_launch_and_jump() {
 }
 
 #[test]
+fn solo_view_toggles_by_click_and_switches_with_focus() {
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty =
+        Pty::spawn(&format!("'{}' 'sleep 60' 'sleep 70'", bin()), cols, rows).expect("spawn");
+    let mut reader = pty.reader().expect("reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut screen = Screen::new(cols, rows);
+    let drain_until = |screen: &mut Screen, needle: &str, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < DEADLINE {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => screen.advance(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+            if screen.grid().lines().iter().any(|l| l.contains(needle)) {
+                return true;
+            }
+        }
+        false
+    };
+
+    assert!(
+        drain_until(&mut screen, "sleep 70   click", &rx),
+        "first frame:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Click the left pane's ⤢ (local cols 38..40 → absolute 70..72, title
+    // row): it focuses that pane and goes solo.
+    pty.write(&click(71, 1)).expect("click solo");
+    assert!(
+        drain_until(&mut screen, "sleep 60   click agents", &rx),
+        "solo never engaged:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    let lines = screen.grid().lines();
+    assert!(
+        lines.iter().any(|l| l.contains("SOLO")),
+        "no SOLO badge:\n{}",
+        lines.join("\n")
+    );
+    // One rule only — the sidebar's; no interior separator in solo.
+    assert_eq!(
+        lines[5].matches('│').count(),
+        1,
+        "screen:\n{}",
+        lines.join("\n")
+    );
+
+    // Focus-next while solo shows the other pane, still solo.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"o").expect("focus next");
+    assert!(
+        drain_until(&mut screen, "sleep 70   click agents", &rx),
+        "solo did not follow focus:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Clicking ⤢ on the full-width title (local cols 83..85 → absolute
+    // 115..117) returns to the grid.
+    pty.write(&click(116, 1)).expect("click grid");
+    assert!(
+        drain_until(&mut screen, "sleep 70   click a pane", &rx),
+        "grid never returned:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    let lines = screen.grid().lines();
+    assert_eq!(
+        lines[5].matches('│').count(),
+        2,
+        "screen:\n{}",
+        lines.join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
+#[test]
 fn exited_pane_stays_until_closed() {
     let (cols, rows) = (100u16, 24u16);
     let mut pty =
