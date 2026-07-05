@@ -89,6 +89,8 @@ pub struct App {
     zoomed: bool,
     /// The last known mouse position, for hover affordances.
     last_mouse: Option<(u16, u16)>,
+    /// The previous left-click, for double-click detection on titles.
+    last_click: Option<(Instant, (u16, u16))>,
     /// The pointer shape most recently told to the terminal.
     pointer: Pointer,
     notice: Option<String>,
@@ -130,6 +132,7 @@ impl App {
             next_generation: 0,
             zoomed: false,
             last_mouse: None,
+            last_click: None,
             pointer: Pointer::Default,
             notice: None,
             quit: false,
@@ -528,7 +531,7 @@ impl App {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.notice = None;
-                match hit_test(
+                let hit = hit_test(
                     self.last_area,
                     &self.session,
                     self.side,
@@ -536,7 +539,8 @@ impl App {
                     self.zoomed_pane(),
                     x,
                     y,
-                ) {
+                );
+                match hit {
                     Hit::SidebarEntry(index) => {
                         if let Some(entry) = self.last_entries.get(index) {
                             self.session.focus(entry.pane);
@@ -545,13 +549,19 @@ impl App {
                     Hit::SidebarNewAgent => {
                         self.mode = Mode::Launch(LauncherState::new());
                     }
+                    Hit::SidebarViewGrid => self.zoomed = false,
+                    Hit::SidebarViewSolo => self.zoomed = true,
                     Hit::PaneClose(id) => self.close_pane(id),
-                    Hit::PaneZoom(id) => {
-                        self.session.focus(id);
-                        self.zoomed = !self.zoomed;
-                    }
                     Hit::PaneTitle(id) | Hit::Pane(id) => {
                         self.session.focus(id);
+                        // Double-clicking a title toggles solo, like
+                        // double-clicking a window's title bar maximizes.
+                        let double = self.last_click.is_some_and(|(at, pos)| {
+                            at.elapsed() < Duration::from_millis(400) && pos == (x, y)
+                        });
+                        if double && matches!(hit, Hit::PaneTitle(_)) {
+                            self.zoomed = !self.zoomed;
+                        }
                         // Title rows and separator columns double as split
                         // dividers; grab one if it's there. Solo view has
                         // no dividers.
@@ -569,6 +579,7 @@ impl App {
                     }
                     Hit::Sidebar | Hit::Status | Hit::Outside => {}
                 }
+                self.last_click = Some((Instant::now(), (x, y)));
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some(from) = self.dragging {
@@ -597,9 +608,7 @@ impl App {
                     x,
                     y,
                 );
-                if let Hit::Pane(id) | Hit::PaneTitle(id) | Hit::PaneZoom(id) | Hit::PaneClose(id) =
-                    hit
-                {
+                if let Hit::Pane(id) | Hit::PaneTitle(id) | Hit::PaneClose(id) = hit {
                     let bytes: &[u8] = if mouse.kind == MouseEventKind::ScrollUp {
                         b"\x1b[A\x1b[A\x1b[A"
                     } else {
@@ -632,7 +641,11 @@ impl App {
         );
         if matches!(
             hit,
-            Hit::PaneClose(_) | Hit::PaneZoom(_) | Hit::SidebarNewAgent | Hit::SidebarEntry(_)
+            Hit::PaneClose(_)
+                | Hit::SidebarNewAgent
+                | Hit::SidebarViewGrid
+                | Hit::SidebarViewSolo
+                | Hit::SidebarEntry(_)
         ) {
             return Pointer::Hand;
         }
@@ -764,14 +777,14 @@ impl App {
                     (
                         Some("SOLO"),
                         format!(
-                            "{focused}   click agents on the left to switch · ⤢ back to grid · ctrl-b for keys"
+                            "{focused}   click agents on the left to switch · grid tiles them again · ctrl-b for keys"
                         ),
                     )
                 } else {
                     (
                         None,
                         format!(
-                            "{focused}   click a pane to focus · ⤢ solo · ✕ closes · drag borders to resize · ctrl-b for keys"
+                            "{focused}   click a pane to focus · ✕ closes · drag borders to resize · ctrl-b for keys"
                         ),
                     )
                 }

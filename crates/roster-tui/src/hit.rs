@@ -10,7 +10,7 @@ use roster_core::{PaneId, Session};
 use crate::sidebar::SidebarEntry;
 use crate::{
     close_button_cols, local_panes, panes_area, sidebar_button_row, sidebar_inner,
-    zoom_button_cols, SidebarSide, STATUS_HEIGHT,
+    sidebar_view_row, view_toggle_cols, SidebarSide, STATUS_HEIGHT,
 };
 
 /// What a screen position corresponds to.
@@ -20,12 +20,14 @@ pub enum Hit {
     SidebarEntry(usize),
     /// The sidebar's pinned `+ new agent` button.
     SidebarNewAgent,
+    /// The `grid` half of the sidebar's layout switcher.
+    SidebarViewGrid,
+    /// The `solo` half of the sidebar's layout switcher.
+    SidebarViewSolo,
     /// Sidebar background (header, spacers, rule).
     Sidebar,
     /// A pane's title bar.
     PaneTitle(PaneId),
-    /// A pane title's `⤢` solo/grid toggle.
-    PaneZoom(PaneId),
     /// A pane title's `✕` close button.
     PaneClose(PaneId),
     /// A pane's content area (or its separator column).
@@ -74,8 +76,9 @@ pub fn pointer_for(hit: Hit) -> Pointer {
     match hit {
         Hit::SidebarEntry(_)
         | Hit::SidebarNewAgent
+        | Hit::SidebarViewGrid
+        | Hit::SidebarViewSolo
         | Hit::PaneTitle(_)
-        | Hit::PaneZoom(_)
         | Hit::PaneClose(_) => Pointer::Hand,
         Hit::Pane(_) => Pointer::Text,
         Hit::Sidebar | Hit::Status | Hit::Outside => Pointer::Default,
@@ -101,16 +104,34 @@ pub fn hit_test(
         return Hit::Status;
     }
 
+    let panes = panes_area(area, side);
+    let multi_pane = session.layout(panes.width, panes.height).len() > 1;
+
     let bar = sidebar_inner(area, side);
     if x >= bar.x && x < bar.x + bar.width && y >= bar.y && y < bar.y + bar.height {
-        // Mirror render: the bottom two rows belong to the pinned button
-        // and its breathing row, not to agent cards.
+        // Mirror render: the bottom rows belong to the pinned button, the
+        // layout switcher (multi-pane only), and a breathing row — not to
+        // agent cards.
         let mut cards = bar;
         if sidebar_button_row(area, side) == Some(y) {
             return Hit::SidebarNewAgent;
         }
         if sidebar_button_row(area, side).is_some() {
             cards.height = cards.height.saturating_sub(2);
+        }
+        if multi_pane && sidebar_view_row(area, side) == Some(y) {
+            let (grid, solo) = view_toggle_cols();
+            let col = x - bar.x;
+            if grid.contains(&col) {
+                return Hit::SidebarViewGrid;
+            }
+            if solo.contains(&col) {
+                return Hit::SidebarViewSolo;
+            }
+            return Hit::Sidebar;
+        }
+        if multi_pane && sidebar_view_row(area, side).is_some() {
+            cards.height = cards.height.saturating_sub(1);
         }
         if y >= cards.y + cards.height {
             return Hit::Sidebar;
@@ -121,7 +142,6 @@ pub fn hit_test(
         };
     }
 
-    let panes = panes_area(area, side);
     if x >= panes.x && x < panes.x + panes.width && y >= panes.y && y < panes.y + panes.height {
         let local = local_panes(panes);
         let (lx, ly) = (x - panes.x, y - panes.y);
@@ -135,8 +155,6 @@ pub fn hit_test(
                 return if rect.height >= 2 && ly == rect.y {
                     if close_button_cols(rect, local).is_some_and(|cols| cols.contains(&lx)) {
                         Hit::PaneClose(id)
-                    } else if zoom_button_cols(rect, local).is_some_and(|cols| cols.contains(&lx)) {
-                        Hit::PaneZoom(id)
                     } else {
                         Hit::PaneTitle(id)
                     }
@@ -228,13 +246,46 @@ mod tests {
             Hit::Status
         );
         // The pinned + new agent button owns the sidebar's bottom row; the
-        // breathing row above it is background.
+        // layout switcher the row above (two panes exist); breathing above
+        // that is background.
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 28),
             Hit::SidebarNewAgent
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 27),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 2, 27),
+            Hit::SidebarViewGrid
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 9, 27),
+            Hit::SidebarViewSolo
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 20, 27),
+            Hit::Sidebar
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 26),
+            Hit::Sidebar
+        );
+    }
+
+    #[test]
+    fn view_switcher_hides_with_a_single_pane() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        let only = session.focused().unwrap();
+        session.pane_mut(only).unwrap().command = Some("claude".into());
+        session.set_reading(only, AgentState::Idle, None, now);
+        let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);
+        let area = Rect::new(0, 0, 120, 30);
+        // One pane: the switcher row is plain background.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 2, 27),
+            Hit::Sidebar
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 9, 27),
             Hit::Sidebar
         );
     }
@@ -283,18 +334,8 @@ mod tests {
             hit_test(area, &session, SidebarSide::Left, &entries, None, 74, 0),
             Hit::PaneClose(left_id)
         );
-        // The ⤢ solo toggle sits just left of the ✕: local cols 38..40 →
-        // absolute 70..72; left of that is plain title.
-        assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, 70, 0),
-            Hit::PaneZoom(left_id)
-        );
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, 71, 0),
-            Hit::PaneZoom(left_id)
-        );
-        assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, 69, 0),
             Hit::PaneTitle(left_id)
         );
         // Below the title row the same columns are pane content.
@@ -329,14 +370,10 @@ mod tests {
             Hit::PaneTitle(left_id)
         );
         // Full-width title: content width 88 → ✕ at local 85..88 (absolute
-        // 117..120), ⤢ at local 83..85 (absolute 115..117).
+        // 117..120).
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, zoomed, 118, 0),
             Hit::PaneClose(left_id)
-        );
-        assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, zoomed, 116, 0),
-            Hit::PaneZoom(left_id)
         );
         // The sidebar still resolves normally, so cards switch panes.
         assert_eq!(

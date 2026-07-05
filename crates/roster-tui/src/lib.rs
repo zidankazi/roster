@@ -137,12 +137,20 @@ pub fn close_button_cols(rect: roster_core::Rect, area: Rect) -> Option<std::ops
         .then(|| rect.x + content.width - 3..rect.x + content.width)
 }
 
-/// The columns of a pane's title row occupied by its `⤢` solo/grid toggle,
-/// just left of the ✕. `None` when the title is too narrow to host both.
-pub fn zoom_button_cols(rect: roster_core::Rect, area: Rect) -> Option<std::ops::Range<u16>> {
-    let content = content_rect(rect, area);
-    (rect.height >= 2 && content.width >= 16)
-        .then(|| rect.x + content.width - 5..rect.x + content.width - 3)
+/// The sidebar row hosting the `grid · solo` layout switcher, one row above
+/// the + new agent button. Rendered (and clickable) only when the active
+/// window has more than one pane — with a single pane the layouts are
+/// identical and the control would be noise.
+pub fn sidebar_view_row(frame_area: Rect, side: SidebarSide) -> Option<u16> {
+    let bar = sidebar_inner(frame_area, side);
+    (bar.height >= 8).then(|| bar.y + bar.height - 2)
+}
+
+/// The switcher's click targets on its row, in sidebar-inner columns:
+/// `(grid, solo)` word spans.
+pub fn view_toggle_cols() -> (std::ops::Range<u16>, std::ops::Range<u16>) {
+    // " grid · solo" — generous targets around each word.
+    (0..6, 7..13)
 }
 
 /// The part of a laid-out pane rect its content actually occupies: the top
@@ -266,6 +274,46 @@ pub fn render(frame: &mut Frame, view: &View) {
             button_style,
         );
     }
+    // The grid · solo switcher, above the button, when there is anything
+    // to switch between.
+    let multi_pane = view.session.layout(panes.width, panes.height).len() > 1;
+    if multi_pane {
+        if let Some(view_y) = sidebar_view_row(area, view.side) {
+            cards.height = cards.height.saturating_sub(1);
+            let word = |active: bool, hovered: bool| -> Style {
+                let mut style = if active {
+                    Style::default()
+                        .fg(style::ACCENT)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().add_modifier(Modifier::DIM)
+                };
+                if hovered {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
+                style
+            };
+            let buf = frame.buffer_mut();
+            buf.set_string(
+                bar_inner.x + 1,
+                view_y,
+                "grid",
+                word(!view.zoomed, view.hover == Some(Hit::SidebarViewGrid)),
+            );
+            buf.set_string(
+                bar_inner.x + 6,
+                view_y,
+                "·",
+                Style::default().add_modifier(Modifier::DIM),
+            );
+            buf.set_string(
+                bar_inner.x + 8,
+                view_y,
+                "solo",
+                word(view.zoomed, view.hover == Some(Hit::SidebarViewSolo)),
+            );
+        }
+    }
     let hovered_entry = match view.hover {
         Some(Hit::SidebarEntry(index)) => Some(index),
         _ => None,
@@ -344,13 +392,9 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
     } else {
         Style::default().add_modifier(Modifier::DIM)
     };
-    // Leave room for the ✕ close and ⤢ solo buttons at the right edge
-    // when they fit.
+    // Leave room for the ✕ close button at the right edge when it fits.
     let close = span.width >= 12;
-    let zoom = span.width >= 16;
-    let text_width = if zoom {
-        span.width.saturating_sub(11)
-    } else if close {
+    let text_width = if close {
         span.width.saturating_sub(8)
     } else {
         span.width.saturating_sub(5)
@@ -362,17 +406,6 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
         usize::from(text_width),
         text_style,
     );
-    if zoom {
-        // The ⤢ brightens under the pointer.
-        let style = if view.hover == Some(Hit::PaneZoom(id)) {
-            Style::default()
-                .fg(style::ACCENT)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().add_modifier(Modifier::DIM)
-        };
-        buf.set_string(span.x + span.width - 4, span.y, "⤢", style);
-    }
     if close {
         // The ✕ lights up red under the pointer.
         let style = if view.hover == Some(Hit::PaneClose(id)) {

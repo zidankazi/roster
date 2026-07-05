@@ -344,11 +344,11 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
         screen.grid().lines().join("\n")
     );
 
-    // Click the left pane's ⤢ (local cols 38..40 → absolute 70..72, title
-    // row): it focuses that pane and goes solo.
-    pty.write(&click(71, 1)).expect("click solo");
+    // Click "solo" in the sidebar's layout switcher (row above the + new
+    // agent button: 0-based y 27 → 1-based 28; word at cols 8..12).
+    pty.write(&click(10, 28)).expect("click solo");
     assert!(
-        drain_until(&mut screen, "sleep 60   click agents", &rx),
+        drain_until(&mut screen, "sleep 70   click agents", &rx),
         "solo never engaged:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -370,16 +370,16 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"o").expect("focus next");
     assert!(
-        drain_until(&mut screen, "sleep 70   click agents", &rx),
+        drain_until(&mut screen, "sleep 60   click agents", &rx),
         "solo did not follow focus:\n{}",
         screen.grid().lines().join("\n")
     );
 
-    // Clicking ⤢ on the full-width title (local cols 83..85 → absolute
-    // 115..117) returns to the grid.
-    pty.write(&click(116, 1)).expect("click grid");
+    // Clicking "grid" in the switcher returns to the tiles: the interior
+    // separator is back.
+    pty.write(&click(3, 28)).expect("click grid");
     assert!(
-        drain_until(&mut screen, "sleep 70   click a pane", &rx),
+        drain_until(&mut screen, "sleep 60   click a pane", &rx),
         "grid never returned:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -389,6 +389,15 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
         2,
         "screen:\n{}",
         lines.join("\n")
+    );
+
+    // Double-clicking a pane's title also goes solo.
+    pty.write(&click(40, 1)).expect("first click");
+    pty.write(&click(40, 1)).expect("second click");
+    assert!(
+        drain_until(&mut screen, "sleep 60   click agents", &rx),
+        "double-click did not go solo:\n{}",
+        screen.grid().lines().join("\n")
     );
 
     pty.write(&[0x02]).expect("prefix");

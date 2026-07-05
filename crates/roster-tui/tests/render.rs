@@ -123,10 +123,20 @@ fn panes_get_title_bars_and_content_shifts_down() {
     assert!(region_text(&buf, 0, 80, 11).contains("ctrl-b"));
 
     // Mouse-first chrome: the pinned + new agent button on the sidebar's
-    // bottom row, and a ✕ close button at each title's right edge.
+    // bottom row, the grid · solo switcher above it (two panes exist), and
+    // a ✕ close button at each title's right edge.
     assert_eq!(region_text(&buf, 0, 31, 10).trim(), "+ new agent");
+    assert_eq!(region_text(&buf, 0, 31, 9).trim(), "grid · solo");
     assert_eq!(buf.cell((53, 0)).unwrap().symbol(), "✕");
     assert_eq!(buf.cell((78, 0)).unwrap().symbol(), "✕");
+    // Grid is the active layout: accent; solo is dim.
+    assert_eq!(buf.cell((1, 9)).unwrap().style().fg, Some(ACCENT));
+    assert!(buf
+        .cell((8, 9))
+        .unwrap()
+        .style()
+        .add_modifier
+        .contains(Modifier::DIM));
 }
 
 #[test]
@@ -240,8 +250,11 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
         .collect();
     assert!(!all.contains("left agent output"), "screen:\n{all}");
 
-    // Sidebar still lists every agent — it is the switcher.
+    // Sidebar still lists every agent — it is the switcher — and the
+    // layout control shows solo active.
     assert!(all.contains("claude-code"), "screen:\n{all}");
+    assert!(all.contains("grid · solo"), "screen:\n{all}");
+    assert_eq!(buf.cell((8, 9)).unwrap().style().fg, Some(ACCENT));
 }
 
 #[test]
