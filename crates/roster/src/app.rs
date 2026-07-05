@@ -31,10 +31,12 @@ const DETECT_EVERY: Duration = Duration::from_millis(400);
 const SPAWN_COLS: u16 = 80;
 const SPAWN_ROWS: u16 = 24;
 
-/// Bytes or end-of-stream from a pane's reader thread.
+/// Bytes or end-of-stream from a pane's reader thread. The generation says
+/// which attachment produced it: replacing a pane's command reuses the pane
+/// id, and the dying process's tail (and EOF) must not touch its successor.
 enum Output {
-    Bytes(PaneId, Vec<u8>),
-    Eof(PaneId),
+    Bytes(PaneId, u64, Vec<u8>),
+    Eof(PaneId, u64),
 }
 
 /// Input interpretation state.
@@ -55,6 +57,8 @@ struct PaneRuntime {
     screen: Screen,
     tracker: PaneTracker,
     kind: Option<AgentKind>,
+    /// Which attachment this is; output from older generations is stale.
+    generation: u64,
     /// Exit code, once the child has ended; the pane stays visible.
     exited: Option<u32>,
 }
@@ -74,6 +78,12 @@ pub struct App {
     last_area: Rect,
     /// A grabbed split divider, in pane-local coordinates, while dragging.
     dragging: Option<(u16, u16)>,
+    /// The bare-start shell pane, until the user actually uses it. It only
+    /// exists as a backdrop for the launcher, so the first launch replaces
+    /// it instead of splitting it.
+    placeholder: Option<PaneId>,
+    /// Attachment counter feeding [`PaneRuntime::generation`].
+    next_generation: u64,
     notice: Option<String>,
     quit: bool,
     output_tx: Sender<Output>,
@@ -109,6 +119,8 @@ impl App {
             last_detect: Instant::now() - DETECT_EVERY,
             last_area: Rect::new(0, 0, SPAWN_COLS, SPAWN_ROWS),
             dragging: None,
+            placeholder: None,
+            next_generation: 0,
             notice: None,
             quit: false,
             output_tx,
@@ -118,6 +130,9 @@ impl App {
         let first = app.session.focused().expect("new session has a pane");
         app.attach(first, &commands[0])
             .map_err(|e| format!("spawning `{}`: {e}", commands[0]))?;
+        if open_launcher {
+            app.placeholder = Some(first);
+        }
         for (i, command) in commands.iter().enumerate().skip(1) {
             let direction = if i % 2 == 1 {
                 SplitDirection::Horizontal
@@ -140,17 +155,22 @@ impl App {
     fn attach(&mut self, id: PaneId, command: &str) -> Result<(), String> {
         let pty = Pty::spawn(command, SPAWN_COLS, SPAWN_ROWS).map_err(|e| e.to_string())?;
         let mut reader = pty.reader().map_err(|e| e.to_string())?;
+        let generation = self.next_generation;
+        self.next_generation += 1;
         let tx = self.output_tx.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => {
-                        let _ = tx.send(Output::Eof(id));
+                        let _ = tx.send(Output::Eof(id, generation));
                         break;
                     }
                     Ok(n) => {
-                        if tx.send(Output::Bytes(id, buf[..n].to_vec())).is_err() {
+                        if tx
+                            .send(Output::Bytes(id, generation, buf[..n].to_vec()))
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -165,6 +185,7 @@ impl App {
                 screen: Screen::new(SPAWN_COLS, SPAWN_ROWS),
                 tracker: PaneTracker::new(),
                 kind: self.detector.identify(command),
+                generation,
                 exited: None,
             },
         );
@@ -237,12 +258,22 @@ impl App {
     fn drain_output(&mut self) {
         while let Ok(message) = self.output_rx.try_recv() {
             match message {
-                Output::Bytes(id, bytes) => {
+                Output::Bytes(id, generation, bytes) => {
                     if let Some(rt) = self.runtimes.get_mut(&id) {
-                        rt.screen.advance(&bytes);
+                        if rt.generation == generation {
+                            rt.screen.advance(&bytes);
+                        }
                     }
                 }
-                Output::Eof(id) => self.mark_exited(id),
+                Output::Eof(id, generation) => {
+                    if self
+                        .runtimes
+                        .get(&id)
+                        .is_some_and(|rt| rt.generation == generation)
+                    {
+                        self.mark_exited(id);
+                    }
+                }
             }
         }
     }
@@ -505,8 +536,26 @@ impl App {
 
     /// Start `command` in a new pane: split the focused pane along its
     /// longer visual axis (cells are roughly twice as tall as wide), or
-    /// open a fresh window when nothing is left to split.
+    /// open a fresh window when nothing is left to split. A bare start's
+    /// untouched placeholder shell is replaced outright — the user asked
+    /// for an agent, not an extra terminal.
     fn launch(&mut self, command: &str) {
+        if let Some(id) = self.placeholder.take() {
+            if self.session.focused() == Some(id) {
+                // Spawn first: a failed launch keeps the shell running.
+                let old = self.runtimes.remove(&id);
+                match self.attach(id, command) {
+                    Ok(()) => {} // dropping the old runtime kills the shell
+                    Err(error) => {
+                        if let Some(rt) = old {
+                            self.runtimes.insert(id, rt);
+                        }
+                        self.notice = Some(format!("launch failed: {error}"));
+                    }
+                }
+                return;
+            }
+        }
         let id = match self.session.focused() {
             Some(target) => {
                 let direction = match self.runtimes.get(&target) {
@@ -548,6 +597,9 @@ impl App {
     }
 
     fn close_pane(&mut self, id: PaneId) {
+        if self.placeholder == Some(id) {
+            self.placeholder = None;
+        }
         // Dropping the runtime kills and reaps the child.
         self.runtimes.remove(&id);
         self.session.close(id);
@@ -557,6 +609,10 @@ impl App {
         let Some(id) = self.session.focused() else {
             return;
         };
+        // Typing into the placeholder shell claims it as a real pane.
+        if self.placeholder == Some(id) {
+            self.placeholder = None;
+        }
         let Some(rt) = self.runtimes.get_mut(&id) else {
             return;
         };

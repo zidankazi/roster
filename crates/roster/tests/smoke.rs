@@ -360,6 +360,81 @@ fn fake_agent_dir() -> PathBuf {
 }
 
 #[test]
+fn bare_start_first_launch_replaces_the_placeholder_shell() {
+    let dir = fake_agent_dir();
+    let path = format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    std::env::set_var("PATH", &path);
+    // Pin the placeholder shell so the test is host-independent.
+    std::env::set_var("SHELL", "/bin/sh");
+
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty = Pty::spawn(&format!("'{}'", bin()), cols, rows).expect("spawn roster");
+    let mut reader = pty.reader().expect("reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut screen = Screen::new(cols, rows);
+    let drain_until = |screen: &mut Screen, needle: &str, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < DEADLINE {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => screen.advance(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+            if screen.grid().lines().iter().any(|l| l.contains(needle)) {
+                return true;
+            }
+        }
+        false
+    };
+
+    // Bare `roster` greets with the launcher over a placeholder shell.
+    assert!(
+        drain_until(&mut screen, "new agent", &rx),
+        "launcher never greeted:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Launch the first agent: it must take the placeholder's place, not
+    // split it — no leftover empty shell pane.
+    pty.write(b"cla").expect("filter");
+    pty.write(b"\r").expect("launch");
+    assert!(
+        drain_until(&mut screen, "blocked · Do y", &rx),
+        "launched agent never showed blocked:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    let lines = screen.grid().lines();
+    // A single full-width pane: a content row holds only the sidebar rule;
+    // a split would add an interior separator.
+    let rules = lines[5].matches('│').count();
+    assert_eq!(rules, 1, "expected one rule, screen:\n{}", lines.join("\n"));
+    assert!(
+        !lines[0].contains("○ sh"),
+        "placeholder shell still titled:\n{}",
+        lines.join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn full_pipeline_shows_blocked_agent_and_quits() {
     let dir = fake_agent_dir();
     let path = format!(
