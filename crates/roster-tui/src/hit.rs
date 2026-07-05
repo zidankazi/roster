@@ -34,6 +34,50 @@ pub enum Hit {
     Outside,
 }
 
+/// The mouse pointer shape the terminal should show, keyed to what the
+/// pointer is over. Emitted by the binary as an OSC 22 sequence (xterm
+/// pointer-shape protocol; Ghostty, Kitty, WezTerm, iTerm2 honor it,
+/// others ignore it).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Pointer {
+    /// The terminal's default arrow.
+    #[default]
+    Default,
+    /// A hand — over anything clickable.
+    Hand,
+    /// An I-beam — over live terminal content.
+    Text,
+    /// Horizontal resize arrows — over a vertical divider.
+    ResizeEw,
+    /// Vertical resize arrows — over a horizontal divider.
+    ResizeNs,
+}
+
+impl Pointer {
+    /// The xcursor shape name for OSC 22.
+    pub fn name(self) -> &'static str {
+        match self {
+            Pointer::Default => "default",
+            Pointer::Hand => "pointer",
+            Pointer::Text => "text",
+            Pointer::ResizeEw => "ew-resize",
+            Pointer::ResizeNs => "ns-resize",
+        }
+    }
+}
+
+/// The pointer shape for whatever a position hit. Divider hover is layered
+/// on top by the caller, which knows the split geometry.
+pub fn pointer_for(hit: Hit) -> Pointer {
+    match hit {
+        Hit::SidebarEntry(_) | Hit::SidebarNewAgent | Hit::PaneTitle(_) | Hit::PaneClose(_) => {
+            Pointer::Hand
+        }
+        Hit::Pane(_) => Pointer::Text,
+        Hit::Sidebar | Hit::Status | Hit::Outside => Pointer::Default,
+    }
+}
+
 /// Resolve what sits under (`x`, `y`) for a frame of `area`.
 pub fn hit_test(
     area: Rect,

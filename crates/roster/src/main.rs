@@ -60,6 +60,11 @@ fn run() -> Result<(), String> {
     // Mouse-native: capture clicks, drags, and the wheel.
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
     let result = app.run(&mut terminal);
+    // Hand the pointer shape back to the terminal (OSC 22).
+    let _ = crossterm::execute!(
+        std::io::stdout(),
+        crossterm::style::Print("\x1b]22;default\x07")
+    );
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
     result.map_err(|e| e.to_string())

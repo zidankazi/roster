@@ -10,7 +10,9 @@ use ratatui::style::Modifier;
 use ratatui::Terminal;
 use roster_core::{AgentState, Grid, Session, SplitDirection};
 use roster_detect::Detector;
-use roster_tui::{launch_items, render, sidebar_entries, LauncherState, SidebarSide, View, ACCENT};
+use roster_tui::{
+    launch_items, render, sidebar_entries, Hit, LauncherState, SidebarSide, View, ACCENT,
+};
 
 fn region_text(buf: &Buffer, x0: u16, x1: u16, y: u16) -> String {
     (x0..x1)
@@ -64,6 +66,7 @@ fn panes_get_title_bars_and_content_shifts_down() {
         exited: &exited,
         entries: &entries,
         selected: None,
+        hover: None,
         side: SidebarSide::Left,
         launcher: None,
         mode_badge: None,
@@ -126,6 +129,71 @@ fn panes_get_title_bars_and_content_shifts_down() {
 }
 
 #[test]
+fn hover_lights_up_interactive_chrome() {
+    let now = Instant::now();
+    let (session, left, right) = two_agent_session(now);
+    let mut grids = HashMap::new();
+    grids.insert(left, Grid::from_text("left"));
+    grids.insert(right, Grid::from_text("right"));
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+    let exited = HashMap::new();
+
+    let draw = |hover: Option<Hit>| -> Buffer {
+        let view = View {
+            session: &session,
+            grids: &grids,
+            exited: &exited,
+            entries: &entries,
+            selected: None,
+            hover,
+            side: SidebarSide::Left,
+            launcher: None,
+            mode_badge: None,
+            status: "",
+            tick: 0,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|frame| render(frame, &view)).unwrap();
+        terminal.backend().buffer().clone()
+    };
+
+    // Hovering a ✕ turns it red and bold; unhovered it stays dim.
+    let buf = draw(Some(Hit::PaneClose(left)));
+    let close = buf.cell((53, 0)).unwrap();
+    assert_eq!(close.symbol(), "✕");
+    assert_eq!(close.style().fg, Some(ratatui::style::Color::Red));
+    assert!(close.style().add_modifier.contains(Modifier::BOLD));
+    let other = buf.cell((78, 0)).unwrap();
+    assert!(other.style().add_modifier.contains(Modifier::DIM));
+
+    // Hovering the + new agent button inverts it.
+    let buf = draw(Some(Hit::SidebarNewAgent));
+    assert!(buf
+        .cell((1, 10))
+        .unwrap()
+        .style()
+        .add_modifier
+        .contains(Modifier::REVERSED));
+
+    // Hovering a sidebar card shows a quiet marker.
+    let buf = draw(Some(Hit::SidebarEntry(0)));
+    let marker = buf.cell((0, 2)).unwrap();
+    assert_eq!(marker.symbol(), "❯");
+    assert!(marker.style().add_modifier.contains(Modifier::DIM));
+
+    // No hover, no chrome lit.
+    let buf = draw(None);
+    assert!(buf
+        .cell((53, 0))
+        .unwrap()
+        .style()
+        .add_modifier
+        .contains(Modifier::DIM));
+    assert_ne!(buf.cell((0, 2)).unwrap().symbol(), "❯");
+}
+
+#[test]
 fn launcher_modal_overlays_the_frame() {
     let now = Instant::now();
     let (session, left, right) = two_agent_session(now);
@@ -144,6 +212,7 @@ fn launcher_modal_overlays_the_frame() {
         exited: &exited,
         entries: &entries,
         selected: None,
+        hover: None,
         side: SidebarSide::Left,
         launcher: Some((&items, &state)),
         mode_badge: Some("LAUNCH"),
@@ -181,6 +250,7 @@ fn exited_pane_notice_and_title_marker() {
         exited: &exited,
         entries: &[],
         selected: None,
+        hover: None,
         side: SidebarSide::Left,
         launcher: None,
         mode_badge: Some("PREFIX"),

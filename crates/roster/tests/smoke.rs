@@ -204,6 +204,28 @@ fn mouse_clicks_focus_launch_and_jump() {
         screen.grid().lines().join("\n")
     );
 
+    // Hovering the left pane's ✕ (motion is SGR button 35) must switch the
+    // terminal pointer to a hand via OSC 22.
+    pty.write(b"\x1b[<35;74;1M").expect("hover ✕");
+    let start = Instant::now();
+    let mut raw: Vec<u8> = Vec::new();
+    let mut saw_hand = false;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => {
+                raw.extend_from_slice(&chunk);
+                screen.advance(&chunk);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if raw.windows(13).any(|w| w == b"\x1b]22;pointer\x07") {
+            saw_hand = true;
+            break;
+        }
+    }
+    assert!(saw_hand, "hover never emitted an OSC 22 hand pointer");
+
     // Click inside the first pane's content (absolute col ~40, row 10) —
     // focus follows the mouse click.
     pty.write(&click(40, 10)).expect("click left pane");

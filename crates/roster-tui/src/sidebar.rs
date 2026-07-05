@@ -124,24 +124,28 @@ impl SidebarState {
 pub struct Sidebar<'a> {
     entries: &'a [SidebarEntry],
     selected: Option<usize>,
+    hovered: Option<usize>,
     workspaces: usize,
     tick: u64,
 }
 
 impl<'a> Sidebar<'a> {
-    /// A sidebar over `entries`, highlighting `selected` when given.
+    /// A sidebar over `entries`, highlighting `selected` when given and
+    /// giving `hovered` (the card under the mouse) a dim marker.
     /// `workspaces` is the session's window count; workspace headers are
     /// shown only when there is more than one. `tick` animates the working
     /// spinner.
     pub fn new(
         entries: &'a [SidebarEntry],
         selected: Option<usize>,
+        hovered: Option<usize>,
         workspaces: usize,
         tick: u64,
     ) -> Self {
         Sidebar {
             entries,
             selected,
+            hovered,
             workspaces,
             tick,
         }
@@ -215,6 +219,9 @@ impl Widget for Sidebar<'_> {
             let marker_style = Style::default().fg(crate::style::ACCENT);
             if selected {
                 buf.set_string(area.x, y, "❯", marker_style);
+            } else if self.hovered == Some(index) {
+                // Hover affordance: a quiet marker where selection's ❯ goes.
+                buf.set_string(area.x, y, "❯", Style::default().add_modifier(Modifier::DIM));
             }
 
             // Line 1: glyph + agent name (bold; accented when selected),
@@ -452,7 +459,7 @@ mod tests {
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
-        Sidebar::new(&entries, None, session.window_count(), 0)
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 14), &mut buf);
 
         // Quiet lowercase header with the blocked count on the right.
@@ -487,7 +494,7 @@ mod tests {
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
-        Sidebar::new(&entries, None, session.window_count(), 0)
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 14), &mut buf);
         // Blocked ring at the first card's glyph column.
         assert_eq!(buf.cell((2, 2)).unwrap().symbol(), "◉");
@@ -499,7 +506,7 @@ mod tests {
         // The working card's glyph changes with the tick.
         let glyph_at = |tick: u64| -> String {
             let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
-            Sidebar::new(&entries, None, session.window_count(), tick)
+            Sidebar::new(&entries, None, None, session.window_count(), tick)
                 .render(Rect::new(0, 0, 32, 14), &mut buf);
             // Working card is third: rows 8/9; glyph at (2, 8).
             buf.cell((2, 8)).unwrap().symbol().to_string()
@@ -520,7 +527,7 @@ mod tests {
 
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 32, 16));
-        Sidebar::new(&entries, None, session.window_count(), 0)
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 16), &mut buf);
 
         let rows: Vec<String> = (0..16).map(|y| buffer_row(&buf, y)).collect();
@@ -540,7 +547,7 @@ mod tests {
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
-        Sidebar::new(&entries, Some(0), session.window_count(), 0)
+        Sidebar::new(&entries, Some(0), None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 14), &mut buf);
         // Marker on the selected card's name row; name in the accent color.
         assert_eq!(buf.cell((0, 2)).unwrap().symbol(), "❯");

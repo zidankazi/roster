@@ -18,7 +18,7 @@ mod pane;
 mod sidebar;
 mod style;
 
-pub use hit::{hit_test, Hit};
+pub use hit::{hit_test, pointer_for, Hit, Pointer};
 pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
 pub use sidebar::{format_age, sidebar_entries, Message, Sidebar, SidebarEntry, SidebarState};
@@ -54,6 +54,10 @@ pub struct View<'a> {
     pub entries: &'a [SidebarEntry],
     /// The sidebar row to highlight, if any.
     pub selected: Option<usize>,
+    /// What the mouse pointer is over, for hover affordances: the ✕ under
+    /// it lights up, the + new agent button inverts, sidebar cards get a
+    /// hover marker.
+    pub hover: Option<Hit>,
     /// Which edge the sidebar occupies.
     pub side: SidebarSide,
     /// The agent launcher, when open: its items and input state.
@@ -232,20 +236,29 @@ pub fn render(frame: &mut Frame, view: &View) {
     if let Some(button_y) = sidebar_button_row(area, view.side) {
         // Keep the cards clear of the button and its breathing row.
         cards.height = cards.height.saturating_sub(2);
+        let mut button_style = Style::default()
+            .fg(style::ACCENT)
+            .add_modifier(Modifier::BOLD);
+        if view.hover == Some(Hit::SidebarNewAgent) {
+            button_style = button_style.add_modifier(Modifier::REVERSED);
+        }
         frame.buffer_mut().set_stringn(
             bar_inner.x + 1,
             button_y,
-            "+ new agent",
+            " + new agent ",
             usize::from(bar_inner.width.saturating_sub(1)),
-            Style::default()
-                .fg(style::ACCENT)
-                .add_modifier(Modifier::BOLD),
+            button_style,
         );
     }
+    let hovered_entry = match view.hover {
+        Some(Hit::SidebarEntry(index)) => Some(index),
+        _ => None,
+    };
     frame.render_widget(
         Sidebar::new(
             view.entries,
             view.selected,
+            hovered_entry,
             view.session.window_count(),
             view.tick,
         ),
@@ -330,12 +343,15 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
         text_style,
     );
     if close {
-        buf.set_string(
-            span.x + span.width - 2,
-            span.y,
-            "✕",
-            Style::default().add_modifier(Modifier::DIM),
-        );
+        // The ✕ lights up red under the pointer.
+        let style = if view.hover == Some(Hit::PaneClose(id)) {
+            Style::default()
+                .fg(ratatui::style::Color::Red)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
+        buf.set_string(span.x + span.width - 2, span.y, "✕", style);
     }
 }
 

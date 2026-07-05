@@ -17,8 +17,9 @@ use roster_detect::{AgentKind, Detector, PaneTracker};
 use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
-    content_rect, hit_test, launch_items, local_panes, panes_area, render, sidebar_entries, Hit,
-    LaunchItem, Launcher, LauncherState, Message, SidebarEntry, SidebarSide, SidebarState, View,
+    content_rect, hit_test, launch_items, local_panes, panes_area, pointer_for, render,
+    sidebar_entries, Hit, LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry,
+    SidebarSide, SidebarState, View,
 };
 
 use crate::keys::encode_key;
@@ -84,6 +85,10 @@ pub struct App {
     placeholder: Option<PaneId>,
     /// Attachment counter feeding [`PaneRuntime::generation`].
     next_generation: u64,
+    /// The last known mouse position, for hover affordances.
+    last_mouse: Option<(u16, u16)>,
+    /// The pointer shape most recently told to the terminal.
+    pointer: Pointer,
     notice: Option<String>,
     quit: bool,
     output_tx: Sender<Output>,
@@ -121,6 +126,8 @@ impl App {
             dragging: None,
             placeholder: None,
             next_generation: 0,
+            last_mouse: None,
+            pointer: Pointer::Default,
             notice: None,
             quit: false,
             output_tx,
@@ -220,6 +227,21 @@ impl App {
                 Mode::Jump => self.sidebar.selected(self.last_entries.len()),
                 _ => None,
             };
+            // Hover follows the last known pointer position; the launcher
+            // modal owns hover itself while open.
+            let hover = match self.mode {
+                Mode::Launch(_) => None,
+                _ => self.last_mouse.map(|(x, y)| {
+                    hit_test(
+                        self.last_area,
+                        &self.session,
+                        self.side,
+                        &self.last_entries,
+                        x,
+                        y,
+                    )
+                }),
+            };
             let (mode_badge, status) = self.status_line();
             let launcher = match &self.mode {
                 Mode::Launch(state) => Some((self.launchables.as_slice(), state)),
@@ -231,6 +253,7 @@ impl App {
                 exited: &exited,
                 entries: &self.last_entries,
                 selected,
+                hover,
                 side: self.side,
                 launcher,
                 mode_badge,
@@ -242,13 +265,21 @@ impl App {
             terminal.draw(|frame| render(frame, &view))?;
 
             if event::poll(INPUT_POLL)? {
-                match event::read()? {
-                    Event::Key(key) if key.kind != KeyEventKind::Release => {
-                        self.handle_key(key);
+                // Drain the whole burst: mouse motion arrives far faster
+                // than one event per frame, and queueing behind redraws
+                // would make hover feel laggy.
+                loop {
+                    match event::read()? {
+                        Event::Key(key) if key.kind != KeyEventKind::Release => {
+                            self.handle_key(key);
+                        }
+                        Event::Mouse(mouse) => self.handle_mouse(mouse),
+                        // Resizes are picked up from terminal.size() next frame.
+                        _ => {}
                     }
-                    Event::Mouse(mouse) => self.handle_mouse(mouse),
-                    // Resizes are picked up from terminal.size() next frame.
-                    _ => {}
+                    if self.quit || !event::poll(Duration::ZERO)? {
+                        break;
+                    }
                 }
             }
         }
@@ -432,8 +463,10 @@ impl App {
     /// the pane under the cursor.
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         let (x, y) = (mouse.column, mouse.row);
+        self.last_mouse = Some((x, y));
 
-        // The launcher owns the mouse while open.
+        // The launcher owns the mouse while open: hovering a row selects
+        // it, clicking launches it.
         if let Mode::Launch(state) = &mut self.mode {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -448,6 +481,21 @@ impl App {
                     } else if !launcher.contains(self.last_area, x, y) {
                         self.mode = Mode::Normal;
                     }
+                }
+                MouseEventKind::Moved => {
+                    let launcher = Launcher::new(&self.launchables, state);
+                    let item = launcher.item_at(self.last_area, x, y);
+                    if let Some(index) = item {
+                        state.select(index);
+                    }
+                    set_pointer(
+                        &mut self.pointer,
+                        if item.is_some() {
+                            Pointer::Hand
+                        } else {
+                            Pointer::Default
+                        },
+                    );
                 }
                 MouseEventKind::ScrollDown => state.select_next(&self.launchables),
                 MouseEventKind::ScrollUp => state.select_prev(&self.launchables),
@@ -508,6 +556,10 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => self.dragging = None,
+            MouseEventKind::Moved => {
+                let shape = self.pointer_shape_at(x, y);
+                set_pointer(&mut self.pointer, shape);
+            }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let hit = hit_test(
                     self.last_area,
@@ -532,6 +584,40 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// The pointer shape for the position: a hand over anything clickable,
+    /// resize arrows over a draggable divider, an I-beam over terminal
+    /// content. Buttons win over dividers — a ✕ that shares a divider row
+    /// still reads as a button.
+    fn pointer_shape_at(&self, x: u16, y: u16) -> Pointer {
+        let hit = hit_test(
+            self.last_area,
+            &self.session,
+            self.side,
+            &self.last_entries,
+            x,
+            y,
+        );
+        if matches!(
+            hit,
+            Hit::PaneClose(_) | Hit::SidebarNewAgent | Hit::SidebarEntry(_)
+        ) {
+            return Pointer::Hand;
+        }
+        let panes = panes_area(self.last_area, self.side);
+        if x >= panes.x && y >= panes.y && x < panes.x + panes.width && y < panes.y + panes.height {
+            if let Some(direction) =
+                self.session
+                    .divider_at(panes.width, panes.height, x - panes.x, y - panes.y)
+            {
+                return match direction {
+                    SplitDirection::Horizontal => Pointer::ResizeEw,
+                    SplitDirection::Vertical => Pointer::ResizeNs,
+                };
+            }
+        }
+        pointer_for(hit)
     }
 
     /// Start `command` in a new pane: split the focused pane along its
@@ -665,6 +751,20 @@ impl App {
 
 fn is_prefix(key: &KeyEvent) -> bool {
     key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+/// Tell the terminal which pointer to show (OSC 22, the xterm pointer-shape
+/// protocol), skipping the write when the shape hasn't changed. Terminals
+/// without support ignore the sequence.
+fn set_pointer(current: &mut Pointer, shape: Pointer) {
+    use std::io::Write;
+    if *current == shape {
+        return;
+    }
+    *current = shape;
+    let mut out = io::stdout();
+    let _ = write!(out, "\x1b]22;{}\x07", shape.name());
+    let _ = out.flush();
 }
 
 /// The user's shell, for panes roster opens itself.
