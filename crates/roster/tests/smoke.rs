@@ -332,11 +332,19 @@ fn exited_pane_stays_until_closed() {
 }
 
 /// Create an executable fake agent named `claude` that shows a blocked
-/// prompt, and return the directory holding it.
+/// prompt, and return the directory holding it. Each call gets its own
+/// directory: tests run concurrently in one process, and on Linux exec'ing
+/// a script another test is rewriting fails with ETXTBSY.
 fn fake_agent_dir() -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let dir = std::env::temp_dir().join(format!("roster-smoke-{}", std::process::id()));
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "roster-smoke-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&dir).expect("create fake agent dir");
     let script = dir.join("claude");
     std::fs::write(
