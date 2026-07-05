@@ -1,6 +1,6 @@
 [package]
 name = "roster"
-description = "Agent-aware terminal multiplexer: run coding agents in panes, see who needs you and why"
+description = "Terminal multiplexer for coding agents"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

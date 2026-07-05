@@ -339,7 +339,10 @@ fn welcome_screen_shows_wordmark_picker_and_any_command_hint() {
     // The solid-fill wordmark, tagline, picker, and the any-command hint
     // all render.
     assert!(all.contains("7Mb,od8"), "screen:\n{all}");
-    assert!(all.contains("run your coding agents"), "screen:\n{all}");
+    assert!(
+        all.contains("terminal multiplexer for coding agents"),
+        "screen:\n{all}"
+    );
     assert!(all.contains("claude-code"), "screen:\n{all}");
     assert!(all.contains("type any command"), "screen:\n{all}");
     // Nothing else on screen: no modal chrome, no sidebar, no status
@@ -386,13 +389,30 @@ fn welcome_wordmark_reveals_with_the_tick() {
     };
 
     // At tick 0 none of the wordmark is on screen; by tick 2 its leading
-    // columns are; late ticks show the whole mark.
+    // columns are; late ticks show the whole mark. (Checked across a few
+    // beats — the ambient flicker may perturb any single frame.)
     assert!(!draw(0).contains("7Mb"), "tick 0 leaked wordmark");
     assert!(draw(2).contains("7Mb"), "tick 2 missing leading columns");
-    let full = draw(50);
-    assert!(full.contains("`Mbmo`Mbmmd'"), "tick 50 incomplete:\n{full}");
+    assert!(
+        (48..64).any(|t| draw(t).contains("`Mbmo`Mbmmd'")),
+        "wordmark never fully revealed"
+    );
     // The picker is usable from the first frame regardless.
     assert!(draw(0).contains("claude-code"), "picker not immediate");
+
+    // The ambient flicker: stand-in glyphs (never part of the wordmark)
+    // blink in and out across beats, only inside the revealed mark.
+    let flickered = |s: &str| s.chars().any(|c| "*+~#".contains(c));
+    assert!(
+        (20..44).any(|t| flickered(&draw(t))),
+        "no flicker across two dozen ticks"
+    );
+    assert!(!flickered(&draw(0)), "flicker outside the revealed mark");
+    // Beats change what flickers: consecutive beats differ somewhere.
+    assert!(
+        (48..64).any(|t| draw(t) != draw(t + 2)),
+        "animation is static"
+    );
 }
 
 #[test]

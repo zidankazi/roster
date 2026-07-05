@@ -139,6 +139,27 @@ const WORDMARK: [&str; 7] = [
 /// Rows from the greeting block's top to its first item row: wordmark,
 /// blank, tagline, blank, input.
 const GREETING_ITEMS_OFFSET: u16 = WORDMARK.len() as u16 + 4;
+
+/// Stand-in glyphs a flickering wordmark cell shows for a beat. None of
+/// these occur in [`WORDMARK`], so tests can spot a flicker.
+const FLICKER_GLYPHS: [char; 4] = ['*', '+', '~', '#'];
+
+/// The ambient flicker: a deterministic hash decides, per wordmark cell
+/// and per animation beat, whether the cell briefly shows a stand-in glyph
+/// — like a lightbulb with a loose filament. Roughly one cell in 60
+/// flickers on any beat; beats advance every other tick (~4/s).
+fn flicker(col: usize, row: usize, tick: u64) -> Option<char> {
+    let beat = tick / 2;
+    let mut h = beat
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add((col as u64) << 17)
+        .wrapping_add((row as u64) << 41);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    h ^= h >> 29;
+    h.is_multiple_of(60)
+        .then(|| FLICKER_GLYPHS[((h / 60) % FLICKER_GLYPHS.len() as u64) as usize])
+}
 /// Rows from the modal's top to its first item row: border + input.
 const MODAL_ITEMS_OFFSET: u16 = 2;
 
@@ -259,21 +280,26 @@ impl Widget for Launcher<'_> {
                     if col as u16 >= revealed || ch == ' ' {
                         continue;
                     }
+                    let mut glyph = ch;
                     let mut style = Style::default().fg(ACCENT);
                     if revealed >= mark_width && (0..6).contains(&(col as i32 - shine)) {
                         style = Style::default()
                             .fg(ratatui::style::Color::White)
                             .add_modifier(Modifier::BOLD);
                     }
+                    if let Some(stand_in) = flicker(col, row, self.tick) {
+                        glyph = stand_in;
+                        style = Style::default().fg(ACCENT).add_modifier(Modifier::DIM);
+                    }
                     let (x, y) = (mark_x + col as u16, modal.y + row as u16);
                     if let Some(cell) = buf.cell_mut((x, y)) {
-                        cell.set_char(ch);
+                        cell.set_char(glyph);
                         cell.set_style(style);
                     }
                 }
             }
             y += WORDMARK.len() as u16 + 1;
-            let tagline = "run your coding agents — see who needs you";
+            let tagline = "terminal multiplexer for coding agents";
             let tag_x = modal.x + (modal.width.saturating_sub(tagline.chars().count() as u16)) / 2;
             buf.set_stringn(
                 tag_x,

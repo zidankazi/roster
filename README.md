@@ -1,6 +1,6 @@
 # roster
 
-An agent-aware terminal multiplexer. Run your coding agents — Claude Code, Codex,
+A terminal multiplexer for coding agents. Run them — Claude Code, Codex,
 Aider — in real terminal panes, and see at a glance which one is 🔴 blocked,
 🟡 working, 🔵 done, or 🟢 idle, **plus what each one is waiting on**.
 
