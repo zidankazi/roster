@@ -5,13 +5,14 @@ Aider — in real terminal panes, and see at a glance which one is 🔴 blocked,
 🟡 working, 🔵 done, or 🟢 idle, **plus what each one is waiting on**.
 
 ```
- roster                1 blocked │ ● claude-code        │ ● codex
-─────────────────────────────────│ ✳ Compiling…         │ Do you want to proceed?
- ● codex                     30s │                      │ ❯ 1. Yes
-   blocked · Approve command?    │ ╭─ new agent ──────╮ │   2. No
- ● claude-code                5s │ │ ❯ cla            │ │
-   working · compiling roster    │ │ ❯ claude-code    │ │
-                                 │ ╰──────────────────╯ │
+ agents               1 blocked │ ⠼ claude-code      ✕ │▎ ◉ codex             ✕
+                                │ ✳ Compiling…         │ Do you want to proceed?
+  ◉ codex                   30s │                      │ ❯ 1. Yes
+    blocked · Approve command?  │ ╭─ new agent ──────╮ │   2. No
+  ⠼ claude-code              5s │ │ ❯ cla            │ │
+    working · compiling roster  │ │ ❯ claude-code    │ │
+                                │ ╰──────────────────╯ │
+ + new agent                    │                      │
 ```
 
 The sidebar rolls every agent up to a colored glyph — blocked and done float
@@ -19,13 +20,19 @@ to the top so whoever needs you is always in view — and, unlike a bare status
 dot, shows **the reason**: the exact prompt an agent is blocked on. Every pane
 gets a title bar with its agent's live state; the focused pane is highlighted.
 
-Start bare and pick agents interactively — `roster` greets you with the
-launcher; `ctrl-b c` opens it any time. Type to filter the configured agents,
-or type any command to run it in a new pane. `ctrl-b j` jumps via the sidebar.
+**Use it like an app — no hotkeys to learn.** Every action is a visible click
+target: click a pane to focus it, a sidebar card to jump to that agent, the
+pinned **+ new agent** button to open the launcher, a title bar's **✕** to
+close that pane. Drag the dividers to resize, and scroll the pane under your
+cursor. Closing the last pane quits.
 
-**Mouse-native:** click any pane to focus it, click a sidebar card to jump to
-that agent, click launcher rows to launch, drag pane dividers to resize, and
-scroll the pane under your cursor. Keyboard equivalents exist for everything.
+Start bare — `roster` greets you with the launcher. Type to filter the
+configured agents, click a row (or press enter) to launch, or type any
+command to run it in a new pane.
+
+Keyboard equivalents exist for everything (`ctrl-b` is the prefix — `c` new
+agent, `j` jump, `o` focus, `x` close, `q` quit); the status bar keeps the
+hints on screen.
 
 ## How it compares
 
