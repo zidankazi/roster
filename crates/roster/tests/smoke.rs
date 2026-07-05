@@ -199,7 +199,7 @@ fn mouse_clicks_focus_launch_and_jump() {
 
     // The second command has focus at startup; the status line names it.
     assert!(
-        drain_until(&mut screen, "sleep 70   ctrl-b", &rx),
+        drain_until(&mut screen, "sleep 70   click", &rx),
         "first frame:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -208,7 +208,7 @@ fn mouse_clicks_focus_launch_and_jump() {
     // focus follows the mouse click.
     pty.write(&click(40, 10)).expect("click left pane");
     assert!(
-        drain_until(&mut screen, "sleep 60   ctrl-b", &rx),
+        drain_until(&mut screen, "sleep 60   click", &rx),
         "click did not focus the left pane:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -244,11 +244,12 @@ fn mouse_clicks_focus_launch_and_jump() {
         screen.grid().lines().get(5)
     );
 
-    // ctrl-b c opens the launcher; click the claude-code row to launch it.
-    // Modal at 120x30: width 44 → x 38..82; height 8 → y 7..15 (0-based);
-    // items start at y 9, claude-code is the second row → y 10 → 1-based 11.
-    pty.write(&[0x02]).expect("prefix");
-    pty.write(b"c").expect("open launcher");
+    // The sidebar's pinned + new agent button (bottom sidebar row, 0-based
+    // y 28 → 1-based 29) opens the launcher; click the claude-code row to
+    // launch it. Modal at 120x30: width 44 → x 38..82; height 8 → y 7..15
+    // (0-based); items start at y 9, claude-code is the second row → y 10
+    // → 1-based 11.
+    pty.write(&click(5, 29)).expect("click + new agent");
     assert!(
         drain_until(&mut screen, "new agent", &rx),
         "launcher never opened:\n{}",
@@ -265,13 +266,13 @@ fn mouse_clicks_focus_launch_and_jump() {
     // 1-based) after clicking back into a shell pane first.
     pty.write(&click(40, 10)).expect("refocus shell");
     assert!(
-        drain_until(&mut screen, "sleep 60   ctrl-b", &rx),
+        drain_until(&mut screen, "sleep 60   click", &rx),
         "refocus failed:\n{}",
         screen.grid().lines().join("\n")
     );
     pty.write(&click(5, 3)).expect("click sidebar card");
     assert!(
-        drain_until(&mut screen, "claude   ctrl-b", &rx),
+        drain_until(&mut screen, "claude   click", &rx),
         "sidebar click did not jump to the agent:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -324,9 +325,10 @@ fn exited_pane_stays_until_closed() {
         screen.grid().lines().join("\n")
     );
 
-    // Closing the only (exited) pane ends the session.
-    pty.write(&[0x02]).expect("write prefix");
-    pty.write(b"x").expect("write x");
+    // Clicking the title's ✕ closes the only (exited) pane and ends the
+    // session. 100x24 frame: single pane content width 68 → ✕ target at
+    // absolute cols 97..100, title row 0 → 1-based (98, 1).
+    pty.write(&click(98, 1)).expect("click ✕");
     let status = pty.wait().expect("wait");
     assert!(status.success, "roster exited with failure: {status:?}");
 }

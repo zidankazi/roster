@@ -8,17 +8,24 @@ use ratatui::layout::Rect;
 use roster_core::{PaneId, Session};
 
 use crate::sidebar::SidebarEntry;
-use crate::{content_rect, local_panes, panes_area, sidebar_inner, SidebarSide, STATUS_HEIGHT};
+use crate::{
+    close_button_cols, local_panes, panes_area, sidebar_button_row, sidebar_inner, SidebarSide,
+    STATUS_HEIGHT,
+};
 
 /// What a screen position corresponds to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
     /// A sidebar agent card.
     SidebarEntry(usize),
+    /// The sidebar's pinned `+ new agent` button.
+    SidebarNewAgent,
     /// Sidebar background (header, spacers, rule).
     Sidebar,
     /// A pane's title bar.
     PaneTitle(PaneId),
+    /// A pane title's `✕` close button.
+    PaneClose(PaneId),
     /// A pane's content area (or its separator column).
     Pane(PaneId),
     /// The status line.
@@ -45,7 +52,19 @@ pub fn hit_test(
 
     let bar = sidebar_inner(area, side);
     if x >= bar.x && x < bar.x + bar.width && y >= bar.y && y < bar.y + bar.height {
-        return match sidebar_entry_at(bar, entries, session.window_count(), y) {
+        // Mirror render: the bottom two rows belong to the pinned button
+        // and its breathing row, not to agent cards.
+        let mut cards = bar;
+        if sidebar_button_row(area, side) == Some(y) {
+            return Hit::SidebarNewAgent;
+        }
+        if sidebar_button_row(area, side).is_some() {
+            cards.height = cards.height.saturating_sub(2);
+        }
+        if y >= cards.y + cards.height {
+            return Hit::Sidebar;
+        }
+        return match sidebar_entry_at(cards, entries, session.window_count(), y) {
             Some(index) => Hit::SidebarEntry(index),
             None => Hit::Sidebar,
         };
@@ -58,11 +77,12 @@ pub fn hit_test(
         for (id, rect) in session.layout(panes.width, panes.height) {
             if lx >= rect.x && lx < rect.x + rect.width && ly >= rect.y && ly < rect.y + rect.height
             {
-                let content = content_rect(rect, local);
                 return if rect.height >= 2 && ly == rect.y {
-                    Hit::PaneTitle(id)
+                    match close_button_cols(rect, local) {
+                        Some(cols) if cols.contains(&lx) => Hit::PaneClose(id),
+                        _ => Hit::PaneTitle(id),
+                    }
                 } else {
-                    let _ = content;
                     Hit::Pane(id)
                 };
             }
@@ -149,6 +169,16 @@ mod tests {
             hit_test(area, &session, SidebarSide::Left, &entries, 5, 29),
             Hit::Status
         );
+        // The pinned + new agent button owns the sidebar's bottom row; the
+        // breathing row above it is background.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, 5, 28),
+            Hit::SidebarNewAgent
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, 5, 27),
+            Hit::Sidebar
+        );
     }
 
     #[test]
@@ -175,6 +205,40 @@ mod tests {
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, 80, 20),
             Hit::Pane(right_id)
+        );
+    }
+
+    #[test]
+    fn title_close_buttons_resolve_at_the_right_edge() {
+        let (session, entries) = setup();
+        let area = Rect::new(0, 0, 120, 30);
+        let panes = session.layout(88, 29);
+        let (left_id, right_id) = (panes[0].0, panes[1].0);
+
+        // Left pane: local rect 0..44, content width 43 (separator column),
+        // so the ✕ target is local cols 40..43 → absolute 72..75.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, 72, 0),
+            Hit::PaneClose(left_id)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, 74, 0),
+            Hit::PaneClose(left_id)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, 71, 0),
+            Hit::PaneTitle(left_id)
+        );
+        // Below the title row the same columns are pane content.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, 74, 5),
+            Hit::Pane(left_id)
+        );
+        // Right pane: local rect 44..88, content width 44 (touches the
+        // edge), ✕ target local 85..88 → absolute 117..120.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, 118, 0),
+            Hit::PaneClose(right_id)
         );
     }
 

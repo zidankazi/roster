@@ -117,6 +117,12 @@ fn panes_get_title_bars_and_content_shifts_down() {
     assert_eq!(buf.cell((31, 0)).unwrap().symbol(), "│");
     assert_eq!(buf.cell((31, 9)).unwrap().symbol(), "│");
     assert!(region_text(&buf, 0, 80, 11).contains("ctrl-b"));
+
+    // Mouse-first chrome: the pinned + new agent button on the sidebar's
+    // bottom row, and a ✕ close button at each title's right edge.
+    assert_eq!(region_text(&buf, 0, 31, 10).trim(), "+ new agent");
+    assert_eq!(buf.cell((53, 0)).unwrap().symbol(), "✕");
+    assert_eq!(buf.cell((78, 0)).unwrap().symbol(), "✕");
 }
 
 #[test]
@@ -191,7 +197,7 @@ fn exited_pane_notice_and_title_marker() {
     assert!(title.contains("exited"), "title: {title}");
     let notice = region_text(&buf, 32, 80, 8);
     assert!(
-        notice.starts_with(" exited (3) — ctrl-b x to close"),
+        notice.starts_with(" exited (3) — click ✕ to close"),
         "notice: {notice}"
     );
 

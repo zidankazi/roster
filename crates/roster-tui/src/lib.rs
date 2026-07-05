@@ -113,6 +113,23 @@ pub fn sidebar_inner(frame_area: Rect, side: SidebarSide) -> Rect {
     }
 }
 
+/// The sidebar row hosting the pinned `+ new agent` button, when the
+/// sidebar is tall enough to spare it. The button is the mouse-first way
+/// into the launcher; `render` draws it and `hit_test` targets it.
+pub fn sidebar_button_row(frame_area: Rect, side: SidebarSide) -> Option<u16> {
+    let bar = sidebar_inner(frame_area, side);
+    (bar.height >= 6).then(|| bar.y + bar.height - 1)
+}
+
+/// The columns of a pane's title row occupied by its `✕` close button, in
+/// pane-local coordinates: a 3-column target around the glyph at the
+/// title's right edge. `None` when the title is too narrow to host one.
+pub fn close_button_cols(rect: roster_core::Rect, area: Rect) -> Option<std::ops::Range<u16>> {
+    let content = content_rect(rect, area);
+    (rect.height >= 2 && content.width >= 12)
+        .then(|| rect.x + content.width - 3..rect.x + content.width)
+}
+
 /// The part of a laid-out pane rect its content actually occupies: the top
 /// row is given to the pane's title bar, and one column to a separator on
 /// the right edge when another pane sits beyond it. Stacked panes need no
@@ -181,7 +198,7 @@ pub fn render(frame: &mut Frame, view: &View) {
         frame.render_widget(PaneView::new(grid), content);
 
         if let Some(code) = view.exited.get(&id) {
-            let notice = format!(" exited ({code}) — ctrl-b x to close ");
+            let notice = format!(" exited ({code}) — click ✕ to close ");
             let y = content.y + content.height.saturating_sub(1);
             frame.buffer_mut().set_stringn(
                 content.x,
@@ -211,6 +228,20 @@ pub fn render(frame: &mut Frame, view: &View) {
             cell.set_style(Style::default().add_modifier(Modifier::DIM));
         }
     }
+    let mut cards = bar_inner;
+    if let Some(button_y) = sidebar_button_row(area, view.side) {
+        // Keep the cards clear of the button and its breathing row.
+        cards.height = cards.height.saturating_sub(2);
+        frame.buffer_mut().set_stringn(
+            bar_inner.x + 1,
+            button_y,
+            "+ new agent",
+            usize::from(bar_inner.width.saturating_sub(1)),
+            Style::default()
+                .fg(style::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
     frame.render_widget(
         Sidebar::new(
             view.entries,
@@ -218,7 +249,7 @@ pub fn render(frame: &mut Frame, view: &View) {
             view.session.window_count(),
             view.tick,
         ),
-        bar_inner,
+        cards,
     );
 
     draw_status(frame.buffer_mut(), area, view);
@@ -284,13 +315,28 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
     } else {
         Style::default().add_modifier(Modifier::DIM)
     };
+    // Leave room for the ✕ close button at the right edge when it fits.
+    let close = span.width >= 12;
+    let text_width = if close {
+        span.width.saturating_sub(8)
+    } else {
+        span.width.saturating_sub(5)
+    };
     buf.set_stringn(
         span.x + 4,
         span.y,
         text,
-        usize::from(span.width.saturating_sub(5)),
+        usize::from(text_width),
         text_style,
     );
+    if close {
+        buf.set_string(
+            span.x + span.width - 2,
+            span.y,
+            "✕",
+            Style::default().add_modifier(Modifier::DIM),
+        );
+    }
 }
 
 fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {

@@ -395,8 +395,10 @@ impl App {
     }
 
     /// Translate mouse input into the same intents keys produce: click a
-    /// sidebar card to jump, a pane to focus it, a launcher row to launch;
-    /// drag a divider to resize; scroll to nudge the pane under the cursor.
+    /// sidebar card to jump, a pane to focus it, the pinned `+ new agent`
+    /// button to open the launcher, a title's `✕` to close its pane, a
+    /// launcher row to launch; drag a divider to resize; scroll to nudge
+    /// the pane under the cursor.
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         let (x, y) = (mouse.column, mouse.row);
 
@@ -439,6 +441,10 @@ impl App {
                             self.session.focus(entry.pane);
                         }
                     }
+                    Hit::SidebarNewAgent => {
+                        self.mode = Mode::Launch(LauncherState::new());
+                    }
+                    Hit::PaneClose(id) => self.close_pane(id),
                     Hit::PaneTitle(id) | Hit::Pane(id) => {
                         self.session.focus(id);
                         // Title rows and separator columns double as split
@@ -480,7 +486,7 @@ impl App {
                     x,
                     y,
                 );
-                if let Hit::Pane(id) | Hit::PaneTitle(id) = hit {
+                if let Hit::Pane(id) | Hit::PaneTitle(id) | Hit::PaneClose(id) = hit {
                     let bytes: &[u8] = if mouse.kind == MouseEventKind::ScrollUp {
                         b"\x1b[A\x1b[A\x1b[A"
                     } else {
@@ -578,7 +584,9 @@ impl App {
                     .unwrap_or("");
                 (
                     None,
-                    format!("{focused}   ctrl-b: c new · j jump · o focus · x close · q quit"),
+                    format!(
+                        "{focused}   click a pane to focus · ✕ closes · drag borders to resize · ctrl-b for keys"
+                    ),
                 )
             }
             Mode::Prefix => (
@@ -592,7 +600,7 @@ impl App {
             ),
             Mode::Launch(_) => (
                 Some("LAUNCH"),
-                "type to filter or enter a command · ↑/↓ select · enter: launch · esc: cancel"
+                "type to filter or any command · click or ↑/↓ + enter to launch · esc: cancel"
                     .to_string(),
             ),
         }
