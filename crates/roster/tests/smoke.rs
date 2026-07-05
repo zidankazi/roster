@@ -522,10 +522,20 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
         false
     };
 
-    // Bare `roster` greets with the launcher over a placeholder shell.
+    // Bare `roster` opens the welcome screen: wordmark + picker + the
+    // any-command hint.
     assert!(
-        drain_until(&mut screen, "new agent", &rx),
-        "launcher never greeted:\n{}",
+        drain_until(&mut screen, "type any command", &rx),
+        "welcome screen never appeared:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert!(
+        screen
+            .grid()
+            .lines()
+            .iter()
+            .any(|l| l.contains(r"| '__/ _ \/ __| __/ _ \ '__|")),
+        "no wordmark:\n{}",
         screen.grid().lines().join("\n")
     );
 

@@ -70,6 +70,7 @@ fn panes_get_title_bars_and_content_shifts_down() {
         zoomed: false,
         side: SidebarSide::Left,
         launcher: None,
+        welcome: false,
         mode_badge: None,
         status: "hints with ctrl-b",
         tick: 0,
@@ -161,6 +162,7 @@ fn hover_lights_up_interactive_chrome() {
             zoomed: false,
             side: SidebarSide::Left,
             launcher: None,
+            welcome: false,
             mode_badge: None,
             status: "",
             tick: 0,
@@ -226,6 +228,7 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
         zoomed: true,
         side: SidebarSide::Left,
         launcher: None,
+        welcome: false,
         mode_badge: Some("SOLO"),
         status: "click agents on the left to switch",
         tick: 0,
@@ -280,6 +283,7 @@ fn launcher_modal_overlays_the_frame() {
         zoomed: false,
         side: SidebarSide::Left,
         launcher: Some((&items, &state)),
+        welcome: false,
         mode_badge: Some("LAUNCH"),
         status: "type to filter",
         tick: 0,
@@ -295,6 +299,53 @@ fn launcher_modal_overlays_the_frame() {
     assert!(all.contains("new agent"), "missing modal title:\n{all}");
     assert!(all.contains("claude-code"), "missing item:\n{all}");
     assert!(all.contains("shell"), "missing shell item:\n{all}");
+}
+
+#[test]
+fn welcome_screen_shows_wordmark_picker_and_any_command_hint() {
+    let session = Session::new();
+    let only = session.focused().unwrap();
+    let mut grids = HashMap::new();
+    grids.insert(only, Grid::from_text("zidan@mac ~ %"));
+
+    let detector = Detector::builtin();
+    let exited = HashMap::new();
+    let items = launch_items(&detector, "/bin/zsh");
+    let state = LauncherState::new();
+    let view = View {
+        session: &session,
+        grids: &grids,
+        exited: &exited,
+        entries: &[],
+        selected: None,
+        hover: None,
+        zoomed: false,
+        side: SidebarSide::Left,
+        launcher: Some((&items, &state)),
+        welcome: true,
+        mode_badge: Some("LAUNCH"),
+        status: "type to filter",
+        tick: 0,
+    };
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    terminal.draw(|frame| render(frame, &view)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    let all: String = (0..24)
+        .map(|y| region_text(&buf, 0, 100, y) + "\n")
+        .collect();
+
+    // The wordmark, tagline, picker, and the any-command hint all render.
+    assert!(
+        all.contains(r"| '__/ _ \/ __| __/ _ \ '__|"),
+        "screen:\n{all}"
+    );
+    assert!(all.contains("run your coding agents"), "screen:\n{all}");
+    assert!(all.contains("claude-code"), "screen:\n{all}");
+    assert!(all.contains("type any command"), "screen:\n{all}");
+    // No modal chrome, and the placeholder shell's prompt is hidden.
+    assert!(!all.contains("new agent ─"), "screen:\n{all}");
+    assert!(!all.contains("zidan@mac"), "screen:\n{all}");
 }
 
 #[test]
@@ -319,6 +370,7 @@ fn exited_pane_notice_and_title_marker() {
         zoomed: false,
         side: SidebarSide::Left,
         launcher: None,
+        welcome: false,
         mode_badge: Some("PREFIX"),
         status: "hints",
         tick: 0,

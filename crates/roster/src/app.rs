@@ -264,6 +264,7 @@ impl App {
                 zoomed: self.zoomed,
                 side: self.side,
                 launcher,
+                welcome: self.placeholder.is_some(),
                 mode_badge,
                 status: &status,
                 // ~8 spinner frames per second, derived from wall time so
@@ -491,24 +492,32 @@ impl App {
 
         // The launcher owns the mouse while open: hovering a row selects
         // it, clicking launches it.
+        let welcome = self.placeholder.is_some();
+        // The welcome screen lays out against the pane region; the modal
+        // against the whole frame. Hit-testing must match render.
+        let launch_area = if welcome {
+            panes_area(self.last_area, self.side)
+        } else {
+            self.last_area
+        };
         if let Mode::Launch(state) = &mut self.mode {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
-                    let launcher = Launcher::new(&self.launchables, state);
-                    if let Some(index) = launcher.item_at(self.last_area, x, y) {
+                    let launcher = Launcher::new(&self.launchables, state).welcome(welcome);
+                    if let Some(index) = launcher.item_at(launch_area, x, y) {
                         state.select(index);
                         let command = state.command(&self.launchables);
                         self.mode = Mode::Normal;
                         if let Some(command) = command {
                             self.launch(&command);
                         }
-                    } else if !launcher.contains(self.last_area, x, y) {
+                    } else if !launcher.contains(launch_area, x, y) {
                         self.mode = Mode::Normal;
                     }
                 }
                 MouseEventKind::Moved => {
-                    let launcher = Launcher::new(&self.launchables, state);
-                    let item = launcher.item_at(self.last_area, x, y);
+                    let launcher = Launcher::new(&self.launchables, state).welcome(welcome);
+                    let item = launcher.item_at(launch_area, x, y);
                     if let Some(index) = item {
                         state.select(index);
                     }

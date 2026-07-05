@@ -32,9 +32,12 @@ to flip between agents. Switch layouts with the `grid · solo` control at the
 bottom of the sidebar (it appears once there's more than one pane), or
 double-click any pane's title bar to toggle solo, like maximizing a window.
 
-Start bare — `roster` greets you with the launcher. Type to filter the
-configured agents, click a row (or press enter) to launch, or type any
-command to run it in a new pane.
+Start bare — `roster` opens a welcome screen: the wordmark over an agent
+picker. Click a row (or type to filter and press enter) and that agent takes
+over the window. **Any agent works**: type any command — `gemini`,
+`npx my-agent`, whatever — and enter runs it in a pane. Agents defined in
+`agents.toml` (`roster --print-config` shows the format) get named cards and
+state detection on top.
 
 Keyboard equivalents exist for everything (`ctrl-b` is the prefix — `c` new
 agent, `z` solo, `j` jump, `o` focus, `x` close, `q` quit); the status bar

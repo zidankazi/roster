@@ -124,43 +124,95 @@ impl LauncherState {
     }
 }
 
-/// The launcher modal widget, drawn centered inside a given area.
+/// The ASCII wordmark shown on the bare-start welcome screen.
+const WORDMARK: [&str; 5] = [
+    r"                _            ",
+    r" _ __ ___  ___| |_ ___ _ __  ",
+    r"| '__/ _ \/ __| __/ _ \ '__| ",
+    r"| | | (_) \__ \ ||  __/ |    ",
+    r"|_|  \___/|___/ \__\___|_|   ",
+];
+
+/// Rows from the greeting block's top to its first item row: wordmark,
+/// blank, tagline, blank, input.
+const GREETING_ITEMS_OFFSET: u16 = WORDMARK.len() as u16 + 4;
+/// Rows from the modal's top to its first item row: border + input.
+const MODAL_ITEMS_OFFSET: u16 = 2;
+
+/// The launcher widget: a compact centered modal mid-session, or — with
+/// [`Launcher::welcome`] — the bare-start opening screen, with the ASCII
+/// wordmark over the same picker.
 pub struct Launcher<'a> {
     items: &'a [LaunchItem],
     state: &'a LauncherState,
+    welcome: bool,
 }
 
 impl<'a> Launcher<'a> {
     /// A launcher over `items` with the current input `state`.
     pub fn new(items: &'a [LaunchItem], state: &'a LauncherState) -> Self {
-        Launcher { items, state }
+        Launcher {
+            items,
+            state,
+            welcome: false,
+        }
     }
 
-    /// The centered rect the modal occupies within `area`.
+    /// Render as the bare-start welcome screen instead of the modal.
+    pub fn welcome(mut self, on: bool) -> Self {
+        self.welcome = on;
+        self
+    }
+
+    fn items_offset(&self) -> u16 {
+        if self.welcome {
+            GREETING_ITEMS_OFFSET
+        } else {
+            MODAL_ITEMS_OFFSET
+        }
+    }
+
+    /// The centered rect the launcher occupies within `area`.
     pub fn modal_rect(&self, area: Rect) -> Rect {
-        let width = 44u16.min(area.width.saturating_sub(2)).max(20);
-        let rows = self.state.filtered(self.items).len() as u16;
-        // border + title + input + rows + border
-        let height = (rows + 4).clamp(5, area.height.saturating_sub(2).max(5));
+        let rows = (self.state.filtered(self.items).len() as u16).max(1);
+        let (width, height) = if self.welcome {
+            // wordmark + tagline + input + items + hint block
+            (48u16, self.items_offset() + rows + 3)
+        } else {
+            // border + title + input + rows + border
+            (44u16, rows + 4)
+        };
+        let width = width.min(area.width.saturating_sub(2)).max(20);
+        let height = height.clamp(5, area.height.saturating_sub(2).max(5));
         let x = area.x + (area.width.saturating_sub(width)) / 2;
         let y = area.y + (area.height.saturating_sub(height)) / 3;
         Rect::new(x, y, width, height)
     }
 
-    /// Whether (`x`, `y`) falls inside the modal.
+    /// Where the terminal cursor belongs: the end of the typed input.
+    pub fn input_position(&self, area: Rect) -> (u16, u16) {
+        let modal = self.modal_rect(area);
+        let input_len = 2 + self.state.input().chars().count() as u16;
+        let y = modal.y + self.items_offset() - 1;
+        (
+            (modal.x + 2 + input_len).min(modal.x + modal.width.saturating_sub(2)),
+            y,
+        )
+    }
+
+    /// Whether (`x`, `y`) falls inside the launcher block.
     pub fn contains(&self, area: Rect, x: u16, y: u16) -> bool {
         let modal = self.modal_rect(area);
         x >= modal.x && x < modal.x + modal.width && y >= modal.y && y < modal.y + modal.height
     }
 
-    /// The filtered item row under (`x`, `y`), when one is there. Item rows
-    /// start below the border and the input line.
+    /// The filtered item row under (`x`, `y`), when one is there.
     pub fn item_at(&self, area: Rect, x: u16, y: u16) -> Option<usize> {
         let modal = self.modal_rect(area);
-        if !self.contains(area, x, y) || y < modal.y + 2 {
+        if !self.contains(area, x, y) || y < modal.y + self.items_offset() {
             return None;
         }
-        let index = usize::from(y - modal.y - 2);
+        let index = usize::from(y - modal.y - self.items_offset());
         let _ = x;
         (index < self.state.filtered(self.items).len()).then_some(index)
     }
@@ -173,11 +225,36 @@ impl Widget for Launcher<'_> {
             return;
         }
         fill(buf, modal);
-        frame(buf, modal, " new agent ");
+        let mut y = modal.y;
+        if self.welcome {
+            // The opening screen: wordmark, tagline, then the picker.
+            let mark_width = WORDMARK[1].trim_end().chars().count() as u16;
+            let mark_x = modal.x + (modal.width.saturating_sub(mark_width)) / 2;
+            for (row, text) in WORDMARK.iter().enumerate() {
+                buf.set_stringn(
+                    mark_x,
+                    modal.y + row as u16,
+                    *text,
+                    usize::from(modal.width),
+                    Style::default().fg(ACCENT),
+                );
+            }
+            y += WORDMARK.len() as u16 + 1;
+            buf.set_stringn(
+                modal.x + 2,
+                y,
+                "run your coding agents — see who needs you",
+                usize::from(modal.width.saturating_sub(4)),
+                Style::default().add_modifier(Modifier::DIM),
+            );
+            y += 2;
+        } else {
+            frame(buf, modal, " new agent ");
+            y += 1;
+        }
 
         let inner_x = modal.x + 2;
         let inner_w = usize::from(modal.width.saturating_sub(4));
-        let mut y = modal.y + 1;
 
         // Input line, prompt-style.
         let input = format!("❯ {}", self.state.input());
@@ -192,6 +269,7 @@ impl Widget for Launcher<'_> {
 
         let filtered = self.state.filtered(self.items);
         let selected = self.state.selected(self.items);
+        let items_bottom = modal.y + self.items_offset() + (filtered.len() as u16).max(1);
         if filtered.is_empty() {
             let typed = self.state.input().trim().to_string();
             let hint = if typed.is_empty() {
@@ -206,10 +284,16 @@ impl Widget for Launcher<'_> {
                 inner_w,
                 Style::default().add_modifier(Modifier::DIM),
             );
-            return;
         }
+        // The modal keeps its bottom border row; the welcome block is
+        // borderless.
+        let rows_bottom = if self.welcome {
+            modal.y + modal.height
+        } else {
+            modal.y + modal.height - 1
+        };
         for (index, item) in filtered.iter().enumerate() {
-            if y >= modal.y + modal.height - 1 {
+            if y >= rows_bottom {
                 break;
             }
             let marker = if selected == Some(index) { "❯" } else { " " };
@@ -241,6 +325,23 @@ impl Widget for Launcher<'_> {
                 );
             }
             y += 1;
+        }
+
+        if self.welcome {
+            // Any command is an agent — say so where new users look first.
+            let hints = [
+                "…or type any command — enter runs it",
+                "add your own cards: roster --print-config",
+            ];
+            for (row, hint) in hints.iter().enumerate() {
+                buf.set_stringn(
+                    inner_x,
+                    items_bottom + 1 + row as u16,
+                    *hint,
+                    inner_w,
+                    Style::default().add_modifier(Modifier::DIM),
+                );
+            }
         }
     }
 }

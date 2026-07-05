@@ -65,6 +65,9 @@ pub struct View<'a> {
     pub side: SidebarSide,
     /// The agent launcher, when open: its items and input state.
     pub launcher: Option<(&'a [LaunchItem], &'a LauncherState)>,
+    /// Bare start: draw the launcher as the full welcome screen (wordmark
+    /// over the picker) instead of the compact modal.
+    pub welcome: bool,
     /// Mode badge for the status line (e.g. `PREFIX`), when one is active.
     pub mode_badge: Option<&'a str>,
     /// Status line text, shown dim after the badge.
@@ -332,15 +335,26 @@ pub fn render(frame: &mut Frame, view: &View) {
     draw_status(frame.buffer_mut(), area, view);
 
     if let Some((items, state)) = view.launcher {
-        let launcher = Launcher::new(items, state);
-        let modal = launcher.modal_rect(area);
+        let launcher = Launcher::new(items, state).welcome(view.welcome);
+        // The welcome screen centers over (and owns) the pane region — the
+        // placeholder shell underneath stays out of sight; the modal
+        // centers over the whole frame.
+        let launch_area = if view.welcome {
+            for y in panes.y..panes.y + panes.height {
+                for x in panes.x..panes.x + panes.width {
+                    if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
+                        cell.reset();
+                    }
+                }
+            }
+            panes
+        } else {
+            area
+        };
         // Cursor follows the launcher's input line.
-        let input_len = 2 + state.input().chars().count() as u16;
-        frame.set_cursor_position(Position::new(
-            (modal.x + 2 + input_len).min(modal.x + modal.width.saturating_sub(2)),
-            modal.y + 1,
-        ));
-        frame.render_widget(launcher, area);
+        let (cursor_x, cursor_y) = launcher.input_position(launch_area);
+        frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+        frame.render_widget(launcher, launch_area);
     }
 }
 
