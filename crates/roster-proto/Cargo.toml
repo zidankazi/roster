@@ -1,0 +1,12 @@
+[package]
+name = "roster-proto"
+description = "Framed client/server protocol for persistent roster sessions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

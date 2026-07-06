@@ -1253,9 +1253,12 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "roster"
 version = "0.0.6"
 dependencies = [
+ "crossterm",
+ "libc",
  "ratatui",
  "roster-core",
  "roster-detect",
+ "roster-proto",
  "roster-pty",
  "roster-term",
  "roster-tui",
@@ -1274,6 +1277,10 @@ dependencies = [
  "serde",
  "toml",
 ]
+
+[[package]]
+name = "roster-proto"
+version = "0.0.6"
 
 [[package]]
 name = "roster-pty"
