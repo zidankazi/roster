@@ -1,6 +1,6 @@
 # 03 — build sequence
 
-*The order to build in, and — per milestone — what's safe to hand agents while you're away versus what needs you at the keyboard. Build bottom-up: you can't detect state until you can parse a screen, and you can't parse a screen until you can spawn a PTY.*
+*The order roster was built in, and — per milestone — what's safe to hand agents while you're away versus what needs you at the keyboard. **Milestones 0–5 and persistence are built; this doc is kept for the layering rationale and the agent-safe/keyboard split, which still govern new work.** Build bottom-up: you can't detect state until you can parse a screen, and you can't parse a screen until you can spawn a PTY.*
 
 ## Milestone 0 — prove the plumbing (keyboard)
 
@@ -23,7 +23,7 @@ Build the multiplexer's brain with no I/O.
 The heart. Build against `Grid` fixtures, not live agents.
 
 - `roster-detect`: agent identification, the four-state classifier, reason extraction, `agents.toml` loading, debouncing. **agent-safe**
-- Capture real screens from Claude Code / Codex / Aider into fixtures; label each with expected `StateReading`; write the test suite as the contract.
+- Capture real screens from Claude Code into fixtures; label each with expected `StateReading`; write the test suite as the contract.
 - **Hand to agents:** yes — this is the single best crate for unattended work. Tight spec (`02-state-detection.md`), tests are the contract, no live process. Have agents expand fixture coverage and tune patterns to green.
 - **You verify:** spot-check that the tuned patterns match reality on your own live agents; fixtures can drift from real behavior.
 
@@ -42,15 +42,15 @@ Tie it together into a running thing.
 - `roster` binary: the event loop (PTY output → term → detect → core → tui), input handling, refresh cadence, jump-to-pane side effects. **keyboard**
 - **Why keyboard:** async plumbing + timing + live terminals. Agents can draft the loop from the data-flow in `00-architecture.md`; you debug it live. This is where the "looks done but isn't" bugs surface.
 
-## Milestone 5 — ship v1
+## Milestone 5 — ship v1 (done)
 
-- Single-command install: static binary, a Homebrew formula, one curl line. `brew install roster`.
-- README with the killer asciinema/gif: 6 agents, glance, jump to the blocked one. **Budget real time for this — the demo is the pitch.**
-- Tune the three shipped agents until the sidebar clears the bar in `02`.
+- Single-command install: static binary, a Homebrew formula, one curl line. `brew install zidankazi/roster/roster`.
+- README with the killer asciinema/gif: several Claude Code agents, glance, jump to the blocked one. **Budget real time for this — the demo is the pitch.**
+- Tune Claude Code detection until the sidebar clears the bar in `02`.
 
-## Explicitly after v1 (not now)
+## What came after v1
 
-Persistence (detach/reattach via a daemon owning the PTYs) is the very next thing — and the biggest keyboard-side lift, since it's the daemon/IPC layer. But it is not v1. Also later: status-line render mode, notifications, and the review surface at the "done" moment (your other wedge, deliberately deferred).
+Persistence (detach/reattach via a background server owning the PTYs, attachable over ssh) shipped — the biggest keyboard-side lift, the daemon/IPC layer in `roster-proto` plus the session server. **Next up is the Claude-native attention layer** ([`05-claude-native-attention.md`](05-claude-native-attention.md)): reading Claude Code's hooks and statusline for exact state, an attention inbox, and answering permission prompts from the sidebar.
 
 ## The unattended-run recipe
 

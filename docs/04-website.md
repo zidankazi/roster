@@ -40,9 +40,9 @@ Plain HTML would ship the landing page faster, but you chose Next.js to leave ro
 
 Keep it to a single focused screen. Order:
 
-1. **Hero:** the positioning line — *"Claude Code awareness for the terminal you already run."* One sentence under it: run Claude Code (and your other agents) in panes, see who's blocked / working / done at a glance, plus what each one needs.
-2. **The demo:** an asciinema recording (preferred over gif — crisp, small, copy-able) of six agents running, the sidebar lighting up, you jumping straight to the blocked one. This is 80% of the page's job. Autoplay, loop, no controls needed.
-3. **Install:** the single line. `brew install roster` (and a curl fallback). Copy button.
+1. **Hero:** the positioning line — *"Claude Code awareness for the terminal you already run."* One sentence under it: run your Claude Code agents in panes, see who's blocked / working / done at a glance, plus what each one needs.
+2. **The demo:** an asciinema recording (preferred over gif — crisp, small, copy-able) of six Claude Code agents running, the sidebar lighting up, you jumping straight to the blocked one. This is 80% of the page's job. Autoplay, loop, no controls needed.
+3. **Install:** the single line. `brew install zidankazi/roster/roster` (and a curl fallback). Copy button.
 4. **The wedge, shown not told:** a tight comparison — bare tmux (no awareness), herdr (a dot), roster (a dot + the reason). Three columns. This is where you make the differentiator legible to someone who's never seen the tool.
 5. **Footer:** GitHub, license, a line of honesty ("v1, built in the open").
 
@@ -51,8 +51,8 @@ Resist a features wall. The demo and the one-line install carry it. If someone w
 ## Build/deploy
 
 - `pnpm dev` locally; static export or Vercel for deploy (Vercel is one click for Next.js and free for this).
-- The domain is part of the pitch — grab it when you lock the name (`roster` alternatives: `standup`, `glance`, `muster`, `lookout`, `vitals` — check npm/crates/GitHub *and* domain availability together).
+- The domain is part of the pitch — grab `roster` across npm/crates/GitHub and the matching domain together.
 
 ## Sequence
 
-Build the site **last**, after v1 works — but record the demo cast the moment the sidebar looks good, because that recording is the single highest-leverage asset in the whole project. A great cast with a rough binary beats a polished binary nobody can see working.
+The binary works; build the site when you're ready to launch — but record the demo cast the moment the sidebar looks good, because that recording is the single highest-leverage asset in the whole project. A great cast with a rough binary beats a polished binary nobody can see working.

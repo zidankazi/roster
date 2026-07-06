@@ -2,13 +2,13 @@
 
 *Read this first. It's the map. Every other doc in `/docs` drills into one piece named here.*
 
-`roster` is a terminal multiplexer built for Claude Code, written in Rust. It runs Claude Code — and other agent CLIs like Codex or Aider — in real terminal panes and surfaces, in a sidebar, which agent is 🔴 blocked / 🟡 working / 🔵 done / 🟢 idle — and **what each one is waiting on**. It never authenticates anyone and never calls a model API; it spawns the user's already-logged-in agents as child processes, exactly as tmux would. Claude Code is the first-class target — the Claude-native attention layer in [`05-claude-native-attention.md`](05-claude-native-attention.md) is the direction; other agents run with their own screen-based detection.
+`roster` is a terminal multiplexer built for Claude Code, written in Rust. It runs Claude Code in real terminal panes and surfaces, in a sidebar, which agent is 🔴 blocked / 🟡 working / 🔵 done / 🟢 idle — and **what each one is waiting on**. It never authenticates anyone and never calls a model API; it spawns the user's already-logged-in Claude Code processes as children, exactly as tmux would. Claude Code is the only shipped agent; the Claude-native attention layer in [`05-claude-native-attention.md`](05-claude-native-attention.md) is where it is headed. (Any command still runs in a pane — it is a real terminal — but Claude Code is what roster detects and is built for.)
 
-## What v1 is (and is not)
+## What roster is (and is not)
 
-**Is:** in-process multiplexer — panes running the user's agents, a live explainable-state sidebar, jump-to-pane, per-agent detection config.
+**Is:** a multiplexer for Claude Code — panes running Claude Code (or any command), a live explainable-state sidebar that shows the reason each agent is blocked, jump-to-pane, and persistent sessions you can detach from and re-attach to over ssh. Detection is screen-based today; reading Claude Code's own hooks and statusline is the committed direction ([`05-claude-native-attention.md`](05-claude-native-attention.md)).
 
-**Is not (v1 non-goals — do not build these yet):** no detach/reattach persistence, no git worktrees, no diff/review UI, no remote/ssh logic of its own, no plugin/socket API, not a security boundary. Persistence is the first thing after v1, but it is *not* v1.
+**Is not:** no git worktrees, no diff/review UI, and — deliberately — no agent-orchestration socket API for agents to drive the multiplexer. That last one is herdr's bet; keeping the human in the cockpit is ours (see docs/05). Not a security boundary: it spawns your already-logged-in agents as child processes, exactly as tmux would.
 
 ## Repo layout
 
@@ -22,6 +22,7 @@ roster/
     roster-term/        # alacritty_terminal wiring: bytes -> screen grid
     roster-core/        # panes, layout tree, session state
     roster-detect/      # agent identification + state heuristics + config
+    roster-proto/       # framed client/server protocol for persistent sessions
     roster-tui/         # ratatui rendering: panes + the sidebar
     roster/             # the binary; wires everything, owns the event loop
   docs/                 # THIS folder — plain .md architecture docs
@@ -47,6 +48,7 @@ The split is not cosmetic. It is the mechanism that lets you hand work to agents
 | `roster-term` | Parse the raw byte stream into a screen grid (via `alacritty_terminal`) | **do-at-keyboard** |
 | `roster-core` | Pane/window/layout model, session state, focus | agent-safe |
 | `roster-detect` | Identify agent panes; classify state; load per-agent config | agent-safe |
+| `roster-proto` | Framed client/server wire protocol for persistent sessions | agent-safe |
 | `roster-tui` | Render panes and the sidebar with `ratatui` | agent-safe |
 | `roster` | The binary: event loop tying PTY output → term → detect → tui | mostly do-at-keyboard |
 

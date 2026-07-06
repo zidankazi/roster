@@ -1,14 +1,13 @@
 # roster
 
-A terminal multiplexer for Claude Code. Run your agents in real terminal
-panes and see at a glance which one is 🔴 blocked, 🟡 working, 🔵 done, or
-🟢 idle, **plus what each one is waiting on**. Codex, Aider, and any other
-command run too — but roster is built around Claude Code.
+A terminal multiplexer for Claude Code. Run several Claude Code agents in
+real terminal panes and see at a glance which one is 🔴 blocked, 🟡 working,
+🔵 done, or 🟢 idle, **plus what each one is waiting on**.
 
 ```
- agents               1 blocked │ ⠼ claude-code      ✕ │▎ ◉ codex             ✕
+ agents               1 blocked │ ⠼ claude-code      ✕ │▎ ◉ claude-code       ✕
                                 │ ✳ Compiling…         │ Do you want to proceed?
-  ◉ codex                   30s │                      │ ❯ 1. Yes
+  ◉ claude-code             30s │                      │ ❯ 1. Yes
     blocked · Approve command?  │ ╭─ new agent ──────╮ │   2. No
   ⠼ claude-code              5s │ │ ❯ cla            │ │
     working · compiling roster  │ │ ❯ claude-code    │ │
@@ -44,11 +43,9 @@ double-click any pane's title bar to toggle solo, like maximizing a window.
 
 Start bare — `roster` opens a welcome screen: the wordmark over an agent
 picker. Click a row (or type to filter and press enter) and that agent takes
-over the window. **Claude Code is first-class, but any command runs**: type
-`gemini`, `npx my-agent`, whatever — and enter runs it in a pane. Agents
-defined in `agents.toml` (`roster --print-config` shows the format) get named
-cards and state detection on top — Claude Code's rules are tuned the most
-carefully.
+over the window. Type `claude` (or any command — it's a real terminal) and
+enter runs it in a pane. Claude Code gets a named card and live state
+detection; anything else just runs.
 
 Each agent launched from the **+ new agent** button opens in its own
 workspace window rather than splitting the current pane. The sidebar groups
@@ -105,13 +102,14 @@ roster attach user@devbox:work   # needs roster installed on devbox
 
 ## Built for Claude Code
 
-roster runs any agent, but it is built around Claude Code. Detection is tuned
-to it first, and the direction is to stop reading the screen and read Claude
-Code's own state instead — its hooks and statusline — for exact *blocked /
-working / done* and the things the screen never shows: context left, cost, and
-the tool it is about to run. That Claude-native attention layer is the roadmap;
+roster is built exclusively for Claude Code — it's the only agent it ships
+detection for. Today that detection reads the screen; the direction is to read
+Claude Code's own state instead — its hooks and statusline — for exact *blocked
+/ working / done* and the things the screen never shows: context left, cost, and
+the tool it's about to run. That Claude-native attention layer is the roadmap;
 [`docs/05-claude-native-attention.md`](docs/05-claude-native-attention.md) is
-the spec. Other agents keep working with screen-based detection.
+the spec. (Any command still runs in a pane — roster is a real terminal — but
+Claude Code is what it detects and is built for.)
 
 ## Two toolchains, one repo
 
@@ -171,7 +169,7 @@ destination.
 
 ```sh
 roster                # start with the launcher, add agents as you go
-roster claude codex   # or give each command its own pane up front
+roster claude claude  # or launch several Claude Code agents up front
 ```
 
 The sidebar shows who's blocked / working / done / idle and why. Keys are
@@ -181,9 +179,9 @@ detection rules live in
 [`crates/roster-detect/agents.toml`](crates/roster-detect/agents.toml) and can
 be overridden at `~/.config/roster/agents.toml`.
 
-Agent detection is tuned first and foremost against **Claude Code 2.1**,
-verified against live sessions; Codex and Aider run too, with their own
-screen-based detection. To customize, start from the built-in config:
+Detection is tuned against **Claude Code 2.1** and verified against live
+sessions. To customize — or add your own agent for a pane — start from the
+built-in config:
 
 ```sh
 roster --print-config > ~/.config/roster/agents.toml

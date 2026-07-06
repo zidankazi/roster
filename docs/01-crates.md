@@ -6,12 +6,12 @@ The dependency direction is strictly one-way, bottom to top. Nothing lower depen
 
 ```
 roster (binary: client, event loop, and the session server)
-  └─ roster-tui ─┐
-  └─ roster-detect ─┐
-  └─ roster-proto ──┤   (framed wire protocol for persistent sessions;
-  └─ roster-core ───┤    depends on nothing)
-       roster-term ─┤   (core/detect/tui depend on the grid type from term,
-       roster-pty ──┘    but NOT on pty — see note in roster-term)
+  ├─ roster-tui     → roster-core, roster-detect
+  ├─ roster-detect  → roster-core
+  ├─ roster-term    → roster-core   (produces the Grid; wraps alacritty_terminal)
+  ├─ roster-proto   → (nothing)     (framed wire protocol for persistent sessions)
+  ├─ roster-pty     → (nothing)
+  └─ roster-core    → (nothing)     (the Grid type + multiplexer model live here)
 ```
 
 ---
@@ -31,7 +31,7 @@ Turns the raw byte stream from a PTY into a structured screen grid. This is the 
 
 - Wrap `alacritty_terminal`'s parser/grid. Feed it bytes; it maintains a grid of cells (glyph + style), a cursor, scrollback, and the alternate-screen buffer (the thing that makes full-screen TUIs render right).
 - Public surface (sketch): `Screen::new(size)`, `screen.advance(bytes)`, `screen.grid() -> &Grid`, `screen.cursor()`, `screen.resize(cols, rows)`.
-- **Critical boundary:** `roster-term` exposes a plain `Grid` type (rows of cells + cursor) that has *no* dependency on `roster-pty`. This is what makes `roster-detect` and `roster-tui` agent-safe — they consume `Grid`, which can be constructed from a fixture in a test with zero PTY or subprocess involved.
+- **Critical boundary:** the `Grid` type (rows of cells + cursor) is a pure model type in `roster-core`; `roster-term` produces one by wrapping `alacritty_terminal`, but the type itself has *no* dependency on `roster-pty` or the emulator. This is what makes `roster-detect` and `roster-tui` agent-safe — they consume `Grid` from `roster-core`, which can be constructed from a fixture in a test with zero PTY or subprocess involved.
 - **Why keyboard:** escape-sequence edge cases, unicode width, scroll regions, and resize reflow are where the long-tail bugs live. Reusing alacritty's parser removes most, but the *integration* (feeding it, handling resize, reading back) needs live terminals to shake out.
 
 ## roster-core — **agent-safe**
@@ -81,4 +81,4 @@ The event loop that ties it together: read PTY output → advance the emulator �
 
 ## The one boundary that matters most
 
-`roster-detect` and `roster-tui` depend on the `Grid` type from `roster-term`, **not** on `roster-pty` and **not** on live processes. Keep that boundary clean and three of your five crates stay fully testable and safe to hand to agents. Break it — let detection reach for a PTY directly — and you lose the entire agent-safe/keyboard split. Guard it.
+`roster-detect` and `roster-tui` consume the `Grid` model type from `roster-core`, **not** from `roster-pty`, `roster-term`, or live processes. Keep that boundary clean and the four agent-safe crates (`roster-core`, `roster-detect`, `roster-proto`, `roster-tui`) stay fully testable and safe to hand to agents. Break it — let detection reach for a PTY directly — and you lose the entire agent-safe/keyboard split. Guard it.

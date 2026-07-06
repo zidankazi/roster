@@ -68,7 +68,7 @@ Claude Code's mode — `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `byp
 
 ## Data model: `StateReading` grows, scraping stays as fallback
 
-Do **not** rip out screen-scraping. It is the correct fallback for non-Claude agents (Codex, Aider, anything in `agents.toml`) and for Claude panes before the hook bridge is wired. Instead, make detection **multi-source** and let the richest available source win per pane.
+Do **not** rip out screen-scraping. It is the current detection for Claude panes and the correct baseline before the hook bridge is wired (and for any non-Claude command a user runs in a pane). Make detection **multi-source** and let the richest available source win per pane — hook/statusline data supersedes the scrape when present.
 
 - Extend `StateReading` ([detector.rs](../crates/roster-detect/src/detector.rs)) with optional structured fields, all `Option`, all defaulting to `None` so scraping-only paths are unaffected. Sourced from hooks: `tool: Option<String>`, `tool_input: Option<String>`, `permission_mode: Option<Mode>`, `blocked_since: Option<Instant>`. Sourced from statusline: `model: Option<String>`, `context_pct: Option<f32>` (the provided `remaining_percentage`), `cost_usd: Option<f32>`, `rate_limit: Option<RateLimit>`. Do not invent fields with no confirmed source — the transcript is off-limits (see the warning above), so anything not in a hook or statusline payload does not exist for us yet.
 - Introduce a **signal-source** notion: a Claude pane prefers the hook/statusline source; every other pane, and any Claude pane with no live bridge data, falls back to the existing classifier. The debouncer in [track.rs](../crates/roster-detect/src/track.rs) still guards scraped signals; **hook events are authoritative and bypass debouncing** (a `Notification` is not a noisy frame — it is a fact).
@@ -113,7 +113,7 @@ Phase 1 alone already makes roster visibly better than herdr on the one thing we
 ## Non-goals and honesty
 
 - **Not an agent-orchestration API.** Herdr lets agents drive the multiplexer (spawn helpers, split panes) over a socket. That is *their* bet — agents watching agents. Ours is the opposite: a human watching agents. Do not drift into building their product. If we ever want an API, it is a separate, later decision.
-- **Do not break the generic path.** Every change here is additive behind `Option`/fallback. A Codex or Aider user, or a Claude user who declines the hook install, must see exactly today's behavior.
+- **Do not break the screen-based path.** Every change here is additive behind `Option`/fallback. A user who declines the hook install — or runs a non-Claude command in a pane — must see exactly today's screen-based behavior.
 - **The moat is only as deep as we go.** Herdr already ships an npm skill; "we have an integration too" is not a moat. The defensibility is specifically the **permission-decision loop + statusline telemetry wired into an attention UI** — answering the actual permission request and ranking a fleet by who needs you, not just mirroring a status dot. That is the Claude-specific depth herdr's breadth-first design will not chase. If we stop at a shallow status echo, we have differentiated nothing.
 - **This narrows the story.** "The Claude Code cockpit" is a smaller target than "multiplex any agent." That is the intended trade. State it plainly in positioning rather than straddling.
 

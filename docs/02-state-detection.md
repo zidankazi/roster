@@ -1,6 +1,6 @@
 # 02 — state detection
 
-*The heart of the product and the differentiator. This is where the effort and the taste go. Everything here lives in `roster-detect` and is fully testable from `Grid` fixtures — no live process required. This doc covers screen-based detection, which works for any agent; for Claude Code — roster's first-class target — the direction is to read its own state (hooks, statusline) instead, see [`05-claude-native-attention.md`](05-claude-native-attention.md).*
+*The heart of the product and the differentiator. This is where the effort and the taste go. Everything here lives in `roster-detect` and is fully testable from `Grid` fixtures — no live process required. This doc covers screen-based detection — how roster reads Claude Code's state today; the committed direction is to read Claude Code's own state (hooks, statusline) instead, see [`05-claude-native-attention.md`](05-claude-native-attention.md).*
 
 ## The state model
 
@@ -44,7 +44,7 @@ For every agent pane, detection produces a `StateReading { state, reason }`:
 
 ## Per-agent config: `agents.toml`
 
-New agents are added as **data, not code**. This file is also your community/star hook — a new-agent contribution is a config PR, not a patch.
+The shipped config is Claude Code only. Detection is still **data, not code** — a user can add their own agents in `~/.config/roster/agents.toml` without touching the classifier — but roster ships and tunes exactly one.
 
 ```toml
 [claude-code]
@@ -58,25 +58,9 @@ idle    = ['│\s*>\s*$']                                     # empty prompt lin
 reason.blocked = "matched_line"   # use the line that matched `blocked`
 reason.working = "last_nonempty"  # last non-empty output line
 done.after_activity_secs = 8      # idle prompt within 8s of activity => done
-
-[codex]
-match_command = ["codex"]
-blocked = ['Approve this command\?', 'Allow\?']
-working = ['Running', '\bthinking\b']
-idle    = ['^\S+ ❯ $']
-reason.blocked = "matched_line"
-done.after_activity_secs = 6
-
-[aider]
-match_command = ["aider"]
-blocked = ['\(Y\)es/\(N\)o', 'Add .* to the chat\?']
-working = ['Applying edit', 'Committing']
-idle    = ['^> $']
-reason.blocked = "matched_line"
-done.after_activity_secs = 5
 ```
 
-roster is built for Claude Code — tune its detection to a mirror shine first; Codex and Aider ship as solid fallbacks, and other agents are a contribution surface. Depth on Claude Code beats breadth across fifteen flaky agents. The deeper move, reading Claude Code's own hooks and statusline instead of screen-scraping, is [`05-claude-native-attention.md`](05-claude-native-attention.md).
+roster ships exactly one agent — Claude Code — tuned to a mirror shine. Depth on Claude Code, not breadth across fifteen flaky agents, is the whole product (docs/05). The deeper move, reading Claude Code's own hooks and statusline instead of screen-scraping, is [`05-claude-native-attention.md`](05-claude-native-attention.md).
 
 ## Testing (why this is agent-safe)
 
