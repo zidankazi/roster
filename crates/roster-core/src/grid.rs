@@ -161,6 +161,38 @@ impl Grid {
             .map(|r| self.row_text(r).expect("row in range"))
             .collect()
     }
+
+    /// The text of a linear (reading-order) selection from `start` to
+    /// `end`, both `(col, row)` inclusive and in either order — the way a
+    /// terminal's click-drag selects. Single-row selections take the cell
+    /// span; multi-row ones take the first row from its column to the end,
+    /// whole rows between, and the last row up to its column. Rows are
+    /// trailing-trimmed and joined with newlines.
+    pub fn linear_text(&self, start: (usize, usize), end: (usize, usize)) -> String {
+        let (mut a, mut b) = (start, end);
+        // Normalize to reading order: (col, row) sorts by row, then col.
+        if (a.1, a.0) > (b.1, b.0) {
+            std::mem::swap(&mut a, &mut b);
+        }
+        let clamp_row = |r: usize| r.min(self.rows.saturating_sub(1));
+        let (a, b) = ((a.0, clamp_row(a.1)), (b.0, clamp_row(b.1)));
+        let row_span = |row: usize, from: usize, to: usize| -> String {
+            let text: String = (from..=to.min(self.cols.saturating_sub(1)))
+                .filter_map(|col| self.cell(col, row))
+                .map(|c| c.ch)
+                .collect();
+            text.trim_end().to_string()
+        };
+        if a.1 == b.1 {
+            return row_span(a.1, a.0.min(b.0), a.0.max(b.0));
+        }
+        let mut out = vec![row_span(a.1, a.0, self.cols.saturating_sub(1))];
+        for row in a.1 + 1..b.1 {
+            out.push(row_span(row, 0, self.cols.saturating_sub(1)));
+        }
+        out.push(row_span(b.1, 0, b.0));
+        out.join("\n")
+    }
 }
 
 #[cfg(test)]
@@ -227,5 +259,35 @@ mod tests {
     fn unicode_glyphs_round_trip() {
         let g = Grid::from_text("❯ done ✓");
         assert_eq!(g.row_text(0).unwrap(), "❯ done ✓");
+    }
+
+    #[test]
+    fn linear_text_selects_within_one_row() {
+        let g = Grid::from_text("hello world");
+        assert_eq!(g.linear_text((6, 0), (10, 0)), "world");
+        // Either direction selects the same span.
+        assert_eq!(g.linear_text((10, 0), (6, 0)), "world");
+        assert_eq!(g.linear_text((0, 0), (0, 0)), "h");
+    }
+
+    #[test]
+    fn linear_text_spans_rows_in_reading_order() {
+        let g = Grid::from_text("first line\nmiddle\nlast line");
+        assert_eq!(
+            g.linear_text((6, 0), (3, 2)),
+            "line\nmiddle\nlast"
+        );
+        // Dragging upward selects the same text.
+        assert_eq!(
+            g.linear_text((3, 2), (6, 0)),
+            "line\nmiddle\nlast"
+        );
+    }
+
+    #[test]
+    fn linear_text_clamps_out_of_range_points() {
+        let g = Grid::from_text("ab\ncd");
+        assert_eq!(g.linear_text((0, 0), (99, 99)), "ab\ncd");
+        assert_eq!(g.linear_text((99, 0), (99, 0)), "");
     }
 }

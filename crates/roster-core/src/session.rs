@@ -3,16 +3,22 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::layout::{layout, LayoutNode, Rect, RemoveOutcome, SplitDirection};
+use crate::layout::{layout, replace_leaf, LayoutNode, Rect, RemoveOutcome, SplitDirection};
 
 /// Stable identifier for a pane, unique within a [`Session`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(u64);
 
 impl PaneId {
-    #[cfg(test)]
-    pub(crate) fn from_raw(raw: u64) -> Self {
+    /// A pane id from its raw value — for adopting panes whose identity is
+    /// decided elsewhere (a session server) and for tests.
+    pub fn from_raw(raw: u64) -> Self {
         PaneId(raw)
+    }
+
+    /// The raw id value.
+    pub fn raw(self) -> u64 {
+        self.0
     }
 }
 
@@ -81,14 +87,20 @@ pub struct Session {
 impl Session {
     /// A session with one window holding one pane, which has focus.
     pub fn new() -> Self {
-        let mut session = Session {
+        let mut session = Session::empty();
+        session.new_window();
+        session
+    }
+
+    /// A session with no windows at all — the starting point when panes
+    /// are adopted from elsewhere (a session server) instead of allocated.
+    pub fn empty() -> Self {
+        Session {
             windows: Vec::new(),
             active: 0,
             panes: HashMap::new(),
             next_id: 1,
-        };
-        session.new_window();
-        session
+        }
     }
 
     fn alloc_pane(&mut self) -> PaneId {
@@ -130,6 +142,155 @@ impl Session {
         if !self.windows.is_empty() {
             self.active = (self.active + 1) % self.windows.len();
         }
+    }
+
+    /// Activate the previous window, wrapping. No-op with fewer than two
+    /// windows.
+    pub fn prev_window(&mut self) {
+        if !self.windows.is_empty() {
+            self.active = (self.active + self.windows.len() - 1) % self.windows.len();
+        }
+    }
+
+    /// Activate the window at `index`. Returns false when out of range.
+    pub fn activate_window(&mut self, index: usize) -> bool {
+        if index < self.windows.len() {
+            self.active = index;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Adopt a pane whose id was allocated elsewhere (a session server)
+    /// into a fresh window, activate it, and focus the pane. Returns `None`
+    /// when the id is already taken.
+    pub fn adopt_window(&mut self, raw: u64) -> Option<PaneId> {
+        let id = self.adopt_pane(raw)?;
+        self.windows.push(Window {
+            root: LayoutNode::Leaf(id),
+            focused: id,
+        });
+        self.active = self.windows.len() - 1;
+        Some(id)
+    }
+
+    /// Adopt an elsewhere-allocated pane by splitting `target`, like
+    /// [`Session::split`]. Returns `None` when the id is taken or the
+    /// target does not exist.
+    pub fn adopt_split(
+        &mut self,
+        target: PaneId,
+        raw: u64,
+        direction: SplitDirection,
+    ) -> Option<PaneId> {
+        if self.panes.contains_key(&PaneId(raw)) {
+            return None;
+        }
+        let window_idx = self.window_of(target)?;
+        let new = self.adopt_pane(raw)?;
+        let window = &mut self.windows[window_idx];
+        if window.root.split_leaf(target, new, direction) {
+            window.focused = new;
+            self.active = window_idx;
+            Some(new)
+        } else {
+            self.panes.remove(&new);
+            None
+        }
+    }
+
+    /// Swap the pane `old` for a fresh pane with the elsewhere-allocated id
+    /// `raw`, in place: same spot in the layout, focus follows. The new
+    /// pane starts with empty metadata. Returns `None` when `old` is
+    /// missing or the id is taken.
+    pub fn replace_pane(&mut self, old: PaneId, raw: u64) -> Option<PaneId> {
+        if self.panes.contains_key(&PaneId(raw)) {
+            return None;
+        }
+        let window_idx = self.window_of(old)?;
+        let new = self.adopt_pane(raw)?;
+        let window = &mut self.windows[window_idx];
+        replace_leaf(&mut window.root, old, new);
+        if window.focused == old {
+            window.focused = new;
+        }
+        self.panes.remove(&old);
+        Some(new)
+    }
+
+    fn adopt_pane(&mut self, raw: u64) -> Option<PaneId> {
+        let id = PaneId(raw);
+        if self.panes.contains_key(&id) {
+            return None;
+        }
+        self.panes.insert(id, Pane::new(id));
+        self.next_id = self.next_id.max(raw + 1);
+        Some(id)
+    }
+
+    /// Serialize the session's shape — windows, split trees, focus, the
+    /// active window, and each pane's command — into a text blob that
+    /// [`Session::restore`] can rebuild, pane ids preserved. Agent state is
+    /// deliberately left out: it is re-detected from live screens.
+    pub fn snapshot(&self) -> String {
+        let mut out = String::from("v1\n");
+        for window in &self.windows {
+            out.push_str(&format!("window focused={} ", window.focused.0));
+            write_node(&mut out, &window.root);
+            out.push('\n');
+        }
+        out.push_str(&format!("active {}\n", self.active));
+        let mut ids: Vec<&PaneId> = self.panes.keys().collect();
+        ids.sort();
+        for id in ids {
+            if let Some(command) = &self.panes[id].command {
+                // Commands are one line by construction; keep the format
+                // line-oriented regardless.
+                let clean = command.replace('\n', " ");
+                out.push_str(&format!("pane {} {}\n", id.0, clean));
+            }
+        }
+        out
+    }
+
+    /// Rebuild a session from [`Session::snapshot`] output. Returns `None`
+    /// for anything malformed or a snapshot with no windows.
+    pub fn restore(text: &str) -> Option<Session> {
+        let mut lines = text.lines();
+        if lines.next()? != "v1" {
+            return None;
+        }
+        let mut session = Session {
+            windows: Vec::new(),
+            active: 0,
+            panes: HashMap::new(),
+            next_id: 1,
+        };
+        for line in lines {
+            if let Some(rest) = line.strip_prefix("window focused=") {
+                let (focused, node_text) = rest.split_once(' ')?;
+                let focused = PaneId(focused.parse().ok()?);
+                let mut tokens = tokenize(node_text);
+                let root = parse_node(&mut tokens, &mut session)?;
+                if !tokens.is_empty() || !root.leaves().contains(&focused) {
+                    return None;
+                }
+                session.windows.push(Window { root, focused });
+            } else if let Some(rest) = line.strip_prefix("active ") {
+                session.active = rest.parse().ok()?;
+            } else if let Some(rest) = line.strip_prefix("pane ") {
+                let (id, command) = rest.split_once(' ')?;
+                let id = PaneId(id.parse().ok()?);
+                session.panes.get_mut(&id)?.command = Some(command.to_string());
+            } else if !line.is_empty() {
+                return None;
+            }
+        }
+        if session.windows.is_empty() || session.active >= session.windows.len() {
+            return None;
+        }
+        Some(session)
     }
 
     /// Split the pane `target` in two along `direction`, creating and
@@ -311,6 +472,80 @@ impl Default for Session {
     }
 }
 
+/// Append `node` as snapshot text: `(l <id>)` for leaves, `(h|v <ratio>
+/// <first> <second>)` for splits.
+fn write_node(out: &mut String, node: &LayoutNode) {
+    match node {
+        LayoutNode::Leaf(id) => out.push_str(&format!("(l {})", id.0)),
+        LayoutNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => {
+            let d = match direction {
+                SplitDirection::Horizontal => 'h',
+                SplitDirection::Vertical => 'v',
+            };
+            out.push_str(&format!("({d} {ratio:.4} "));
+            write_node(out, first);
+            out.push(' ');
+            write_node(out, second);
+            out.push(')');
+        }
+    }
+}
+
+/// Split snapshot node text into parens and words.
+fn tokenize(text: &str) -> std::collections::VecDeque<String> {
+    text.replace('(', " ( ")
+        .replace(')', " ) ")
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Parse one node, registering its leaf panes into `session`.
+fn parse_node(
+    tokens: &mut std::collections::VecDeque<String>,
+    session: &mut Session,
+) -> Option<LayoutNode> {
+    if tokens.pop_front()? != "(" {
+        return None;
+    }
+    let kind = tokens.pop_front()?;
+    let node = match kind.as_str() {
+        "l" => {
+            let raw: u64 = tokens.pop_front()?.parse().ok()?;
+            let id = session.adopt_pane(raw)?;
+            LayoutNode::Leaf(id)
+        }
+        "h" | "v" => {
+            let ratio: f32 = tokens.pop_front()?.parse().ok()?;
+            if !(0.0..=1.0).contains(&ratio) {
+                return None;
+            }
+            let first = parse_node(tokens, session)?;
+            let second = parse_node(tokens, session)?;
+            LayoutNode::Split {
+                direction: if kind == "h" {
+                    SplitDirection::Horizontal
+                } else {
+                    SplitDirection::Vertical
+                },
+                ratio,
+                first: Box::new(first),
+                second: Box::new(second),
+            }
+        }
+        _ => return None,
+    };
+    if tokens.pop_front()? != ")" {
+        return None;
+    }
+    Some(node)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +666,97 @@ mod tests {
         assert_eq!(s.focused(), Some(a));
         s.focus_prev();
         assert_eq!(s.focused(), Some(c));
+    }
+
+    #[test]
+    fn snapshot_restore_round_trips_layout_focus_and_commands() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        let b = s.split(a, SplitDirection::Horizontal).unwrap();
+        let c = s.split(b, SplitDirection::Vertical).unwrap();
+        s.pane_mut(a).unwrap().command = Some("claude".into());
+        s.pane_mut(b).unwrap().command = Some("npx my-agent --flag x".into());
+        let d = s.new_window();
+        s.pane_mut(d).unwrap().command = Some("zsh".into());
+        s.focus(b);
+
+        let blob = s.snapshot();
+        let restored = Session::restore(&blob).expect("restore");
+        assert_eq!(restored.window_count(), 2);
+        assert_eq!(restored.active_window(), s.active_window());
+        assert_eq!(restored.focused(), Some(b));
+        assert_eq!(
+            restored.pane(a).unwrap().command.as_deref(),
+            Some("claude")
+        );
+        assert_eq!(
+            restored.pane(b).unwrap().command.as_deref(),
+            Some("npx my-agent --flag x")
+        );
+        assert_eq!(restored.pane(d).unwrap().command.as_deref(), Some("zsh"));
+        // The split tree survives: same rects for the same area.
+        assert_eq!(restored.layout(80, 24), s.layout(80, 24));
+        // Ids keep allocating past the restored ones.
+        let _ = c;
+        assert_eq!(restored.snapshot(), blob, "snapshot is stable");
+    }
+
+    #[test]
+    fn restore_rejects_garbage() {
+        assert!(Session::restore("").is_none());
+        assert!(Session::restore("v2\n").is_none());
+        assert!(Session::restore("v1\n").is_none(), "no windows");
+        assert!(Session::restore("v1\nwindow focused=1 (l 1) trailing\n").is_none());
+        assert!(Session::restore("v1\nwindow focused=9 (l 1)\nactive 0\n").is_none());
+        assert!(Session::restore("v1\nwindow focused=1 (l 1)\nactive 5\n").is_none());
+        assert!(
+            Session::restore("v1\nwindow focused=1 (h 0.5 (l 1) (l 1))\nactive 0\n").is_none(),
+            "duplicate pane ids"
+        );
+    }
+
+    #[test]
+    fn adopt_and_replace_wire_elsewhere_allocated_ids() {
+        let mut s = Session::new();
+        let first = s.focused().unwrap();
+        let adopted = s.adopt_window(100).expect("adopt window");
+        assert_eq!(adopted.raw(), 100);
+        assert_eq!(s.focused(), Some(adopted));
+        assert!(s.adopt_window(100).is_none(), "id taken");
+
+        let split = s.adopt_split(adopted, 101, SplitDirection::Horizontal).unwrap();
+        assert_eq!(split.raw(), 101);
+        assert_eq!(s.layout(80, 24).len(), 2);
+
+        // Replace swaps the leaf in place and moves focus with it.
+        s.focus(split);
+        let swapped = s.replace_pane(split, 102).expect("replace");
+        assert_eq!(s.focused(), Some(swapped));
+        assert!(s.pane(split).is_none());
+        assert_eq!(s.layout(80, 24).len(), 2);
+
+        // Fresh ids allocate past adopted ones.
+        let next = s.split(swapped, SplitDirection::Vertical).unwrap();
+        assert!(next.raw() > 102);
+        let _ = first;
+    }
+
+    #[test]
+    fn window_cycling_wraps_both_ways_and_activates_by_index() {
+        let mut s = Session::new();
+        s.new_window();
+        s.new_window();
+        assert_eq!(s.active_window(), Some(2));
+        s.next_window();
+        assert_eq!(s.active_window(), Some(0));
+        s.prev_window();
+        assert_eq!(s.active_window(), Some(2));
+        s.prev_window();
+        assert_eq!(s.active_window(), Some(1));
+        assert!(s.activate_window(0));
+        assert_eq!(s.active_window(), Some(0));
+        assert!(!s.activate_window(3));
+        assert_eq!(s.active_window(), Some(0));
     }
 
     #[test]

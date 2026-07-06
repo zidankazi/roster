@@ -223,6 +223,20 @@ impl LayoutNode {
     }
 }
 
+/// Swap the leaf holding `old` for `new`. Returns `true` if found.
+pub(crate) fn replace_leaf(node: &mut LayoutNode, old: PaneId, new: PaneId) -> bool {
+    match node {
+        LayoutNode::Leaf(id) if *id == old => {
+            *node = LayoutNode::Leaf(new);
+            true
+        }
+        LayoutNode::Leaf(_) => false,
+        LayoutNode::Split { first, second, .. } => {
+            replace_leaf(first, old, new) || replace_leaf(second, old, new)
+        }
+    }
+}
+
 /// Outcome of [`LayoutNode::remove_leaf`].
 pub(crate) enum RemoveOutcome {
     /// The leaf was removed; this is the surviving tree.
