@@ -21,6 +21,16 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_roster")
 }
 
+/// One shared socket dir for every session test in this process: the env
+/// var is process-global, so concurrent tests must agree on its value.
+/// Short on purpose — unix socket paths cap out around 104 bytes on macOS.
+fn smoke_sock_dir() -> PathBuf {
+    let dir = PathBuf::from(format!("/tmp/roster-t{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("sock dir");
+    std::env::set_var("ROSTER_SOCK_DIR", &dir);
+    dir
+}
+
 #[test]
 fn version_flag_prints_and_exits() {
     let output = Command::new(bin()).arg("--version").output().expect("run");
@@ -735,6 +745,221 @@ fn wheel_scrolls_history_and_typing_snaps_back() {
     pty.write(b"q").expect("quit");
     let status = pty.wait().expect("wait");
     assert!(status.success, "exit: {status:?}");
+}
+
+#[test]
+fn ssh_proxy_bridges_the_protocol_over_stdio() {
+    use roster_proto::{read_frame, write_frame, Frame};
+
+    // The remote half of ssh attach is `roster _proxy <name>`: it bridges
+    // stdio to the session socket. Driving it through pipes exercises the
+    // exact transport ssh would carry.
+    let state = smoke_sock_dir();
+    let name = format!("proxy{}", std::process::id());
+
+    let mut server = Command::new(bin())
+        .args(["_server", &name])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn server");
+    let start = Instant::now();
+    while start.elapsed() < DEADLINE {
+        let ls = Command::new(bin()).arg("ls").output().expect("ls");
+        if String::from_utf8_lossy(&ls.stdout).contains(&name) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let mut proxy = Command::new(bin())
+        .args(["_proxy", &name])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn proxy");
+    let mut to_proxy = proxy.stdin.take().expect("stdin");
+    let mut from_proxy = proxy.stdout.take().expect("stdout");
+
+    // Attach → Hello (empty session).
+    write_frame(&mut to_proxy, &Frame::Attach).expect("attach");
+    match read_frame(&mut from_proxy).expect("read hello") {
+        Some(Frame::Hello { panes, .. }) => assert!(panes.is_empty(), "fresh session"),
+        other => panic!("expected Hello, got {other:?}"),
+    }
+
+    // Spawn a command and watch its output come back as frames.
+    write_frame(
+        &mut to_proxy,
+        &Frame::Spawn {
+            command: "echo proxied-hello; sleep 30".into(),
+        },
+    )
+    .expect("spawn");
+    let mut opened = None;
+    let mut saw_output = false;
+    let start = Instant::now();
+    while start.elapsed() < DEADLINE && !saw_output {
+        match read_frame(&mut from_proxy).expect("read frame") {
+            Some(Frame::PaneOpened { pane, command }) => {
+                assert!(command.contains("proxied-hello"));
+                opened = Some(pane);
+            }
+            Some(Frame::Output { pane, bytes }) => {
+                assert_eq!(Some(pane), opened, "output for the opened pane");
+                if String::from_utf8_lossy(&bytes).contains("proxied-hello") {
+                    saw_output = true;
+                }
+            }
+            Some(_) => {}
+            None => panic!("proxy closed early"),
+        }
+    }
+    assert!(saw_output, "spawned output never arrived through the proxy");
+
+    // Kill the session: we get a Shutdown, the bridge drains, everything
+    // exits.
+    write_frame(&mut to_proxy, &Frame::Kill).expect("kill");
+    let start = Instant::now();
+    let mut shut = false;
+    while start.elapsed() < DEADLINE {
+        match read_frame(&mut from_proxy) {
+            Ok(Some(Frame::Shutdown { .. })) => {
+                shut = true;
+                break;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => break,
+        }
+    }
+    assert!(shut, "no shutdown after kill");
+    drop(to_proxy);
+    let _ = proxy.wait();
+    let _ = server.wait();
+    let _ = state;
+}
+
+#[test]
+fn persistent_session_survives_detach_and_reattach() {
+    // Sessions live under ROSTER_SOCK_DIR; keep the test's sockets in a
+    // scratch dir of their own (short: unix socket paths cap out ~104
+    // bytes on macOS).
+    let state = smoke_sock_dir();
+    let name = format!("smoke{}", std::process::id());
+
+    let (cols, rows) = (100u16, 24u16);
+    let drain_while = |screen: &mut Screen,
+                       needle: &str,
+                       want: bool,
+                       rx: &mpsc::Receiver<Vec<u8>>|
+     -> bool {
+        let start = Instant::now();
+        while start.elapsed() < DEADLINE {
+            let present = screen.grid().lines().iter().any(|l| l.contains(needle));
+            if present == want {
+                return true;
+            }
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => screen.advance(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
+        false
+    };
+    let pump = |pty: &Pty| -> mpsc::Receiver<Vec<u8>> {
+        let mut reader = pty.reader().expect("reader");
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 8192];
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        rx
+    };
+
+    // First client: create the session with a long-lived pane and leave a
+    // marker in its output.
+    let mut pty = Pty::spawn(&format!("'{}' -s {name} 'seq 1 50; cat'", bin()), cols, rows)
+        .expect("spawn roster -s");
+    let rx = pump(&pty);
+    let mut screen = Screen::new(cols, rows);
+    assert!(
+        drain_while(&mut screen, "47", true, &rx),
+        "session pane never showed output:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    if let Err(error) = pty.write(b"marker123\r") {
+        // The client died — drain its last words for the failure message.
+        while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(300)) {
+            screen.advance(&chunk);
+        }
+        panic!(
+            "typing marker failed ({error}); final screen:\n{}",
+            screen.grid().lines().join("\n")
+        );
+    }
+    assert!(
+        drain_while(&mut screen, "marker123", true, &rx),
+        "marker never echoed:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Detach: the client exits and says how to come back; the server and
+    // its pane keep running.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"d").expect("detach");
+    assert!(
+        drain_while(&mut screen, "detached — reattach with", true, &rx),
+        "no detach message:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    let status = pty.wait().expect("wait detach");
+    assert!(status.success, "detach exit: {status:?}");
+
+    // The session shows up in `roster ls`.
+    let ls = Command::new(bin()).arg("ls").output().expect("roster ls");
+    assert!(
+        String::from_utf8_lossy(&ls.stdout).contains(&name),
+        "ls output: {:?}",
+        String::from_utf8_lossy(&ls.stdout)
+    );
+
+    // Reattach: the pane is still there, screen rebuilt from replay —
+    // marker included.
+    let mut pty = Pty::spawn(&format!("'{}' attach {name}", bin()), cols, rows)
+        .expect("spawn roster attach");
+    let rx = pump(&pty);
+    let mut screen = Screen::new(cols, rows);
+    assert!(
+        drain_while(&mut screen, "marker123", true, &rx),
+        "replay never restored the marker:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Closing the last pane ends the session: client exits, server goes,
+    // ls forgets it.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"x").expect("close pane");
+    let status = pty.wait().expect("wait close");
+    assert!(status.success, "close exit: {status:?}");
+    let start = Instant::now();
+    let mut gone = false;
+    while start.elapsed() < DEADLINE {
+        let ls = Command::new(bin()).arg("ls").output().expect("roster ls");
+        if !String::from_utf8_lossy(&ls.stdout).contains(&name) {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(gone, "session lingered after its last pane closed");
+    let _ = state;
 }
 
 #[test]
