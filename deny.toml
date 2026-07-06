@@ -1,0 +1,55 @@
+# cargo-deny configuration — dependency governance for roster.
+#
+# Why this exists: AI-driven development pulls in dependencies casually, and each
+# one is permanent transitive line-count and supply-chain surface. This file
+# fails CI on security advisories, disallowed licenses, unknown sources, and
+# (as warnings for now) duplicate versions. Run locally with `cargo deny check`.
+#
+# Schema is cargo-deny v2 (`version = 2`). See https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+version = 2
+# Fail on security vulnerabilities (default) and yanked crates. Add specific
+# RustSec IDs here only with a written justification when a fix isn't yet
+# available upstream.
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive licenses only. Every entry below is present in the current tree
+# (verified via `cargo metadata`). Adding a license here is a deliberate policy
+# decision — do it in its own PR, not bundled with a feature.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "WTFPL",
+]
+exceptions = []
+
+[bans]
+# The tree already carries a few duplicate major versions (hashbrown,
+# signal-hook, thiserror) pulled by different upstreams. Keep this as a visible
+# WARNING for now; flip to "deny" once the tree is de-duplicated, to hard-stop
+# dependency bloat.
+multiple-versions = "warn"
+wildcards = "warn"
+allow = []
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -26,3 +26,49 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-machete
+      - name: Crate dependency graph
+        run: ./scripts/check-arch.sh
+      - name: Unused dependencies
+        run: cargo machete
+      - name: Dependency policy (advisories, licenses, sources)
+        run: cargo deny check
+
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Report size + dependency footprint
+        run: |
+          set -euo pipefail
+          ./scripts/metrics.sh > head.md
+          delta=""
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git worktree add /tmp/base "origin/${{ github.base_ref }}"
+            # Run THIS branch's script against the base tree (base may not have it).
+            ./scripts/metrics.sh /tmp/base > base.md
+            get() { grep -o 'TOTALS[^-]*' "$1" | tr ' ' '\n' | grep "^$2=" | cut -d= -f2; }
+            dloc=$(( $(get head.md loc)      - $(get base.md loc) ))
+            ddep=$(( $(get head.md ext_deps) - $(get base.md ext_deps) ))
+            sign() { if [ "$1" -gt 0 ]; then echo "+$1"; else echo "$1"; fi; }
+            delta="**Δ vs \`${{ github.base_ref }}\`: $(sign "$dloc") rust loc · $(sign "$ddep") transitive deps**"
+          fi
+          {
+            echo "## 📊 codebase metrics"
+            echo ""
+            if [ -n "$delta" ]; then echo "$delta"; echo ""; fi
+            cat head.md
+          } >> "$GITHUB_STEP_SUMMARY"
