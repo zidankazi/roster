@@ -415,9 +415,10 @@ impl Widget for Launcher<'_> {
         }
 
         if self.welcome {
-            // Any command is an agent — say so where new users look first.
+            // Claude Code is the agent; anything else runs as a plain support
+            // pane (a shell, a dev server) with no state detection.
             let hints = [
-                "…or type any command — enter runs it",
+                "…or run a command — enter runs it",
                 "add your own cards: roster --print-config",
             ];
             for (row, hint) in hints.iter().enumerate() {

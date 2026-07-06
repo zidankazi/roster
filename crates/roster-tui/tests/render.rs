@@ -329,7 +329,7 @@ fn launcher_modal_overlays_the_frame() {
 }
 
 #[test]
-fn welcome_screen_shows_wordmark_picker_and_any_command_hint() {
+fn welcome_screen_shows_wordmark_picker_and_command_hint() {
     let session = Session::new();
     let only = session.focused().unwrap();
     let mut grids = HashMap::new();
@@ -370,7 +370,7 @@ fn welcome_screen_shows_wordmark_picker_and_any_command_hint() {
         .map(|y| region_text(&buf, 0, 100, y) + "\n")
         .collect();
 
-    // The solid-fill wordmark, tagline, picker, and the any-command hint
+    // The solid-fill wordmark, tagline, picker, and the run-a-command hint
     // all render.
     assert!(all.contains("7Mb,od8"), "screen:\n{all}");
     assert!(
@@ -378,7 +378,7 @@ fn welcome_screen_shows_wordmark_picker_and_any_command_hint() {
         "screen:\n{all}"
     );
     assert!(all.contains("claude-code"), "screen:\n{all}");
-    assert!(all.contains("type any command"), "screen:\n{all}");
+    assert!(all.contains("run a command"), "screen:\n{all}");
     // Nothing else on screen: no modal chrome, no sidebar, no status
     // line, and the placeholder shell's prompt is hidden.
     assert!(!all.contains("new agent ─"), "screen:\n{all}");

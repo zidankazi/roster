@@ -1709,7 +1709,7 @@ impl App {
             ),
             Mode::Launch(_) => (
                 Some("LAUNCH"),
-                "type to filter or any command · enter: launch · tab: edit flags · esc: cancel"
+                "type to filter or run a command · enter: launch · tab: edit flags · esc: cancel"
                     .to_string(),
             ),
             Mode::ConfirmClose(_) => (

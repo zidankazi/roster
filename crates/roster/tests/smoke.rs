@@ -546,9 +546,9 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
     };
 
     // Bare `roster` opens the welcome screen: wordmark + picker + the
-    // any-command hint.
+    // run-a-command hint.
     assert!(
-        drain_until(&mut screen, "type any command", &rx),
+        drain_until(&mut screen, "run a command", &rx),
         "welcome screen never appeared:\n{}",
         screen.grid().lines().join("\n")
     );
