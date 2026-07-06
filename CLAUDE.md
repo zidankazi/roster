@@ -66,9 +66,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Conventions
 
-- **Commits:** brief, all-lowercase `type: subject` — `fix:`, `feature:`,
-  `docs:`, `chore:`, `refactor:`, `ci:`. Do **not** add Claude/AI/Anthropic
-  attribution or co-author trailers to commits or PR descriptions.
+- **Commits:** brief, all-lowercase `type: subject` using the standard
+  Conventional Commits types — `fix:`, `feat:` (not `feature:`), `docs:`,
+  `chore:`, `refactor:`, `ci:`. The standard tokens render a type badge in the
+  GitHub commit view. Do **not** add Claude/AI/Anthropic attribution or
+  co-author trailers to commits or PR descriptions.
 - **Versioning:** never bump, tag, or release a version unless explicitly asked.
   Releases are `0.0.x`, patch-only.
 - **Agent detection is data, not code:** new agents are added as entries in
