@@ -17,12 +17,14 @@ mod exited;
 mod hit;
 mod launcher;
 mod pane;
+mod rename;
 mod sidebar;
 mod style;
 mod toast;
 
 pub use confirm::{confirm_button_at, confirm_contains, Confirm, ConfirmButton};
 pub use exited::{draw_exited, exited_buttons, exited_card_rect};
+pub use rename::{draw_rename, rename_contains, rename_cursor, rename_rect};
 pub use hit::{hit_test, pointer_for, Hit, Pointer};
 pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
@@ -88,6 +90,12 @@ pub struct View<'a> {
     pub selection: Option<Selection>,
     /// Panes scrolled up into history, with how many lines back they sit.
     pub scrolled: &'a HashMap<PaneId, usize>,
+    /// Resolved workspace display names, one per window: a manual name or
+    /// a live terminal title; empty entries fall back to `workspace N`.
+    pub window_names: &'a [String],
+    /// The workspace-rename dialog, when open: the window index and the
+    /// input typed so far.
+    pub rename: Option<(usize, &'a str)>,
     /// Bare start: draw the launcher as the full welcome screen (wordmark
     /// over the picker) instead of the compact modal.
     pub welcome: bool,
@@ -335,6 +343,7 @@ pub fn render(frame: &mut Frame, view: &View) {
             }
         } else if view.launcher.is_none()
             && view.confirm.is_none()
+            && view.rename.is_none()
             && focused == Some(id)
             && grid.cursor.visible
         {
@@ -433,7 +442,8 @@ pub fn render(frame: &mut Frame, view: &View) {
             view.tick,
         )
         .active(view.session.active_window().unwrap_or(0))
-        .hovered_window(hovered_window),
+        .hovered_window(hovered_window)
+        .names(view.window_names),
         cards,
     );
 
@@ -450,6 +460,12 @@ pub fn render(frame: &mut Frame, view: &View) {
 
     if let Some((name, hover)) = view.confirm {
         frame.render_widget(Confirm::new(name).hover(hover), area);
+    }
+
+    if let Some((window, input)) = view.rename {
+        draw_rename(frame.buffer_mut(), area, window, input);
+        let (cursor_x, cursor_y) = rename_cursor(area, input);
+        frame.set_cursor_position(Position::new(cursor_x, cursor_y));
     }
 }
 

@@ -26,9 +26,9 @@ use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
     confirm_button_at, confirm_contains, content_rect, exited_buttons, hit_test, launch_items,
-    local_panes, panes_area, pointer_for, render, sidebar_entries, toast_rects, ConfirmButton,
-    Hit, LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry, SidebarSide,
-    SidebarState, ToastLevel, View,
+    local_panes, panes_area, pointer_for, rename_contains, render, sidebar_entries, toast_rects,
+    ConfirmButton, Hit, LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry,
+    SidebarSide, SidebarState, ToastLevel, View,
 };
 
 use crate::keys::encode_key;
@@ -61,6 +61,8 @@ enum Mode {
     Launch(LauncherState),
     /// Closing this pane would kill a live agent; waiting for a yes/no.
     ConfirmClose(PaneId),
+    /// Renaming a workspace: the window index and the input typed so far.
+    Rename(usize, String),
 }
 
 /// How long a toast stays up before it fades on its own.
@@ -584,7 +586,7 @@ impl App {
             // Hover follows the last known pointer position; the launcher
             // and confirm modals own hover themselves while open.
             let hover = match self.mode {
-                Mode::Launch(_) | Mode::ConfirmClose(_) => None,
+                Mode::Launch(_) | Mode::ConfirmClose(_) | Mode::Rename(..) => None,
                 _ => self.last_mouse.map(|(x, y)| self.hit_at(x, y)),
             };
             let (mode_badge, status) = self.status_line();
@@ -600,6 +602,11 @@ impl App {
                         .and_then(|(x, y)| confirm_button_at(self.last_area, x, y));
                     Some((name, hover))
                 }
+                _ => None,
+            };
+            let window_names = self.window_display_names();
+            let rename = match &self.mode {
+                Mode::Rename(window, input) => Some((*window, input.as_str())),
                 _ => None,
             };
             let toast_view: Vec<(&str, ToastLevel)> = self
@@ -629,6 +636,8 @@ impl App {
                 toasts: &toast_view,
                 selection: self.selection,
                 scrolled: &scrolled,
+                window_names: &window_names,
+                rename,
                 welcome: self.placeholder.is_some(),
                 mode_badge,
                 status: &status,
@@ -1057,6 +1066,11 @@ impl App {
                         self.sidebar = SidebarState::new();
                         self.mode = Mode::Jump;
                     }
+                    KeyCode::Char(',') => {
+                        if let Some(window) = self.session.active_window() {
+                            self.open_rename(window);
+                        }
+                    }
                     KeyCode::Char('d') => self.detach(),
                     // Quitting a persistent session detaches — leaving must
                     // never silently kill the agents.
@@ -1080,6 +1094,22 @@ impl App {
                     _ => {} // anything else cancels
                 }
             }
+            Mode::Rename(window, ref mut input) => match key.code {
+                KeyCode::Enter => {
+                    let name = input.trim().to_string();
+                    self.session
+                        .set_window_name(window, (!name.is_empty()).then_some(name));
+                    self.mode = Mode::Normal;
+                }
+                KeyCode::Esc => self.mode = Mode::Normal,
+                KeyCode::Backspace => {
+                    input.pop();
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    input.push(c);
+                }
+                _ => {}
+            },
             Mode::Jump => match key.code {
                 KeyCode::Down | KeyCode::Char('j') => {
                     self.sidebar.select_next(self.last_entries.len());
@@ -1109,6 +1139,21 @@ impl App {
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         let (x, y) = (mouse.column, mouse.row);
         self.last_mouse = Some((x, y));
+
+        // The rename dialog owns the mouse while open: clicking outside
+        // cancels, clicks inside are the input's.
+        if let Mode::Rename(..) = self.mode {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if !rename_contains(self.last_area, x, y) {
+                        self.mode = Mode::Normal;
+                    }
+                }
+                MouseEventKind::Moved => set_pointer(&mut self.pointer, Pointer::Default),
+                _ => {}
+            }
+            return;
+        }
 
         // The confirm dialog owns the mouse while open: its buttons decide,
         // and clicking anywhere else dismisses it.
@@ -1202,7 +1247,15 @@ impl App {
                         }
                     }
                     Hit::SidebarWindow(window) => {
+                        // Double-clicking a header renames the workspace;
+                        // a single click jumps to it.
+                        let double = self.last_click.is_some_and(|(at, pos)| {
+                            at.elapsed() < Duration::from_millis(400) && pos == (x, y)
+                        });
                         self.session.activate_window(window);
+                        if double {
+                            self.open_rename(window);
+                        }
                     }
                     Hit::SidebarNewAgent => {
                         self.mode = Mode::Launch(LauncherState::new());
@@ -1451,6 +1504,41 @@ impl App {
         }
     }
 
+    /// Each workspace's display name: a user-set name wins, then the
+    /// focused pane's terminal title (agent CLIs put their current task
+    /// there), then a numbered default. Named headers keep the number for
+    /// n/p orientation.
+    fn window_display_names(&self) -> Vec<String> {
+        (0..self.session.window_count())
+            .map(|window| {
+                if let Some(name) = self.session.window_name(window) {
+                    return format!("{} · {}", window + 1, name);
+                }
+                let title = self
+                    .session
+                    .window_focused(window)
+                    .and_then(|id| self.runtimes.get(&id))
+                    .and_then(|rt| rt.screen.title())
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty());
+                match title {
+                    Some(title) => format!("{} · {}", window + 1, title),
+                    None => format!("workspace {}", window + 1),
+                }
+            })
+            .collect()
+    }
+
+    /// Open the rename dialog for a window, prefilled with its manual name.
+    fn open_rename(&mut self, window: usize) {
+        let input = self
+            .session
+            .window_name(window)
+            .unwrap_or_default()
+            .to_string();
+        self.mode = Mode::Rename(window, input);
+    }
+
     /// A pane's display name: its agent card's name when detected, else its
     /// command.
     fn pane_name(&self, id: PaneId) -> String {
@@ -1507,6 +1595,10 @@ impl App {
             for c in text.chars().filter(|c| !c.is_control()) {
                 state.push(c);
             }
+            return;
+        }
+        if let Mode::Rename(_, input) = &mut self.mode {
+            input.extend(text.chars().filter(|c| !c.is_control()));
             return;
         }
         let Some(id) = self.session.focused() else {
@@ -1589,7 +1681,7 @@ impl App {
             }
             Mode::Prefix => (
                 Some("PREFIX"),
-                "c: new agent · n/p: windows · z: solo · %/\": split shell · o: focus · j: jump · x: close · d: detach · q: quit"
+                "c: new agent · n/p: windows · ,: rename · z: solo · %/\": split · o: focus · j: jump · x: close · d: detach · q: quit"
                     .to_string(),
             ),
             Mode::Jump => (
@@ -1604,6 +1696,10 @@ impl App {
             Mode::ConfirmClose(_) => (
                 Some("CLOSE?"),
                 "y/enter: close · esc: cancel".to_string(),
+            ),
+            Mode::Rename(..) => (
+                Some("RENAME"),
+                "enter: save · empty input restores auto · esc: cancel".to_string(),
             ),
         }
     }

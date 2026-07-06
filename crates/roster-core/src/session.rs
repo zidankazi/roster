@@ -71,6 +71,9 @@ impl Pane {
 struct Window {
     root: LayoutNode,
     focused: PaneId,
+    /// A user-set name. `None` means auto: callers fall back to a live
+    /// source (the focused pane's terminal title) or a numbered default.
+    name: Option<String>,
 }
 
 /// The whole multiplexer model: windows of split panes plus focus.
@@ -132,6 +135,7 @@ impl Session {
         self.windows.push(Window {
             root: LayoutNode::Leaf(id),
             focused: id,
+            name: None,
         });
         self.active = self.windows.len() - 1;
         id
@@ -162,6 +166,28 @@ impl Session {
         }
     }
 
+    /// The user-set name of the window at `index`, if any.
+    pub fn window_name(&self, index: usize) -> Option<&str> {
+        self.windows.get(index)?.name.as_deref()
+    }
+
+    /// Name (or, with `None`, un-name) the window at `index`. Un-named
+    /// windows fall back to an automatic label. Returns false when out of
+    /// range.
+    pub fn set_window_name(&mut self, index: usize, name: Option<String>) -> bool {
+        let Some(window) = self.windows.get_mut(index) else {
+            return false;
+        };
+        window.name = name.filter(|n| !n.trim().is_empty());
+        true
+    }
+
+    /// The focused pane of the window at `index` — not necessarily the
+    /// session-wide focused pane.
+    pub fn window_focused(&self, index: usize) -> Option<PaneId> {
+        Some(self.windows.get(index)?.focused)
+    }
+
     /// Adopt a pane whose id was allocated elsewhere (a session server)
     /// into a fresh window, activate it, and focus the pane. Returns `None`
     /// when the id is already taken.
@@ -170,6 +196,7 @@ impl Session {
         self.windows.push(Window {
             root: LayoutNode::Leaf(id),
             focused: id,
+            name: None,
         });
         self.active = self.windows.len() - 1;
         Some(id)
@@ -241,6 +268,11 @@ impl Session {
             out.push('\n');
         }
         out.push_str(&format!("active {}\n", self.active));
+        for (index, window) in self.windows.iter().enumerate() {
+            if let Some(name) = &window.name {
+                out.push_str(&format!("wname {index} {}\n", name.replace('\n', " ")));
+            }
+        }
         let mut ids: Vec<&PaneId> = self.panes.keys().collect();
         ids.sort();
         for id in ids {
@@ -276,9 +308,17 @@ impl Session {
                 if !tokens.is_empty() || !root.leaves().contains(&focused) {
                     return None;
                 }
-                session.windows.push(Window { root, focused });
+                session.windows.push(Window {
+                    root,
+                    focused,
+                    name: None,
+                });
             } else if let Some(rest) = line.strip_prefix("active ") {
                 session.active = rest.parse().ok()?;
+            } else if let Some(rest) = line.strip_prefix("wname ") {
+                let (index, name) = rest.split_once(' ')?;
+                let index: usize = index.parse().ok()?;
+                session.windows.get_mut(index)?.name = Some(name.to_string());
             } else if let Some(rest) = line.strip_prefix("pane ") {
                 let (id, command) = rest.split_once(' ')?;
                 let id = PaneId(id.parse().ok()?);
@@ -328,7 +368,14 @@ impl Session {
                 } else {
                     window.focused
                 };
-                self.windows.insert(window_idx, Window { root, focused });
+                self.windows.insert(
+                    window_idx,
+                    Window {
+                        root,
+                        focused,
+                        name: window.name,
+                    },
+                );
             }
             RemoveOutcome::LastLeaf => {
                 if self.active >= window_idx && self.active > 0 {
@@ -699,6 +746,32 @@ mod tests {
         // Ids keep allocating past the restored ones.
         let _ = c;
         assert_eq!(restored.snapshot(), blob, "snapshot is stable");
+    }
+
+    #[test]
+    fn window_names_set_clear_and_round_trip() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        s.pane_mut(a).unwrap().command = Some("claude".into());
+        s.new_window();
+        assert_eq!(s.window_name(0), None);
+        assert!(s.set_window_name(0, Some("fix auth bug".into())));
+        assert!(s.set_window_name(1, Some("  ".into())), "blank clears");
+        assert_eq!(s.window_name(0), Some("fix auth bug"));
+        assert_eq!(s.window_name(1), None);
+        assert!(!s.set_window_name(9, Some("x".into())));
+
+        let restored = Session::restore(&s.snapshot()).expect("restore");
+        assert_eq!(restored.window_name(0), Some("fix auth bug"));
+        assert_eq!(restored.window_name(1), None);
+
+        // Closing a pane inside the window keeps the name.
+        let b = s.split(a, SplitDirection::Horizontal).unwrap();
+        s.close(b);
+        assert_eq!(s.window_name(0), Some("fix auth bug"));
+
+        assert!(s.set_window_name(0, None));
+        assert_eq!(s.window_name(0), None);
     }
 
     #[test]

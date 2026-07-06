@@ -79,6 +79,7 @@ KEYS (prefix: ctrl-b):
   prefix c   new agent (launcher)      prefix x   close pane
   prefix %   split side by side        prefix \"   split stacked
   prefix o   focus next pane           prefix n/p next/previous window
+  prefix ,   rename workspace (empty input restores the automatic name)
   prefix j   jump via sidebar (j/k move, enter jump, esc cancel)
   prefix d   detach (persistent sessions)
   prefix q   quit

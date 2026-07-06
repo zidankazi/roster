@@ -7,7 +7,9 @@
 //! [`roster_core::Grid`] snapshot, which is the boundary that keeps
 //! `roster-detect` and `roster-tui` free of any emulator dependency.
 
-use alacritty_terminal::event::VoidListener;
+use std::sync::{Arc, Mutex};
+
+use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
@@ -15,6 +17,21 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
 
 use roster_core::{Cell, CellStyle, Color, Grid};
+
+/// Captures the title the application sets via OSC 0/2 — agent CLIs
+/// broadcast their current task through it. Everything else is dropped.
+#[derive(Clone, Default)]
+struct TitleSink(Arc<Mutex<Option<String>>>);
+
+impl EventListener for TitleSink {
+    fn send_event(&self, event: Event) {
+        match event {
+            Event::Title(title) => *self.0.lock().expect("title lock") = Some(title),
+            Event::ResetTitle => *self.0.lock().expect("title lock") = None,
+            _ => {}
+        }
+    }
+}
 
 /// A fixed viewport size, in cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,9 +57,10 @@ impl Dimensions for Size {
 /// One pane's emulated terminal: feed it the raw byte stream, read back the
 /// current screen.
 pub struct Screen {
-    term: Term<VoidListener>,
+    term: Term<TitleSink>,
     parser: Processor,
     size: Size,
+    title: Arc<Mutex<Option<String>>>,
 }
 
 impl Screen {
@@ -56,11 +74,20 @@ impl Screen {
             scrolling_history: Screen::SCROLLBACK,
             ..Config::default()
         };
+        let sink = TitleSink::default();
+        let title = sink.0.clone();
         Screen {
-            term: Term::new(config, &size, VoidListener),
+            term: Term::new(config, &size, sink),
             parser: Processor::new(),
             size,
+            title,
         }
+    }
+
+    /// The title the application last set via OSC 0/2 — agent CLIs put
+    /// their current task here. `None` when unset or reset.
+    pub fn title(&self) -> Option<String> {
+        self.title.lock().expect("title lock").clone()
     }
 
     /// Feed raw bytes from the PTY into the emulator.
@@ -336,6 +363,20 @@ mod tests {
         assert!(screen.alternate_screen());
         screen.advance(b"\x1b[?1049l");
         assert!(!screen.alternate_screen());
+    }
+
+    #[test]
+    fn osc_titles_are_captured_and_reset() {
+        let mut screen = Screen::new(20, 3);
+        assert_eq!(screen.title(), None);
+        screen.advance(b"\x1b]0;fix auth bug\x07");
+        assert_eq!(screen.title().as_deref(), Some("fix auth bug"));
+        // OSC 2 (title only) works too, and BEL/ST terminators both parse.
+        screen.advance(b"\x1b]2;compiling roster\x1b\\");
+        assert_eq!(screen.title().as_deref(), Some("compiling roster"));
+        // A reset clears it back to none.
+        screen.advance(b"\x1b]0;\x07");
+        assert_eq!(screen.title().as_deref(), Some(""));
     }
 
     #[test]

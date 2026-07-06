@@ -54,6 +54,12 @@ cards by workspace — click a workspace header to jump there (shell-only
 windows included), click the `⧉ 2/3` indicator in the status bar or press
 `ctrl-b n`/`p` to cycle.
 
+**Workspaces name themselves after the task.** Headers pick up the terminal
+title the agent broadcasts — Claude Code sets it to what it's working on —
+so the sidebar reads `1 · fix auth bug`, not `workspace 1`. Double-click a
+header (or `ctrl-b ,`) to set your own name; an empty rename goes back to
+automatic. Manual names persist across detach/reattach.
+
 Keyboard equivalents exist for everything (`ctrl-b` is the prefix — `c` new
 agent, `n`/`p` windows, `z` solo, `j` jump, `o` focus, `x` close, `d`
 detach, `q` quit); the status bar keeps the hints on screen.

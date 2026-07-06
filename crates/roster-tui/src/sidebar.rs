@@ -177,6 +177,7 @@ pub struct Sidebar<'a> {
     hovered_window: Option<usize>,
     workspaces: usize,
     active: usize,
+    names: &'a [String],
     tick: u64,
 }
 
@@ -200,8 +201,17 @@ impl<'a> Sidebar<'a> {
             hovered_window: None,
             workspaces,
             active: 0,
+            names: &[],
             tick,
         }
+    }
+
+    /// Display names for the workspace headers, one per window — a manual
+    /// name or a live terminal title, already resolved by the caller.
+    /// Windows past the slice's end fall back to `workspace N`.
+    pub fn names(mut self, names: &'a [String]) -> Self {
+        self.names = names;
+        self
     }
 
     /// The active window, lighting its workspace header.
@@ -278,13 +288,11 @@ impl Widget for Sidebar<'_> {
                     if self.hovered_window == Some(window) {
                         style = style.add_modifier(Modifier::REVERSED);
                     }
-                    buf.set_stringn(
-                        area.x + 1,
-                        y,
-                        format!("workspace {}", window + 1),
-                        width.saturating_sub(1),
-                        style,
-                    );
+                    let label = match self.names.get(window) {
+                        Some(name) => truncate(name, width.saturating_sub(2)),
+                        None => format!("workspace {}", window + 1),
+                    };
+                    buf.set_stringn(area.x + 1, y, label, width.saturating_sub(1), style);
                 }
                 SidebarRow::Empty(_) => {
                     buf.set_stringn(
