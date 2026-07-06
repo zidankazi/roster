@@ -110,6 +110,17 @@ The decision contract, notifications, per-card and session telemetry. Each is ad
 
 Phase 1 alone already makes roster visibly better than herdr on the one thing we claim as our wedge (showing *why*, exactly and instantly). Everything after stacks on that bridge.
 
+## Future ideas — not yet scheduled
+
+Raw material for a later phase, surfaced while re-checking this doc against the current Claude Code hook set. None of these are committed or sequenced — they need their own design pass (and a re-verify against the installed Claude Code version) before they become a build-sequence phase. Listed so they aren't lost, not because they're next.
+
+- **Persistent "always allow" from the sidebar.** The answer-from-sidebar mechanism above only covers a one-time allow/deny. The permission-decision response can apparently also carry an `approvalRules` entry (e.g. `Bash: "git push *"`), which would let a sidebar answer install a standing rule so the same prompt never resurfaces. Bigger than an allow/deny toggle — needs thought on where that rule gets written and how it's surfaced as reversible.
+- **Safety-net override in `acceptEdits`/`bypassPermissions` mode.** In an auto-accept mode, no permission prompt fires at all, so today's plan has no visibility into a destructive command going through unchecked. `PreToolUse` fires regardless of mode, so roster could flag (not necessarily block) a destructive pattern even when the pane itself shows nothing. Needs care: this is a step toward opinions about what's "destructive," which is scope creep if not bounded tightly.
+- **Subagent fan-out visibility.** `SubagentStart`/`SubagentStop` are already listed as a secondary signal, but there's a dedicated `subagentStatusLine` surface with a `tasks[]` array (name, status, token count, cwd per subagent) that could turn "one busy pane" into "3 of 5 helper agents done, running: security-review, tests."
+- **Task-list progress.** Revises the open question below marked resolved: assume this is buildable, not blocked.
+- **PR review state on cards.** Statusline exposes `pr.number` / `pr.review_state` (draft/approved/changes_requested) when a pane's worktree is tied to a PR. Could answer "which of my agents' work is actually mergeable" without leaving roster.
+- **Stop-failure reason taxonomy.** `StopFailure` apparently has matchers per failure type (`rate_limit`, `overloaded`, `billing_error`, `authentication_failed`, `server_error`, …). Worth surfacing distinctly per type rather than one generic "failed" state — especially useful for spotting "several agents just hit the same rate limit and went silent" as a fleet-wide event, not five separate mysteries.
+
 ## Non-goals and honesty
 
 - **Not an agent-orchestration API.** Herdr lets agents drive the multiplexer (spawn helpers, split panes) over a socket. That is *their* bet — agents watching agents. Ours is the opposite: a human watching agents. Do not drift into building their product. If we ever want an API, it is a separate, later decision.
@@ -129,7 +140,7 @@ Still open:
 
 - The exact **`Notification` payload** fields for notification data (matcher types are known; the data shape was unverified). Confirm before relying on `Notification` over `PermissionRequest`.
 - **Statusline slot conflict**: `statusLine` is a single slot. Decide the strategy when a user already has one — chain/wrap theirs, or fall back to hook-only telemetry for that user.
-- **No todo / turn-history source** without the transcript. If we ever want the agent's todo list or per-turn history, the sanctioned routes are `/export` or the Agent SDK, not the `.jsonl`. Decide if it is worth that complexity; otherwise the feature does not exist for us.
+- **Todo / turn-history source** — previously assumed impossible without the transcript. That assumption needs revisiting: task-lifecycle hook events may now provide a sanctioned, transcript-free source for step-level progress (see "Future ideas" above). Not yet verified against the installed Claude Code version or scoped as a phase.
 - **Version pinning**: which minimum Claude Code version to target (e.g. `prompt_id` needs ≥ 2.1.196), and how the bridge degrades on older/newer ones.
 - **Bridge-install UX**: opt-in flow, namespaced merge into `~/.claude/settings.json` (`hooks` + `statusLine`), and clean uninstall.
 - **Multi-source precedence**: statusline refresh cadence vs. instantaneous hook events — define which wins for a field and how stale telemetry is aged out.
