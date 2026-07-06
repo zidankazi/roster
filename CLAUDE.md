@@ -25,8 +25,9 @@ enforced. Follow it every session.
    [`scripts/check-arch.sh`](scripts/check-arch.sh). Never add an upward or
    lateral crate edge without updating the allowlist in that script **and**
    saying why in the PR. The graph is the architecture; keep it honest.
-4. **One concern per PR; keep diffs small and reviewable.** The owner reviews
-   rather than writes code — a diff too big to read is a diff that hides slop.
+4. **One self-contained change per branch, kept small.** No human reads the
+   diff — an independent `/code-review` pass is the review, and it's only
+   meaningful on a small change.
 5. **Change code, update the doc in the same change.** `docs/` is the source of
    truth for architecture and direction. Stale docs are slop too.
 6. **Delete dead code.** Don't leave commented-out blocks or unused items
@@ -34,6 +35,11 @@ enforced. Follow it every session.
 7. **Keep the wedge sharp.** roster's differentiator is state **+ reason**, and
    the Claude-native attention layer (docs/05). Do not drift toward herdr's
    agent-orchestration socket API — that is an explicit non-goal (docs/05).
+8. **Never make a gate pass by weakening it.** Do not delete, skip, or loosen
+   tests, add `#[allow]` to silence clippy, or widen the deny/arch allowlists
+   just to go green. With no human reviewing, the gates are the safety net —
+   a gate that legitimately can't pass is a signal to stop and ask, not an
+   obstacle to remove.
 
 ## Definition of done — all must pass before proposing a merge
 
