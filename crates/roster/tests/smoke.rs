@@ -284,15 +284,18 @@ fn mouse_clicks_focus_launch_and_jump() {
         screen.grid().lines().join("\n")
     );
 
-    // The launched agent has focus; click its sidebar card (rows 3-4,
-    // 1-based) after clicking back into a shell pane first.
-    pty.write(&click(40, 10)).expect("refocus shell");
+    // The launched agent opened in its own window and has focus. The
+    // sidebar now lists both workspaces — the shell-only one included —
+    // so clicking the "workspace 1" header (1-based row 3) jumps back to
+    // the shells, and the agent's card (rows 7-8, under the "workspace 2"
+    // header) jumps to the agent again.
+    pty.write(&click(5, 3)).expect("click workspace 1 header");
     assert!(
         drain_until(&mut screen, "sleep 60   click", &rx),
-        "refocus failed:\n{}",
+        "workspace header click did not switch windows:\n{}",
         screen.grid().lines().join("\n")
     );
-    pty.write(&click(5, 3)).expect("click sidebar card");
+    pty.write(&click(5, 7)).expect("click sidebar card");
     assert!(
         drain_until(&mut screen, "claude   click", &rx),
         "sidebar click did not jump to the agent:\n{}",
@@ -435,7 +438,7 @@ fn exited_pane_stays_until_closed() {
             .grid()
             .lines()
             .iter()
-            .any(|l| l.contains("exited (0)"))
+            .any(|l| l.contains("echo · exit 0"))
         {
             saw_notice = true;
             break;
@@ -443,8 +446,16 @@ fn exited_pane_stays_until_closed() {
     }
     assert!(
         saw_notice,
-        "exited notice never appeared; screen was:\n{}",
+        "exited overlay never appeared; screen was:\n{}",
         screen.grid().lines().join("\n")
+    );
+
+    // The overlay card carries restart and close buttons.
+    let lines = screen.grid().lines();
+    assert!(
+        lines.iter().any(|l| l.contains("restart") && l.contains("close")),
+        "overlay buttons missing:\n{}",
+        lines.join("\n")
     );
 
     // Clicking the title's ✕ closes the only (exited) pane and ends the
@@ -561,6 +572,169 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
     let status = pty.wait().expect("wait");
     assert!(status.success, "exit: {status:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn closing_a_live_agent_asks_first() {
+    let dir = fake_agent_dir();
+    let path = format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    std::env::set_var("PATH", &path);
+
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty = Pty::spawn(&format!("'{}' claude", bin()), cols, rows).expect("spawn roster");
+    let mut reader = pty.reader().expect("reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut screen = Screen::new(cols, rows);
+    let drain_while = |screen: &mut Screen,
+                       needle: &str,
+                       want: bool,
+                       rx: &mpsc::Receiver<Vec<u8>>|
+     -> bool {
+        let start = Instant::now();
+        while start.elapsed() < DEADLINE {
+            let present = screen.grid().lines().iter().any(|l| l.contains(needle));
+            if present == want {
+                return true;
+            }
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => screen.advance(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
+        false
+    };
+
+    assert!(
+        drain_while(&mut screen, "blocked · Do y", true, &rx),
+        "agent never showed blocked:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // prefix-x on a live agent must ask, not kill.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"x").expect("close");
+    assert!(
+        drain_while(&mut screen, "still running", true, &rx),
+        "no close confirmation:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Esc cancels: the prompt clears and the agent pane survives.
+    pty.write(b"\x1b").expect("cancel");
+    assert!(
+        drain_while(&mut screen, "still running", false, &rx),
+        "confirmation never cleared:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert!(
+        screen.grid().lines()[0].contains("claude"),
+        "agent pane gone after cancel:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Ask again and confirm with y: the last pane closes and roster exits.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"x").expect("close");
+    assert!(
+        drain_while(&mut screen, "still running", true, &rx),
+        "no second confirmation:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    pty.write(b"y").expect("confirm");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn wheel_scrolls_history_and_typing_snaps_back() {
+    let (cols, rows) = (100u16, 24u16);
+    // 200 numbered lines then a live shell read: plenty of history, primary
+    // screen (no alternate-screen TUI), process stays alive.
+    let mut pty = Pty::spawn(
+        &format!("'{}' 'seq 1 200; cat'", bin()),
+        cols,
+        rows,
+    )
+    .expect("spawn roster");
+    let mut reader = pty.reader().expect("reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut screen = Screen::new(cols, rows);
+    let drain_while = |screen: &mut Screen,
+                       needle: &str,
+                       want: bool,
+                       rx: &mpsc::Receiver<Vec<u8>>|
+     -> bool {
+        let start = Instant::now();
+        while start.elapsed() < DEADLINE {
+            let present = screen.grid().lines().iter().any(|l| l.contains(needle));
+            if present == want {
+                return true;
+            }
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => screen.advance(&chunk),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
+        false
+    };
+
+    // The tail of the output is on screen; line 1 has scrolled away. Gate
+    // on a line number that appears only in the output — the status line
+    // echoes the command, which contains "200".
+    assert!(
+        drain_while(&mut screen, "197", true, &rx),
+        "tail never appeared:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Wheel up over the pane content (SGR button 64) far enough to reach
+    // early history; the scrolled chip appears.
+    for _ in 0..30 {
+        pty.write(b"\x1b[<64;60;10M").expect("wheel up");
+    }
+    assert!(
+        drain_while(&mut screen, "↑", true, &rx),
+        "scroll chip never appeared:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Typing snaps back to live output: the chip clears.
+    pty.write(b"x").expect("type");
+    assert!(
+        drain_while(&mut screen, "↑", false, &rx),
+        "chip never cleared after typing:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
 }
 
 #[test]

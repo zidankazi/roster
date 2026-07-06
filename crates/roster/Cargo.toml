@@ -7,12 +7,20 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Direct dep only to turn on the paste event for the crossterm build that
+# ratatui re-exports; all crossterm use goes through `ratatui::crossterm`.
+crossterm = { version = "0.29", features = ["bracketed-paste"] }
+libc = "0.2"
 ratatui = "0.30.2"
 roster-core = { path = "../roster-core" }
 roster-detect = { path = "../roster-detect" }
+roster-proto = { path = "../roster-proto" }
 roster-pty = { path = "../roster-pty" }
 roster-term = { path = "../roster-term" }
 roster-tui = { path = "../roster-tui" }
+
+[dev-dependencies]
+roster-proto = { path = "../roster-proto" }
 
 [lints]
 workspace = true

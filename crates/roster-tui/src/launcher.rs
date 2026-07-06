@@ -408,7 +408,7 @@ impl Widget for Launcher<'_> {
 }
 
 /// Blank the modal's cells so panes underneath don't bleed through.
-fn fill(buf: &mut Buffer, rect: Rect) {
+pub(crate) fn fill(buf: &mut Buffer, rect: Rect) {
     for y in rect.y..rect.y + rect.height {
         for x in rect.x..rect.x + rect.width {
             if let Some(cell) = buf.cell_mut((x, y)) {
@@ -419,7 +419,7 @@ fn fill(buf: &mut Buffer, rect: Rect) {
 }
 
 /// Draw a rounded border with a title, in the accent color.
-fn frame(buf: &mut Buffer, rect: Rect, title: &str) {
+pub(crate) fn frame(buf: &mut Buffer, rect: Rect, title: &str) {
     let style = Style::default().fg(ACCENT);
     let (left, right, top, bottom) = (
         rect.x,

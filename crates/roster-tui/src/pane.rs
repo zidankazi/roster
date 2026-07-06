@@ -15,12 +15,37 @@ use crate::style::cell_style;
 /// widget.
 pub struct PaneView<'a> {
     grid: &'a Grid,
+    selection: Option<((u16, u16), (u16, u16))>,
 }
 
 impl<'a> PaneView<'a> {
     /// A view over `grid`.
     pub fn new(grid: &'a Grid) -> Self {
-        PaneView { grid }
+        PaneView {
+            grid,
+            selection: None,
+        }
+    }
+
+    /// A linear text selection to highlight, as two `(col, row)` endpoints
+    /// in grid coordinates (either order).
+    pub fn selection(mut self, selection: Option<((u16, u16), (u16, u16))>) -> Self {
+        self.selection = selection;
+        self
+    }
+
+    /// Whether (`col`, `row`) falls inside the linear selection.
+    fn selected(&self, col: usize, row: usize) -> bool {
+        let Some((a, b)) = self.selection else {
+            return false;
+        };
+        // Normalize to reading order: sort by row, then column.
+        let (mut a, mut b) = ((a.1, a.0), (b.1, b.0));
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        let point = (row as u16, col as u16);
+        point >= a && point <= b
     }
 }
 
@@ -37,7 +62,13 @@ impl Widget for PaneView<'_> {
                 let y = area.y + row as u16;
                 if let Some(target) = buf.cell_mut((x, y)) {
                     target.set_char(cell.ch);
-                    target.set_style(cell_style(cell.style));
+                    let mut style = cell.style;
+                    if self.selected(col, row) {
+                        // Selection reads as inverted cells, like any
+                        // terminal.
+                        style.reverse = !style.reverse;
+                    }
+                    target.set_style(cell_style(style));
                 }
             }
         }
@@ -103,5 +134,28 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
         PaneView::new(&grid).render(Rect::new(1, 0, 2, 1), &mut buf);
         assert_eq!(buffer_row(&buf, 0), " x");
+    }
+
+    #[test]
+    fn selection_inverts_the_linear_span() {
+        let grid = Grid::from_text("abcd\nefgh");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 2));
+        // From (2,0) to (1,1): linear selection covers c, d, e, f.
+        PaneView::new(&grid)
+            .selection(Some(((2, 0), (1, 1))))
+            .render(Rect::new(0, 0, 4, 2), &mut buf);
+        let reversed = |x: u16, y: u16| {
+            buf.cell((x, y))
+                .unwrap()
+                .style()
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        };
+        assert!(!reversed(1, 0), "b outside");
+        assert!(reversed(2, 0), "c inside");
+        assert!(reversed(3, 0), "d inside");
+        assert!(reversed(0, 1), "e inside");
+        assert!(reversed(1, 1), "f inside");
+        assert!(!reversed(2, 1), "g outside");
     }
 }

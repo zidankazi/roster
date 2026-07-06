@@ -12,17 +12,30 @@ use ratatui::style::{Modifier, Style};
 use ratatui::Frame;
 use roster_core::{Grid, PaneId, Session};
 
+mod confirm;
+mod exited;
 mod hit;
 mod launcher;
 mod pane;
 mod sidebar;
 mod style;
+mod toast;
 
+pub use confirm::{confirm_button_at, confirm_contains, Confirm, ConfirmButton};
+pub use exited::{draw_exited, exited_buttons, exited_card_rect};
 pub use hit::{hit_test, pointer_for, Hit, Pointer};
 pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
-pub use sidebar::{format_age, sidebar_entries, Message, Sidebar, SidebarEntry, SidebarState};
+pub use sidebar::{
+    format_age, sidebar_entries, sidebar_rows, Message, Sidebar, SidebarEntry, SidebarRow,
+    SidebarState,
+};
 pub use style::{cell_style, state_color, state_glyph, state_label, ACCENT};
+pub use toast::{draw_toasts, toast_rects, ToastLevel};
+
+/// A text selection: the pane and its two `(col, row)` endpoints in
+/// pane-content coordinates, in either order.
+pub type Selection = (PaneId, (u16, u16), (u16, u16));
 
 /// Columns reserved for the sidebar, when the terminal is wide enough to
 /// afford them; narrower terminals give it up to half the width.
@@ -65,6 +78,16 @@ pub struct View<'a> {
     pub side: SidebarSide,
     /// The agent launcher, when open: its items and input state.
     pub launcher: Option<(&'a [LaunchItem], &'a LauncherState)>,
+    /// The close-confirmation dialog, when open: the threatened agent's
+    /// name and the button under the pointer.
+    pub confirm: Option<(&'a str, Option<ConfirmButton>)>,
+    /// Live toasts, newest first.
+    pub toasts: &'a [(&'a str, ToastLevel)],
+    /// An in-progress or finished text selection: the pane and its two
+    /// endpoints in pane-content coordinates (either order).
+    pub selection: Option<Selection>,
+    /// Panes scrolled up into history, with how many lines back they sit.
+    pub scrolled: &'a HashMap<PaneId, usize>,
     /// Bare start: draw the launcher as the full welcome screen (wordmark
     /// over the picker) instead of the compact modal.
     pub welcome: bool,
@@ -156,6 +179,28 @@ pub fn view_toggle_cols() -> (std::ops::Range<u16>, std::ops::Range<u16>) {
     (0..6, 7..13)
 }
 
+/// The status row's right-aligned workspace indicator — `⧉ 2/3`, clickable
+/// to cycle windows. `None` with a single window (nothing to indicate) or
+/// when the status row is too crowded to fit it.
+pub fn status_windows_span(area: Rect, active: usize, count: usize) -> Option<(Rect, String)> {
+    if count <= 1 || area.height < STATUS_HEIGHT {
+        return None;
+    }
+    let text = format!("⧉ {}/{}", active + 1, count);
+    let width = text.chars().count() as u16 + 2;
+    (area.width > width + 24).then(|| {
+        (
+            Rect::new(
+                area.x + area.width - width,
+                area.y + area.height - STATUS_HEIGHT,
+                width,
+                1,
+            ),
+            text,
+        )
+    })
+}
+
 /// The part of a laid-out pane rect its content actually occupies: the top
 /// row is given to the pane's title bar, and one column to a separator on
 /// the right edge when another pane sits beyond it. Stacked panes need no
@@ -193,6 +238,9 @@ pub fn render(frame: &mut Frame, view: &View) {
             let (cursor_x, cursor_y) = launcher.input_position(area);
             frame.set_cursor_position(Position::new(cursor_x, cursor_y));
             frame.render_widget(launcher, area);
+            // Launch failures must reach the user even on the welcome
+            // screen.
+            draw_toasts(frame.buffer_mut(), area, view.toasts);
             return;
         }
     }
@@ -239,19 +287,57 @@ pub fn render(frame: &mut Frame, view: &View) {
         let Some(grid) = view.grids.get(&id) else {
             continue;
         };
-        frame.render_widget(PaneView::new(grid), content);
+        let selection = match view.selection {
+            Some((pane, a, b)) if pane == id => Some((a, b)),
+            _ => None,
+        };
+        frame.render_widget(PaneView::new(grid).selection(selection), content);
+
+        // A chip in the pane's top-right corner while scrolled into
+        // history: how far back, and that the view isn't live.
+        if let Some(offset) = view.scrolled.get(&id).filter(|o| **o > 0) {
+            let chip = format!(" ↑ {offset} ");
+            let chip_len = chip.chars().count() as u16;
+            if content.width > chip_len + 2 {
+                frame.buffer_mut().set_string(
+                    content.x + content.width - chip_len - 1,
+                    content.y,
+                    &chip,
+                    Style::default()
+                        .fg(style::ACCENT)
+                        .add_modifier(Modifier::REVERSED | Modifier::BOLD),
+                );
+            }
+        }
 
         if let Some(code) = view.exited.get(&id) {
-            let notice = format!(" exited ({code}) — click ✕ to close ");
-            let y = content.y + content.height.saturating_sub(1);
-            frame.buffer_mut().set_stringn(
-                content.x,
-                y,
-                &notice,
-                usize::from(content.width),
-                Style::default().add_modifier(Modifier::REVERSED),
+            // A real card with restart/close buttons; panes too small for
+            // it keep the one-line strip.
+            let name = pane_display_name(view, id);
+            let drawn = draw_exited(
+                frame.buffer_mut(),
+                content,
+                &name,
+                *code,
+                view.hover == Some(Hit::PaneRestart(id)),
+                view.hover == Some(Hit::PaneClose(id)),
             );
-        } else if view.launcher.is_none() && focused == Some(id) && grid.cursor.visible {
+            if !drawn {
+                let notice = format!(" exited ({code}) — click ✕ to close ");
+                let y = content.y + content.height.saturating_sub(1);
+                frame.buffer_mut().set_stringn(
+                    content.x,
+                    y,
+                    &notice,
+                    usize::from(content.width),
+                    Style::default().add_modifier(Modifier::REVERSED),
+                );
+            }
+        } else if view.launcher.is_none()
+            && view.confirm.is_none()
+            && focused == Some(id)
+            && grid.cursor.visible
+        {
             let (col, row) = (grid.cursor.col as u16, grid.cursor.row as u16);
             if col < content.width && row < content.height {
                 frame.set_cursor_position(Position::new(content.x + col, content.y + row));
@@ -334,6 +420,10 @@ pub fn render(frame: &mut Frame, view: &View) {
         Some(Hit::SidebarEntry(index)) => Some(index),
         _ => None,
     };
+    let hovered_window = match view.hover {
+        Some(Hit::SidebarWindow(window)) => Some(window),
+        _ => None,
+    };
     frame.render_widget(
         Sidebar::new(
             view.entries,
@@ -341,11 +431,14 @@ pub fn render(frame: &mut Frame, view: &View) {
             hovered_entry,
             view.session.window_count(),
             view.tick,
-        ),
+        )
+        .active(view.session.active_window().unwrap_or(0))
+        .hovered_window(hovered_window),
         cards,
     );
 
     draw_status(frame.buffer_mut(), area, view);
+    draw_toasts(frame.buffer_mut(), area, view.toasts);
 
     if let Some((items, state)) = view.launcher {
         let launcher = Launcher::new(items, state);
@@ -354,6 +447,25 @@ pub fn render(frame: &mut Frame, view: &View) {
         frame.set_cursor_position(Position::new(cursor_x, cursor_y));
         frame.render_widget(launcher, area);
     }
+
+    if let Some((name, hover)) = view.confirm {
+        frame.render_widget(Confirm::new(name).hover(hover), area);
+    }
+}
+
+/// A pane's display name: its agent card's name when detected, else the
+/// basename of its command's binary.
+fn pane_display_name(view: &View, id: PaneId) -> String {
+    if let Some(entry) = view.entries.iter().find(|e| e.pane == id) {
+        return entry.agent.clone();
+    }
+    let command = view
+        .session
+        .pane(id)
+        .and_then(|p| p.command.clone())
+        .unwrap_or_default();
+    let name = command.split_whitespace().next().unwrap_or("").to_string();
+    name.rsplit('/').next().unwrap_or(&name).to_string()
 }
 
 /// One pane's title bar: an accent marker on the focused pane, a live state
@@ -448,14 +560,35 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
         );
         x += text.chars().count() as u16 + 1;
     }
-    if x < area.x + area.width {
+    // The workspace indicator claims the right edge; the hint text yields
+    // to it.
+    let span = status_windows_span(
+        area,
+        view.session.active_window().unwrap_or(0),
+        view.session.window_count(),
+    );
+    let right_edge = span
+        .as_ref()
+        .map(|(rect, _)| rect.x)
+        .unwrap_or(area.x + area.width);
+    if x < right_edge {
         buf.set_stringn(
             x,
             y,
             view.status,
-            usize::from(area.x + area.width - x),
+            usize::from(right_edge - x),
             Style::default().add_modifier(Modifier::DIM),
         );
+    }
+    if let Some((rect, text)) = span {
+        let style = if view.hover == Some(Hit::StatusWindows) {
+            Style::default()
+                .fg(style::ACCENT)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else {
+            Style::default().fg(style::ACCENT).add_modifier(Modifier::BOLD)
+        };
+        buf.set_string(rect.x + 1, rect.y, &text, style);
     }
 }
 

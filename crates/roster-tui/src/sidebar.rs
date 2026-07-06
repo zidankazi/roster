@@ -120,12 +120,63 @@ impl SidebarState {
     }
 }
 
+/// One row of the sidebar's card region, in order from the top. Render
+/// draws this plan and hit-testing mirrors it, so the two can't drift.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SidebarRow {
+    /// A workspace header (window index). Clickable: jumps to the window.
+    Header(usize),
+    /// The first line of an entry's card: glyph, name, age.
+    EntryName(usize),
+    /// The second line of an entry's card: state and reason.
+    EntryDetail(usize),
+    /// An agent-less workspace's placeholder line (window index).
+    Empty(usize),
+    /// Breathing room.
+    Blank,
+}
+
+/// The sidebar's card-region rows for `entries` across `workspaces`
+/// windows. With a single window there are no headers — just the cards.
+/// With several, every workspace gets a header even when no agent runs in
+/// it, so plain-shell windows stay reachable by mouse.
+pub fn sidebar_rows(entries: &[SidebarEntry], workspaces: usize) -> Vec<SidebarRow> {
+    let mut rows = Vec::new();
+    if workspaces <= 1 {
+        for index in 0..entries.len() {
+            rows.push(SidebarRow::EntryName(index));
+            rows.push(SidebarRow::EntryDetail(index));
+            rows.push(SidebarRow::Blank);
+        }
+        return rows;
+    }
+    for window in 0..workspaces {
+        rows.push(SidebarRow::Header(window));
+        let mut any = false;
+        for (index, entry) in entries.iter().enumerate() {
+            if entry.window == window {
+                any = true;
+                rows.push(SidebarRow::EntryName(index));
+                rows.push(SidebarRow::EntryDetail(index));
+                rows.push(SidebarRow::Blank);
+            }
+        }
+        if !any {
+            rows.push(SidebarRow::Empty(window));
+            rows.push(SidebarRow::Blank);
+        }
+    }
+    rows
+}
+
 /// The agent-state sidebar widget.
 pub struct Sidebar<'a> {
     entries: &'a [SidebarEntry],
     selected: Option<usize>,
     hovered: Option<usize>,
+    hovered_window: Option<usize>,
     workspaces: usize,
+    active: usize,
     tick: u64,
 }
 
@@ -133,8 +184,8 @@ impl<'a> Sidebar<'a> {
     /// A sidebar over `entries`, highlighting `selected` when given and
     /// giving `hovered` (the card under the mouse) a dim marker.
     /// `workspaces` is the session's window count; workspace headers are
-    /// shown only when there is more than one. `tick` animates the working
-    /// spinner.
+    /// shown only when there is more than one, with the `active` window's
+    /// header lit. `tick` animates the working spinner.
     pub fn new(
         entries: &'a [SidebarEntry],
         selected: Option<usize>,
@@ -146,9 +197,23 @@ impl<'a> Sidebar<'a> {
             entries,
             selected,
             hovered,
+            hovered_window: None,
             workspaces,
+            active: 0,
             tick,
         }
+    }
+
+    /// The active window, lighting its workspace header.
+    pub fn active(mut self, window: usize) -> Self {
+        self.active = window;
+        self
+    }
+
+    /// The workspace header under the mouse, for hover highlighting.
+    pub fn hovered_window(mut self, window: Option<usize>) -> Self {
+        self.hovered_window = window;
+        self
     }
 
     /// Count of entries currently in the blocked state.
@@ -195,92 +260,114 @@ impl Widget for Sidebar<'_> {
         }
         y += 2;
 
-        let mut last_window: Option<usize> = None;
-        for (index, entry) in self.entries.iter().enumerate() {
+        for row in sidebar_rows(self.entries, self.workspaces) {
             if y >= bottom {
                 break;
             }
-            if self.workspaces > 1 && last_window != Some(entry.window) {
-                buf.set_stringn(
-                    area.x + 1,
-                    y,
-                    format!("workspace {}", entry.window + 1),
-                    width.saturating_sub(1),
-                    Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC),
-                );
-                last_window = Some(entry.window);
-                y += 1;
-                if y >= bottom {
-                    break;
+            match row {
+                SidebarRow::Header(window) => {
+                    // The active workspace's header is lit; hovering any
+                    // header lights it as a click target.
+                    let mut style = if window == self.active {
+                        Style::default()
+                            .fg(crate::style::ACCENT)
+                            .add_modifier(Modifier::ITALIC)
+                    } else {
+                        Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC)
+                    };
+                    if self.hovered_window == Some(window) {
+                        style = style.add_modifier(Modifier::REVERSED);
+                    }
+                    buf.set_stringn(
+                        area.x + 1,
+                        y,
+                        format!("workspace {}", window + 1),
+                        width.saturating_sub(1),
+                        style,
+                    );
                 }
-            }
-
-            let selected = self.selected == Some(index);
-            let marker_style = Style::default().fg(crate::style::ACCENT);
-            if selected {
-                buf.set_string(area.x, y, "❯", marker_style);
-            } else if self.hovered == Some(index) {
-                // Hover affordance: a quiet marker where selection's ❯ goes.
-                buf.set_string(area.x, y, "❯", Style::default().add_modifier(Modifier::DIM));
-            }
-
-            // Line 1: glyph + agent name (bold; accented when selected),
-            // age right-aligned and dim.
-            buf.set_string(
-                area.x + 2,
-                y,
-                state_glyph(entry.state, self.tick),
-                Style::default().fg(state_color(entry.state)),
-            );
-            let age = entry.age.map(format_age).unwrap_or_default();
-            let name_width = width.saturating_sub(4).saturating_sub(age.len() + 1);
-            let name_style = if selected {
-                Style::default()
-                    .fg(crate::style::ACCENT)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().add_modifier(Modifier::BOLD)
-            };
-            buf.set_string(
-                area.x + 4,
-                y,
-                truncate(&entry.agent, name_width),
-                name_style,
-            );
-            if !age.is_empty() {
-                let x = area.x + area.width - 1 - age.len() as u16;
-                buf.set_string(x, y, &age, Style::default().add_modifier(Modifier::DIM));
-            }
-            y += 1;
-
-            // Line 2: the state word in its own color — the signal — with
-            // the reason dimmed after it.
-            if y < bottom {
-                let label = state_label(entry.state);
-                buf.set_stringn(
-                    area.x + 4,
-                    y,
-                    label,
-                    width.saturating_sub(4),
-                    Style::default().fg(state_color(entry.state)),
-                );
-                if let Some(reason) = &entry.reason {
-                    let used = 4 + label.chars().count();
-                    let rest = width.saturating_sub(used + 1);
-                    if rest > 4 {
-                        buf.set_stringn(
-                            area.x + used as u16,
+                SidebarRow::Empty(_) => {
+                    buf.set_stringn(
+                        area.x + 4,
+                        y,
+                        "no agents",
+                        width.saturating_sub(4),
+                        Style::default().add_modifier(Modifier::DIM),
+                    );
+                }
+                SidebarRow::EntryName(index) => {
+                    let entry = &self.entries[index];
+                    let selected = self.selected == Some(index);
+                    let marker_style = Style::default().fg(crate::style::ACCENT);
+                    if selected {
+                        buf.set_string(area.x, y, "❯", marker_style);
+                    } else if self.hovered == Some(index) {
+                        // Hover affordance: a quiet marker where selection's
+                        // ❯ goes.
+                        buf.set_string(
+                            area.x,
                             y,
-                            format!(" · {}", truncate(reason, rest.saturating_sub(3))),
-                            rest,
+                            "❯",
                             Style::default().add_modifier(Modifier::DIM),
                         );
                     }
-                }
-                y += 1;
-            }
 
-            // Breathing room between cards.
+                    // Glyph + agent name (bold; accented when selected), age
+                    // right-aligned and dim.
+                    buf.set_string(
+                        area.x + 2,
+                        y,
+                        state_glyph(entry.state, self.tick),
+                        Style::default().fg(state_color(entry.state)),
+                    );
+                    let age = entry.age.map(format_age).unwrap_or_default();
+                    let name_width = width.saturating_sub(4).saturating_sub(age.len() + 1);
+                    let name_style = if selected {
+                        Style::default()
+                            .fg(crate::style::ACCENT)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    };
+                    buf.set_string(
+                        area.x + 4,
+                        y,
+                        truncate(&entry.agent, name_width),
+                        name_style,
+                    );
+                    if !age.is_empty() {
+                        let x = area.x + area.width - 1 - age.len() as u16;
+                        buf.set_string(x, y, &age, Style::default().add_modifier(Modifier::DIM));
+                    }
+                }
+                SidebarRow::EntryDetail(index) => {
+                    // The state word in its own color — the signal — with
+                    // the reason dimmed after it.
+                    let entry = &self.entries[index];
+                    let label = state_label(entry.state);
+                    buf.set_stringn(
+                        area.x + 4,
+                        y,
+                        label,
+                        width.saturating_sub(4),
+                        Style::default().fg(state_color(entry.state)),
+                    );
+                    if let Some(reason) = &entry.reason {
+                        let used = 4 + label.chars().count();
+                        let rest = width.saturating_sub(used + 1);
+                        if rest > 4 {
+                            buf.set_stringn(
+                                area.x + used as u16,
+                                y,
+                                format!(" · {}", truncate(reason, rest.saturating_sub(3))),
+                                rest,
+                                Style::default().add_modifier(Modifier::DIM),
+                            );
+                        }
+                    }
+                }
+                SidebarRow::Blank => {}
+            }
             y += 1;
         }
     }

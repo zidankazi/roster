@@ -7,10 +7,10 @@
 use ratatui::layout::Rect;
 use roster_core::{PaneId, Session};
 
-use crate::sidebar::SidebarEntry;
+use crate::sidebar::{sidebar_rows, SidebarEntry, SidebarRow};
 use crate::{
     close_button_cols, local_panes, panes_area, sidebar_button_row, sidebar_inner,
-    sidebar_view_row, view_toggle_cols, SidebarSide, STATUS_HEIGHT,
+    sidebar_view_row, status_windows_span, view_toggle_cols, SidebarSide, STATUS_HEIGHT,
 };
 
 /// What a screen position corresponds to.
@@ -18,6 +18,9 @@ use crate::{
 pub enum Hit {
     /// A sidebar agent card.
     SidebarEntry(usize),
+    /// A sidebar workspace header (window index) — or an agent-less
+    /// workspace's placeholder row. Clicking jumps to that window.
+    SidebarWindow(usize),
     /// The sidebar's pinned `+ new agent` button.
     SidebarNewAgent,
     /// The `grid` half of the sidebar's layout switcher.
@@ -30,8 +33,12 @@ pub enum Hit {
     PaneTitle(PaneId),
     /// A pane title's `✕` close button.
     PaneClose(PaneId),
+    /// An exited pane's overlay `restart` button.
+    PaneRestart(PaneId),
     /// A pane's content area (or its separator column).
     Pane(PaneId),
+    /// The status line's workspace indicator — click cycles windows.
+    StatusWindows,
     /// The status line.
     Status,
     /// Nothing interactive.
@@ -75,11 +82,14 @@ impl Pointer {
 pub fn pointer_for(hit: Hit) -> Pointer {
     match hit {
         Hit::SidebarEntry(_)
+        | Hit::SidebarWindow(_)
         | Hit::SidebarNewAgent
         | Hit::SidebarViewGrid
         | Hit::SidebarViewSolo
         | Hit::PaneTitle(_)
-        | Hit::PaneClose(_) => Pointer::Hand,
+        | Hit::PaneClose(_)
+        | Hit::PaneRestart(_)
+        | Hit::StatusWindows => Pointer::Hand,
         Hit::Pane(_) => Pointer::Text,
         Hit::Sidebar | Hit::Status | Hit::Outside => Pointer::Default,
     }
@@ -101,6 +111,15 @@ pub fn hit_test(
         return Hit::Outside;
     }
     if area.height >= STATUS_HEIGHT && y >= area.y + area.height - STATUS_HEIGHT {
+        if let Some((span, _)) = status_windows_span(
+            area,
+            session.active_window().unwrap_or(0),
+            session.window_count(),
+        ) {
+            if x >= span.x && x < span.x + span.width {
+                return Hit::StatusWindows;
+            }
+        }
         return Hit::Status;
     }
 
@@ -136,9 +155,21 @@ pub fn hit_test(
         if y >= cards.y + cards.height {
             return Hit::Sidebar;
         }
-        return match sidebar_entry_at(cards, entries, session.window_count(), y) {
-            Some(index) => Hit::SidebarEntry(index),
-            None => Hit::Sidebar,
+        // Mirror the sidebar's row plan: cards start two rows below the
+        // sidebar's own header.
+        let first = cards.y + 2;
+        if y < first {
+            return Hit::Sidebar;
+        }
+        let rows = sidebar_rows(entries, session.window_count());
+        return match rows.get(usize::from(y - first)) {
+            Some(SidebarRow::Header(window)) | Some(SidebarRow::Empty(window)) => {
+                Hit::SidebarWindow(*window)
+            }
+            Some(SidebarRow::EntryName(index)) | Some(SidebarRow::EntryDetail(index)) => {
+                Hit::SidebarEntry(*index)
+            }
+            Some(SidebarRow::Blank) | None => Hit::Sidebar,
         };
     }
 
@@ -165,33 +196,6 @@ pub fn hit_test(
         }
     }
     Hit::Sidebar
-}
-
-/// The sidebar entry whose card covers row `y`, mirroring the sidebar's
-/// row layout: header + blank, then per entry an optional workspace header,
-/// two card rows, and a blank spacer.
-fn sidebar_entry_at(
-    bar: Rect,
-    entries: &[SidebarEntry],
-    workspaces: usize,
-    y: u16,
-) -> Option<usize> {
-    let mut row = bar.y + 2;
-    let mut last_window: Option<usize> = None;
-    for (index, entry) in entries.iter().enumerate() {
-        if workspaces > 1 && last_window != Some(entry.window) {
-            last_window = Some(entry.window);
-            row += 1;
-        }
-        if y >= row && y < row + 2 {
-            return Some(index);
-        }
-        row += 3;
-        if row > bar.y + bar.height {
-            break;
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -381,6 +385,64 @@ mod tests {
             Hit::SidebarEntry(0)
         );
         let _ = right_id;
+    }
+
+    #[test]
+    fn workspace_headers_and_empty_windows_resolve_to_window_hits() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        // Window 0: a plain shell, no agents. Window 1: an agent.
+        let shell = session.focused().unwrap();
+        session.pane_mut(shell).unwrap().command = Some("zsh".into());
+        let agent = session.new_window();
+        session.pane_mut(agent).unwrap().command = Some("claude".into());
+        session.set_reading(agent, AgentState::Working, Some("w".into()), now);
+        let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);
+
+        let area = Rect::new(0, 0, 120, 30);
+        // Rows: y2 header w0, y3 "no agents" placeholder, y4 blank,
+        // y5 header w1, y6-7 the agent card.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 2),
+            Hit::SidebarWindow(0)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 3),
+            Hit::SidebarWindow(0)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 4),
+            Hit::Sidebar
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 5),
+            Hit::SidebarWindow(1)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 6),
+            Hit::SidebarEntry(0)
+        );
+    }
+
+    #[test]
+    fn status_indicator_resolves_only_with_multiple_windows() {
+        let (mut session, entries) = setup();
+        let area = Rect::new(0, 0, 120, 30);
+        // One window: the whole status row is plain status.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 115, 29),
+            Hit::Status
+        );
+        session.new_window();
+        // Two windows: `⧉ 1/2` plus padding is 7 columns at the right edge.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 115, 29),
+            Hit::StatusWindows
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 60, 29),
+            Hit::Status
+        );
     }
 
     #[test]

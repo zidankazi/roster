@@ -1,10 +1,18 @@
 //! The event loop: PTY output → emulator → detection → model → repaint,
 //! plus key handling and the pane-switch side effects.
+//!
+//! Panes come in two flavors sharing one runtime: local (the app owns the
+//! PTY) and remote (a `roster-proto` session server owns it; the app is a
+//! view). Remote pane ids mirror the server's, so the layout snapshot the
+//! server stores needs no translation on reattach.
 
-use std::collections::HashMap;
-use std::io::{self, Read};
+use std::collections::{HashMap, VecDeque};
+use std::io::{self, Read, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use roster_proto::{read_frame, write_frame, Frame};
 
 use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -17,9 +25,10 @@ use roster_detect::{AgentKind, Detector, PaneTracker};
 use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
-    content_rect, hit_test, launch_items, local_panes, panes_area, pointer_for, render,
-    sidebar_entries, Hit, LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry,
-    SidebarSide, SidebarState, View,
+    confirm_button_at, confirm_contains, content_rect, exited_buttons, hit_test, launch_items,
+    local_panes, panes_area, pointer_for, render, sidebar_entries, toast_rects, ConfirmButton,
+    Hit, LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry, SidebarSide,
+    SidebarState, ToastLevel, View,
 };
 
 use crate::keys::encode_key;
@@ -50,11 +59,107 @@ enum Mode {
     Jump,
     /// The agent launcher is open and owns typed input.
     Launch(LauncherState),
+    /// Closing this pane would kill a live agent; waiting for a yes/no.
+    ConfirmClose(PaneId),
+}
+
+/// How long a toast stays up before it fades on its own.
+const TOAST_TTL: Duration = Duration::from_secs(5);
+
+/// One transient notification card.
+struct Toast {
+    text: String,
+    level: ToastLevel,
+    born: Instant,
+}
+
+/// A shared write handle to the session server's transport.
+type RemoteWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
+/// Where a pane's input goes and who owns its process.
+enum PaneIo {
+    /// The app owns the PTY; dropping it kills the child.
+    Local(Pty),
+    /// A session server owns the PTY; frames carry input and resizes.
+    /// Dropping this does nothing — the pane outlives the client.
+    Remote { writer: RemoteWriter, pane: u64 },
+}
+
+impl PaneIo {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
+        match self {
+            PaneIo::Local(pty) => pty.write(bytes),
+            PaneIo::Remote { writer, pane } => {
+                let mut w = writer.lock().expect("writer lock");
+                write_frame(
+                    &mut *w,
+                    &Frame::Input {
+                        pane: *pane,
+                        bytes: bytes.to_vec(),
+                    },
+                )
+            }
+        }
+    }
+
+    fn resize(&mut self, cols: u16, rows: u16) -> io::Result<()> {
+        match self {
+            PaneIo::Local(pty) => pty
+                .resize(cols, rows)
+                .map_err(|e| io::Error::other(e.to_string())),
+            PaneIo::Remote { writer, pane } => {
+                let mut w = writer.lock().expect("writer lock");
+                write_frame(
+                    &mut *w,
+                    &Frame::Resize {
+                        pane: *pane,
+                        cols,
+                        rows,
+                    },
+                )
+            }
+        }
+    }
+}
+
+/// Where the next server-spawned pane should land in the layout.
+enum Placement {
+    /// Its own fresh window.
+    Window,
+    /// Swap in for an existing pane (placeholder replacement, restart).
+    Replace(PaneId),
+    /// Split an existing pane.
+    Split(PaneId, SplitDirection),
+}
+
+/// The client side of a persistent session.
+struct RemoteSession {
+    /// The session's name, for detach messaging.
+    name: String,
+    /// Serialized writes to the server.
+    writer: RemoteWriter,
+    /// Frames from the server, pumped by a reader thread.
+    rx: Receiver<Frame>,
+    /// Spawn placements awaiting their `PaneOpened`, in request order.
+    pending: VecDeque<Placement>,
+    /// The last layout blob sent, to skip redundant `SetLayout`s.
+    last_layout: String,
+    /// Set when the user detached (vs the session ending).
+    detached: bool,
+    /// The server's shutdown reason, when it ended the connection.
+    shutdown: Option<String>,
+}
+
+impl RemoteSession {
+    fn send(&self, frame: &Frame) {
+        let mut w = self.writer.lock().expect("writer lock");
+        let _ = write_frame(&mut *w, frame);
+    }
 }
 
 /// Everything one live pane owns besides its model entry.
 struct PaneRuntime {
-    pty: Pty,
+    io: PaneIo,
     screen: Screen,
     tracker: PaneTracker,
     kind: Option<AgentKind>,
@@ -93,7 +198,16 @@ pub struct App {
     last_click: Option<(Instant, (u16, u16))>,
     /// The pointer shape most recently told to the terminal.
     pointer: Pointer,
-    notice: Option<String>,
+    /// Transient notification cards, newest first.
+    toasts: Vec<Toast>,
+    /// A mouse-drag selection being made: the pane and the anchor cell, in
+    /// pane-content coordinates.
+    sel_anchor: Option<(PaneId, (u16, u16))>,
+    /// The current selection: pane and both endpoints, content-local.
+    /// Highlighted until the next click or keystroke; copied on release.
+    selection: Option<roster_tui::Selection>,
+    /// The persistent session this app is attached to, if any.
+    remote: Option<RemoteSession>,
     quit: bool,
     output_tx: Sender<Output>,
     output_rx: Receiver<Output>,
@@ -134,7 +248,10 @@ impl App {
             last_mouse: None,
             last_click: None,
             pointer: Pointer::Default,
-            notice: None,
+            toasts: Vec::new(),
+            sel_anchor: None,
+            selection: None,
+            remote: None,
             quit: false,
             output_tx,
             output_rx,
@@ -163,9 +280,203 @@ impl App {
         Ok(app)
     }
 
+    /// Attach to a persistent session over `reader`/`writer` (a unix
+    /// socket locally, an ssh subprocess's stdio remotely). Rebuilds the
+    /// model from the server's `Hello` and stored layout; pane screens
+    /// repaint from replay frames. Extra `commands` each get a fresh
+    /// window; a brand-new session with none opens the welcome launcher
+    /// over a placeholder shell, like a bare local start.
+    pub fn new_remote(
+        detector: Detector,
+        side: SidebarSide,
+        name: &str,
+        mut reader: Box<dyn Read + Send>,
+        writer: Box<dyn Write + Send>,
+        commands: &[String],
+    ) -> Result<App, String> {
+        let mut writer = writer;
+        write_frame(&mut writer, &Frame::Attach).map_err(|e| format!("attaching: {e}"))?;
+        let hello = read_frame(&mut reader)
+            .map_err(|e| format!("reading hello: {e}"))?
+            .ok_or("server closed the connection")?;
+        let Frame::Hello { mut panes, layout } = hello else {
+            return Err("server spoke out of turn".to_string());
+        };
+        panes.sort_by_key(|p| p.pane);
+
+        // The stored layout is the truth about shape; the Hello about
+        // existence. Panes the server dropped leave the layout, panes the
+        // layout never saw get their own windows.
+        let mut session = std::str::from_utf8(&layout)
+            .ok()
+            .and_then(Session::restore)
+            .unwrap_or_else(Session::empty);
+        let known: Vec<PaneId> = session.panes().iter().map(|p| p.id).collect();
+        for id in known {
+            if !panes.iter().any(|p| p.pane == id.raw()) {
+                session.close(id);
+            }
+        }
+        for pane in &panes {
+            if session.pane(PaneId::from_raw(pane.pane)).is_none() {
+                session.adopt_window(pane.pane);
+            }
+        }
+
+        // Bootstrap synchronously (no reader thread yet): a fresh session
+        // spawns its placeholder shell or the requested commands, so the
+        // model is never empty when the loop starts. Frames other than the
+        // awaited PaneOpened are deferred into the channel below.
+        let (frame_tx, frame_rx) = mpsc::channel::<Frame>();
+        let mut placeholder = None;
+        let mut bootstrap: Vec<(u64, String)> = Vec::new();
+        if session.is_empty() {
+            let to_spawn: Vec<String> = if commands.is_empty() {
+                vec![default_shell()]
+            } else {
+                commands.to_vec()
+            };
+            for command in &to_spawn {
+                write_frame(&mut writer, &Frame::Spawn {
+                    command: command.clone(),
+                })
+                .map_err(|e| format!("spawning {command}: {e}"))?;
+            }
+            let mut opened = 0;
+            while opened < to_spawn.len() {
+                match read_frame(&mut reader).map_err(|e| format!("attaching: {e}"))? {
+                    Some(Frame::PaneOpened { pane, command }) => {
+                        let id = session
+                            .adopt_window(pane)
+                            .ok_or("server reused a pane id")?;
+                        bootstrap.push((pane, command));
+                        if commands.is_empty() {
+                            placeholder = Some(id);
+                        }
+                        opened += 1;
+                    }
+                    Some(Frame::SpawnFailed { error }) => {
+                        return Err(format!("spawn failed: {error}"));
+                    }
+                    Some(other) => {
+                        let _ = frame_tx.send(other);
+                    }
+                    None => return Err("server closed during attach".to_string()),
+                }
+            }
+        }
+
+        // From here frames flow through the channel.
+        let pump_tx = frame_tx.clone();
+        std::thread::spawn(move || loop {
+            match read_frame(&mut reader) {
+                Ok(Some(frame)) => {
+                    if pump_tx.send(frame).is_err() {
+                        return;
+                    }
+                }
+                Ok(None) => {
+                    let _ = pump_tx.send(Frame::Shutdown {
+                        reason: "connection closed".into(),
+                    });
+                    return;
+                }
+                Err(error) => {
+                    let _ = pump_tx.send(Frame::Shutdown {
+                        reason: format!("connection lost: {error}"),
+                    });
+                    return;
+                }
+            }
+        });
+
+        let (output_tx, output_rx) = mpsc::channel();
+        let launchables = launch_items(&detector, &default_shell());
+        let mut app = App {
+            session,
+            runtimes: HashMap::new(),
+            detector,
+            sidebar: SidebarState::new(),
+            side,
+            mode: if placeholder.is_some() {
+                Mode::Launch(LauncherState::new())
+            } else {
+                Mode::Normal
+            },
+            launchables,
+            last_entries: Vec::new(),
+            last_detect: Instant::now() - DETECT_EVERY,
+            last_area: Rect::new(0, 0, SPAWN_COLS, SPAWN_ROWS),
+            dragging: None,
+            placeholder,
+            next_generation: 0,
+            zoomed: false,
+            last_mouse: None,
+            last_click: None,
+            pointer: Pointer::Default,
+            toasts: Vec::new(),
+            sel_anchor: None,
+            selection: None,
+            remote: Some(RemoteSession {
+                name: name.to_string(),
+                writer: Arc::new(Mutex::new(writer)),
+                rx: frame_rx,
+                pending: VecDeque::new(),
+                last_layout: String::new(),
+                detached: false,
+                shutdown: None,
+            }),
+            quit: false,
+            output_tx,
+            output_rx,
+        };
+        for pane in &panes {
+            app.attach_remote_pane(PaneId::from_raw(pane.pane), pane.pane, &pane.command);
+        }
+        let bootstrapped = !bootstrap.is_empty();
+        for (pane, command) in bootstrap {
+            app.attach_remote_pane(PaneId::from_raw(pane), pane, &command);
+        }
+        for pane in &panes {
+            if let Some(code) = pane.exited {
+                app.mark_exited_with_code(PaneId::from_raw(pane.pane), code);
+            }
+        }
+        // Commands given against an already-populated session each get
+        // their own window, like launching them by hand.
+        if !bootstrapped && !panes.is_empty() {
+            for command in commands {
+                if let Some(remote) = &mut app.remote {
+                    remote.pending.push_back(Placement::Window);
+                    remote.send(&Frame::Spawn {
+                        command: command.clone(),
+                    });
+                }
+            }
+        }
+        Ok(app)
+    }
+
+    /// The message to print after the loop ends, for session runs: how the
+    /// attachment ended and how to come back.
+    pub fn exit_message(&self) -> Option<String> {
+        let remote = self.remote.as_ref()?;
+        if remote.detached {
+            Some(format!(
+                "detached — reattach with: roster attach {}",
+                remote.name
+            ))
+        } else {
+            remote.shutdown.clone()
+        }
+    }
+
     /// Attach a freshly spawned command to an existing model pane and start
     /// its reader thread.
     fn attach(&mut self, id: PaneId, command: &str) -> Result<(), String> {
+        if self.selection.map(|s| s.0) == Some(id) {
+            self.selection = None;
+        }
         let pty = Pty::spawn(command, SPAWN_COLS, SPAWN_ROWS).map_err(|e| e.to_string())?;
         let mut reader = pty.reader().map_err(|e| e.to_string())?;
         let generation = self.next_generation;
@@ -194,7 +505,7 @@ impl App {
         self.runtimes.insert(
             id,
             PaneRuntime {
-                pty,
+                io: PaneIo::Local(pty),
                 screen: Screen::new(SPAWN_COLS, SPAWN_ROWS),
                 tracker: PaneTracker::new(),
                 kind: self.detector.identify(command),
@@ -208,15 +519,52 @@ impl App {
         Ok(())
     }
 
+    /// Register a server-owned pane: model command, emulator screen, agent
+    /// detection. The pane id mirrors the server's.
+    fn attach_remote_pane(&mut self, id: PaneId, server_pane: u64, command: &str) {
+        let writer = self
+            .remote
+            .as_ref()
+            .expect("remote pane outside a session")
+            .writer
+            .clone();
+        if self.selection.map(|s| s.0) == Some(id) {
+            self.selection = None;
+        }
+        self.runtimes.insert(
+            id,
+            PaneRuntime {
+                io: PaneIo::Remote {
+                    writer,
+                    pane: server_pane,
+                },
+                screen: Screen::new(SPAWN_COLS, SPAWN_ROWS),
+                tracker: PaneTracker::new(),
+                kind: self.detector.identify(command),
+                generation: 0,
+                exited: None,
+            },
+        );
+        if let Some(pane) = self.session.pane_mut(id) {
+            pane.command = Some(command.to_string());
+        }
+    }
+
     /// Drive the loop until quit or every pane is gone.
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         let started = Instant::now();
         while !self.quit && !self.session.is_empty() {
             self.drain_output();
+            self.drain_remote();
+            if self.quit || self.session.is_empty() {
+                break;
+            }
             let size = terminal.size()?;
             self.last_area = Rect::new(0, 0, size.width, size.height);
             self.sync_layout(self.last_area);
             self.detect_if_due();
+            self.toasts.retain(|toast| toast.born.elapsed() < TOAST_TTL);
+            self.sync_remote_layout();
 
             self.last_entries = sidebar_entries(&self.session, &self.detector, Instant::now());
             let grids: HashMap<_, _> = self
@@ -234,26 +582,39 @@ impl App {
                 _ => None,
             };
             // Hover follows the last known pointer position; the launcher
-            // modal owns hover itself while open.
+            // and confirm modals own hover themselves while open.
             let hover = match self.mode {
-                Mode::Launch(_) => None,
-                _ => self.last_mouse.map(|(x, y)| {
-                    hit_test(
-                        self.last_area,
-                        &self.session,
-                        self.side,
-                        &self.last_entries,
-                        self.zoomed_pane(),
-                        x,
-                        y,
-                    )
-                }),
+                Mode::Launch(_) | Mode::ConfirmClose(_) => None,
+                _ => self.last_mouse.map(|(x, y)| self.hit_at(x, y)),
             };
             let (mode_badge, status) = self.status_line();
             let launcher = match &self.mode {
                 Mode::Launch(state) => Some((self.launchables.as_slice(), state)),
                 _ => None,
             };
+            let confirm = match &self.mode {
+                Mode::ConfirmClose(id) => {
+                    let name = self.pane_name(*id);
+                    let hover = self
+                        .last_mouse
+                        .and_then(|(x, y)| confirm_button_at(self.last_area, x, y));
+                    Some((name, hover))
+                }
+                _ => None,
+            };
+            let toast_view: Vec<(&str, ToastLevel)> = self
+                .toasts
+                .iter()
+                .map(|toast| (toast.text.as_str(), toast.level))
+                .collect();
+            let scrolled: HashMap<PaneId, usize> = self
+                .runtimes
+                .iter()
+                .filter_map(|(id, rt)| {
+                    let offset = rt.screen.display_offset();
+                    (offset > 0).then_some((*id, offset))
+                })
+                .collect();
             let view = View {
                 session: &self.session,
                 grids: &grids,
@@ -264,6 +625,10 @@ impl App {
                 zoomed: self.zoomed,
                 side: self.side,
                 launcher,
+                confirm: confirm.as_ref().map(|(name, hover)| (name.as_str(), *hover)),
+                toasts: &toast_view,
+                selection: self.selection,
+                scrolled: &scrolled,
                 welcome: self.placeholder.is_some(),
                 mode_badge,
                 status: &status,
@@ -283,6 +648,7 @@ impl App {
                             self.handle_key(key);
                         }
                         Event::Mouse(mouse) => self.handle_mouse(mouse),
+                        Event::Paste(text) => self.handle_paste(&text),
                         // Resizes are picked up from terminal.size() next frame.
                         _ => {}
                     }
@@ -318,19 +684,149 @@ impl App {
         }
     }
 
+    /// Apply frames from the session server: output repaints screens,
+    /// exits linger, opened panes land per their queued placement, and a
+    /// shutdown ends the client (the panes live on).
+    fn drain_remote(&mut self) {
+        let frames: Vec<Frame> = match &self.remote {
+            Some(remote) => remote.rx.try_iter().collect(),
+            None => return,
+        };
+        for frame in frames {
+            match frame {
+                Frame::Output { pane, bytes } | Frame::Replay { pane, bytes } => {
+                    if let Some(rt) = self.runtimes.get_mut(&PaneId::from_raw(pane)) {
+                        rt.screen.advance(&bytes);
+                    }
+                }
+                Frame::Exited { pane, code } => {
+                    self.mark_exited_with_code(PaneId::from_raw(pane), code);
+                }
+                Frame::PaneOpened { pane, command } => self.place_opened_pane(pane, &command),
+                Frame::SpawnFailed { error } => {
+                    if let Some(remote) = &mut self.remote {
+                        remote.pending.pop_front();
+                    }
+                    self.toast(format!("launch failed: {error}"), ToastLevel::Error);
+                }
+                Frame::Shutdown { reason } => {
+                    if let Some(remote) = &mut self.remote {
+                        if !remote.detached {
+                            remote.shutdown = Some(reason);
+                        }
+                    }
+                    self.quit = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Land a server-spawned pane where its `Spawn` asked it to go.
+    fn place_opened_pane(&mut self, server_pane: u64, command: &str) {
+        let placement = self
+            .remote
+            .as_mut()
+            .and_then(|remote| remote.pending.pop_front())
+            .unwrap_or(Placement::Window);
+        let id = match placement {
+            Placement::Window => self.session.adopt_window(server_pane),
+            Placement::Replace(old) => {
+                let new = self.session.replace_pane(old, server_pane);
+                if new.is_some() {
+                    // The replaced pane dies with its server twin.
+                    if let Some(rt) = self.runtimes.remove(&old) {
+                        if let PaneIo::Remote { pane, .. } = rt.io {
+                            self.remote_send(&Frame::Close { pane });
+                        }
+                    }
+                    if self.placeholder == Some(old) {
+                        self.placeholder = None;
+                    }
+                    new
+                } else {
+                    // The target vanished while the spawn was in flight;
+                    // give the new pane its own window instead.
+                    self.session.adopt_window(server_pane)
+                }
+            }
+            Placement::Split(target, direction) => self
+                .session
+                .adopt_split(target, server_pane, direction)
+                .or_else(|| self.session.adopt_window(server_pane)),
+        };
+        if let Some(id) = id {
+            self.attach_remote_pane(id, server_pane, command);
+        }
+    }
+
+    fn remote_send(&self, frame: &Frame) {
+        if let Some(remote) = &self.remote {
+            remote.send(frame);
+        }
+    }
+
+    /// Push the session's shape to the server when it changes, so the next
+    /// attach rebuilds the same layout.
+    fn sync_remote_layout(&mut self) {
+        if self.remote.is_none() || self.session.is_empty() {
+            return;
+        }
+        let blob = self.session.snapshot();
+        if let Some(remote) = &mut self.remote {
+            if remote.last_layout != blob {
+                remote.send(&Frame::SetLayout {
+                    blob: blob.clone().into_bytes(),
+                });
+                remote.last_layout = blob;
+            }
+        }
+    }
+
+    /// Leave a persistent session running and end the client.
+    fn detach(&mut self) {
+        if self.remote.is_none() {
+            self.toast(
+                "no session to detach — start with roster -s NAME".into(),
+                ToastLevel::Info,
+            );
+            return;
+        }
+        let blob = self.session.snapshot();
+        if let Some(remote) = &mut self.remote {
+            remote.send(&Frame::SetLayout {
+                blob: blob.into_bytes(),
+            });
+            remote.send(&Frame::Detach);
+            remote.detached = true;
+        }
+        self.quit = true;
+    }
+
     /// The pane's process ended: keep its final screen on display with an
     /// exited notice, and stop treating it as a live agent.
     fn mark_exited(&mut self, id: PaneId) {
+        let code = match self.runtimes.get_mut(&id) {
+            Some(rt) => match &mut rt.io {
+                PaneIo::Local(pty) => match pty.try_wait() {
+                    Ok(Some(status)) => status.code,
+                    _ => 1,
+                },
+                // Remote exits arrive with their code in the frame.
+                PaneIo::Remote { .. } => return,
+            },
+            None => return,
+        };
+        self.mark_exited_with_code(id, code);
+    }
+
+    fn mark_exited_with_code(&mut self, id: PaneId, code: u32) {
         let Some(rt) = self.runtimes.get_mut(&id) else {
             return;
         };
         if rt.exited.is_some() {
             return;
         }
-        let code = match rt.pty.try_wait() {
-            Ok(Some(status)) => status.code,
-            _ => 1,
-        };
         rt.exited = Some(code);
         rt.kind = None;
         self.session.set_reading(
@@ -370,7 +866,7 @@ impl App {
             };
             if rt.screen.size() != (content.width, content.height) {
                 rt.screen.resize(content.width, content.height);
-                let _ = rt.pty.resize(content.width, content.height);
+                let _ = rt.io.resize(content.width, content.height);
             }
         }
     }
@@ -392,8 +888,114 @@ impl App {
         }
     }
 
+    /// The index of the toast under (`x`, `y`), when one is there.
+    fn toast_at(&self, x: u16, y: u16) -> Option<usize> {
+        let toast_view: Vec<(&str, ToastLevel)> = self
+            .toasts
+            .iter()
+            .map(|toast| (toast.text.as_str(), toast.level))
+            .collect();
+        toast_rects(self.last_area, &toast_view)
+            .iter()
+            .position(|rect| {
+                rect.height > 0
+                    && x >= rect.x
+                    && x < rect.x + rect.width
+                    && y >= rect.y
+                    && y < rect.y + rect.height
+            })
+    }
+
+    /// Show a transient toast card.
+    fn toast(&mut self, text: String, level: ToastLevel) {
+        self.toasts.insert(
+            0,
+            Toast {
+                text,
+                level,
+                born: Instant::now(),
+            },
+        );
+        self.toasts.truncate(4);
+    }
+
+    /// A pane's absolute content rect, mirroring render's geometry — solo
+    /// view fills the pane region, the grid otherwise. `None` when the pane
+    /// isn't visible in the active window.
+    fn pane_content_rect(&self, id: PaneId) -> Option<Rect> {
+        let panes = panes_area(self.last_area, self.side);
+        let local = local_panes(panes);
+        let rect = if let Some(zoomed) = self.zoomed_pane() {
+            if zoomed != id {
+                return None;
+            }
+            roster_core::Rect::new(0, 0, panes.width, panes.height)
+        } else {
+            self.session
+                .layout(panes.width, panes.height)
+                .into_iter()
+                .find(|(pane, _)| *pane == id)?
+                .1
+        };
+        let content_local = content_rect(rect, local);
+        Some(Rect::new(
+            panes.x + content_local.x,
+            panes.y + content_local.y,
+            content_local.width,
+            content_local.height,
+        ))
+    }
+
+    /// What sits under (`x`, `y`), with app-state refinements the pure
+    /// hit-test can't see: an exited pane's content resolves to its
+    /// overlay's restart/close buttons.
+    fn hit_at(&self, x: u16, y: u16) -> Hit {
+        let hit = hit_test(
+            self.last_area,
+            &self.session,
+            self.side,
+            &self.last_entries,
+            self.zoomed_pane(),
+            x,
+            y,
+        );
+        let Hit::Pane(id) = hit else {
+            return hit;
+        };
+        if self.runtimes.get(&id).is_none_or(|rt| rt.exited.is_none()) {
+            return hit;
+        }
+        let Some(content) = self.pane_content_rect(id) else {
+            return hit;
+        };
+        if let Some((restart, close)) = exited_buttons(content) {
+            let within = |r: Rect| x >= r.x && x < r.x + r.width && y == r.y;
+            if within(restart) {
+                return Hit::PaneRestart(id);
+            }
+            if within(close) {
+                return Hit::PaneClose(id);
+            }
+        }
+        hit
+    }
+
+    /// Relaunch an exited pane's command in place.
+    fn restart_pane(&mut self, id: PaneId) {
+        let Some(command) = self.session.pane(id).and_then(|p| p.command.clone()) else {
+            return;
+        };
+        if let Some(remote) = &mut self.remote {
+            remote.pending.push_back(Placement::Replace(id));
+            remote.send(&Frame::Spawn { command });
+            return;
+        }
+        if let Err(error) = self.attach(id, &command) {
+            self.toast(format!("restart failed: {error}"), ToastLevel::Error);
+        }
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
-        self.notice = None;
         // The launcher owns its input state; take it out so launching can
         // borrow the whole app, and put it back unless the mode ended.
         if matches!(self.mode, Mode::Launch(_)) {
@@ -443,21 +1045,39 @@ impl App {
                     KeyCode::Char('%') => self.split(SplitDirection::Horizontal),
                     KeyCode::Char('"') => self.split(SplitDirection::Vertical),
                     KeyCode::Char('o') => self.session.focus_next(),
+                    KeyCode::Char('n') => self.session.next_window(),
+                    KeyCode::Char('p') => self.session.prev_window(),
                     KeyCode::Char('z') => self.zoomed = !self.zoomed,
                     KeyCode::Char('x') => {
                         if let Some(id) = self.session.focused() {
-                            self.close_pane(id);
+                            self.request_close(id);
                         }
                     }
                     KeyCode::Char('j') => {
                         self.sidebar = SidebarState::new();
                         self.mode = Mode::Jump;
                     }
-                    KeyCode::Char('q') => self.quit = true,
+                    KeyCode::Char('d') => self.detach(),
+                    // Quitting a persistent session detaches — leaving must
+                    // never silently kill the agents.
+                    KeyCode::Char('q') => {
+                        if self.remote.is_some() {
+                            self.detach();
+                        } else {
+                            self.quit = true;
+                        }
+                    }
                     KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         self.write_to_focused(&[0x02]);
                     }
                     _ => {}
+                }
+            }
+            Mode::ConfirmClose(id) => {
+                self.mode = Mode::Normal;
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Enter => self.close_pane(id),
+                    _ => {} // anything else cancels
                 }
             }
             Mode::Jump => match key.code {
@@ -489,6 +1109,39 @@ impl App {
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         let (x, y) = (mouse.column, mouse.row);
         self.last_mouse = Some((x, y));
+
+        // The confirm dialog owns the mouse while open: its buttons decide,
+        // and clicking anywhere else dismisses it.
+        if let Mode::ConfirmClose(pending) = self.mode {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    match confirm_button_at(self.last_area, x, y) {
+                        Some(ConfirmButton::Close) => {
+                            self.mode = Mode::Normal;
+                            self.close_pane(pending);
+                        }
+                        Some(ConfirmButton::Cancel) => self.mode = Mode::Normal,
+                        None => {
+                            if !confirm_contains(self.last_area, x, y) {
+                                self.mode = Mode::Normal;
+                            }
+                        }
+                    }
+                }
+                MouseEventKind::Moved => {
+                    set_pointer(
+                        &mut self.pointer,
+                        if confirm_button_at(self.last_area, x, y).is_some() {
+                            Pointer::Hand
+                        } else {
+                            Pointer::Default
+                        },
+                    );
+                }
+                _ => {}
+            }
+            return;
+        }
 
         // The launcher owns the mouse while open: hovering a row selects
         // it, clicking launches it.
@@ -533,28 +1186,32 @@ impl App {
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                self.notice = None;
-                let hit = hit_test(
-                    self.last_area,
-                    &self.session,
-                    self.side,
-                    &self.last_entries,
-                    self.zoomed_pane(),
-                    x,
-                    y,
-                );
+                // Toasts sit above everything else: a click on one
+                // dismisses it and goes no further.
+                if let Some(index) = self.toast_at(x, y) {
+                    self.toasts.remove(index);
+                    return;
+                }
+                // Any click drops the previous selection, like a terminal.
+                self.selection = None;
+                let hit = self.hit_at(x, y);
                 match hit {
                     Hit::SidebarEntry(index) => {
                         if let Some(entry) = self.last_entries.get(index) {
                             self.session.focus(entry.pane);
                         }
                     }
+                    Hit::SidebarWindow(window) => {
+                        self.session.activate_window(window);
+                    }
                     Hit::SidebarNewAgent => {
                         self.mode = Mode::Launch(LauncherState::new());
                     }
                     Hit::SidebarViewGrid => self.zoomed = false,
                     Hit::SidebarViewSolo => self.zoomed = true,
-                    Hit::PaneClose(id) => self.close_pane(id),
+                    Hit::StatusWindows => self.session.next_window(),
+                    Hit::PaneClose(id) => self.request_close(id),
+                    Hit::PaneRestart(id) => self.restart_pane(id),
                     Hit::PaneTitle(id) | Hit::Pane(id) => {
                         self.session.focus(id);
                         // Double-clicking a title toggles solo, like
@@ -569,6 +1226,7 @@ impl App {
                         // dividers; grab one if it's there. Solo view has
                         // no dividers.
                         let panes = panes_area(self.last_area, self.side);
+                        let mut grabbed = false;
                         if !self.zoomed && x >= panes.x && y >= panes.y {
                             let local = (x - panes.x, y - panes.y);
                             if self
@@ -577,6 +1235,22 @@ impl App {
                                 .is_some()
                             {
                                 self.dragging = Some(local);
+                                grabbed = true;
+                            }
+                        }
+                        // Pressing on live content anchors a text
+                        // selection; it only becomes one if the mouse
+                        // moves before release.
+                        if !grabbed && matches!(hit, Hit::Pane(_)) {
+                            if let Some(content) = self.pane_content_rect(id) {
+                                if x >= content.x
+                                    && x < content.x + content.width
+                                    && y >= content.y
+                                    && y < content.y + content.height
+                                {
+                                    self.sel_anchor =
+                                        Some((id, (x - content.x, y - content.y)));
+                                }
                             }
                         }
                     }
@@ -594,32 +1268,76 @@ impl App {
                     {
                         self.dragging = Some(new_pos);
                     }
+                } else if let Some((id, anchor)) = self.sel_anchor {
+                    // Extend the selection to the cell under the pointer,
+                    // clamped into the pane's content.
+                    if let Some(content) = self.pane_content_rect(id) {
+                        let clamp = |v: u16, lo: u16, hi: u16| v.max(lo).min(hi);
+                        let cx = clamp(x, content.x, content.x + content.width.saturating_sub(1));
+                        let cy = clamp(y, content.y, content.y + content.height.saturating_sub(1));
+                        self.selection =
+                            Some((id, anchor, (cx - content.x, cy - content.y)));
+                    }
                 }
             }
-            MouseEventKind::Up(MouseButton::Left) => self.dragging = None,
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.dragging = None;
+                self.sel_anchor = None;
+                // A completed drag-selection copies itself — click-drag,
+                // release, pasted anywhere.
+                if let Some((id, a, b)) = self.selection {
+                    let text = self
+                        .runtimes
+                        .get(&id)
+                        .map(|rt| {
+                            rt.screen.grid().linear_text(
+                                (usize::from(a.0), usize::from(a.1)),
+                                (usize::from(b.0), usize::from(b.1)),
+                            )
+                        })
+                        .unwrap_or_default();
+                    if text.trim().is_empty() {
+                        self.selection = None;
+                    } else {
+                        copy_to_clipboard(&text);
+                        let lines = text.lines().count();
+                        self.toast(
+                            if lines > 1 {
+                                format!("copied {lines} lines")
+                            } else {
+                                "copied".to_string()
+                            },
+                            ToastLevel::Info,
+                        );
+                    }
+                }
+            }
             MouseEventKind::Moved => {
                 let shape = self.pointer_shape_at(x, y);
                 set_pointer(&mut self.pointer, shape);
             }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                let hit = hit_test(
-                    self.last_area,
-                    &self.session,
-                    self.side,
-                    &self.last_entries,
-                    self.zoomed_pane(),
-                    x,
-                    y,
-                );
-                if let Hit::Pane(id) | Hit::PaneTitle(id) | Hit::PaneClose(id) = hit {
-                    let bytes: &[u8] = if mouse.kind == MouseEventKind::ScrollUp {
-                        b"\x1b[A\x1b[A\x1b[A"
-                    } else {
-                        b"\x1b[B\x1b[B\x1b[B"
-                    };
+                let hit = self.hit_at(x, y);
+                if let Hit::Pane(id) | Hit::PaneTitle(id) | Hit::PaneClose(id)
+                | Hit::PaneRestart(id) = hit
+                {
+                    let up = mouse.kind == MouseEventKind::ScrollUp;
                     if let Some(rt) = self.runtimes.get_mut(&id) {
-                        if rt.exited.is_none() {
-                            let _ = rt.pty.write(bytes);
+                        if rt.screen.alternate_screen() {
+                            // Full-screen TUIs own their history; feed them
+                            // arrows like a terminal would.
+                            if rt.exited.is_none() {
+                                let bytes: &[u8] = if up {
+                                    b"\x1b[A\x1b[A\x1b[A"
+                                } else {
+                                    b"\x1b[B\x1b[B\x1b[B"
+                                };
+                                let _ = rt.io.write(bytes);
+                            }
+                        } else {
+                            // Plain output scrolls roster's own history —
+                            // exited panes included.
+                            rt.screen.scroll_display(if up { 3 } else { -3 });
                         }
                     }
                 }
@@ -633,22 +1351,20 @@ impl App {
     /// content. Buttons win over dividers — a ✕ that shares a divider row
     /// still reads as a button.
     fn pointer_shape_at(&self, x: u16, y: u16) -> Pointer {
-        let hit = hit_test(
-            self.last_area,
-            &self.session,
-            self.side,
-            &self.last_entries,
-            self.zoomed_pane(),
-            x,
-            y,
-        );
+        if self.toast_at(x, y).is_some() {
+            return Pointer::Hand;
+        }
+        let hit = self.hit_at(x, y);
         if matches!(
             hit,
             Hit::PaneClose(_)
+                | Hit::PaneRestart(_)
                 | Hit::SidebarNewAgent
                 | Hit::SidebarViewGrid
                 | Hit::SidebarViewSolo
                 | Hit::SidebarEntry(_)
+                | Hit::SidebarWindow(_)
+                | Hit::StatusWindows
         ) {
             return Pointer::Hand;
         }
@@ -672,12 +1388,25 @@ impl App {
         pointer_for(hit)
     }
 
-    /// Start `command` in a new pane: split the focused pane along its
-    /// longer visual axis (cells are roughly twice as tall as wide), or
-    /// open a fresh window when nothing is left to split. A bare start's
-    /// untouched placeholder shell is replaced outright — the user asked
-    /// for an agent, not an extra terminal.
+    /// Start `command` in its own fresh window. A bare start's untouched
+    /// placeholder shell is replaced outright — the user asked for an
+    /// agent, not an extra terminal.
     fn launch(&mut self, command: &str) {
+        // In a session the server spawns; the pane lands when PaneOpened
+        // comes back, replacing an untouched placeholder if focused.
+        if self.remote.is_some() {
+            let placement = match self.placeholder {
+                Some(id) if self.session.focused() == Some(id) => Placement::Replace(id),
+                _ => Placement::Window,
+            };
+            if let Some(remote) = &mut self.remote {
+                remote.pending.push_back(placement);
+                remote.send(&Frame::Spawn {
+                    command: command.to_string(),
+                });
+            }
+            return;
+        }
         if let Some(id) = self.placeholder.take() {
             if self.session.focused() == Some(id) {
                 // Spawn first: a failed launch keeps the shell running.
@@ -688,35 +1417,16 @@ impl App {
                         if let Some(rt) = old {
                             self.runtimes.insert(id, rt);
                         }
-                        self.notice = Some(format!("launch failed: {error}"));
+                        self.toast(format!("launch failed: {error}"), ToastLevel::Error);
                     }
                 }
                 return;
             }
         }
-        let id = match self.session.focused() {
-            Some(target) => {
-                let direction = match self.runtimes.get(&target) {
-                    Some(rt) => {
-                        let (cols, rows) = rt.screen.size();
-                        if cols > rows * 2 {
-                            SplitDirection::Horizontal
-                        } else {
-                            SplitDirection::Vertical
-                        }
-                    }
-                    None => SplitDirection::Horizontal,
-                };
-                match self.session.split(target, direction) {
-                    Some(id) => id,
-                    None => return,
-                }
-            }
-            None => self.session.new_window(),
-        };
+        let id = self.session.new_window();
         if let Err(error) = self.attach(id, command) {
             self.session.close(id);
-            self.notice = Some(format!("launch failed: {error}"));
+            self.toast(format!("launch failed: {error}"), ToastLevel::Error);
         }
     }
 
@@ -725,6 +1435,13 @@ impl App {
         let Some(target) = self.session.focused() else {
             return;
         };
+        if let Some(remote) = &mut self.remote {
+            remote.pending.push_back(Placement::Split(target, direction));
+            remote.send(&Frame::Spawn {
+                command: default_shell(),
+            });
+            return;
+        }
         let Some(id) = self.session.split(target, direction) else {
             return;
         };
@@ -734,13 +1451,91 @@ impl App {
         }
     }
 
+    /// A pane's display name: its agent card's name when detected, else its
+    /// command.
+    fn pane_name(&self, id: PaneId) -> String {
+        self.last_entries
+            .iter()
+            .find(|e| e.pane == id)
+            .map(|e| e.agent.clone())
+            .or_else(|| self.session.pane(id).and_then(|p| p.command.clone()))
+            .unwrap_or_else(|| "agent".to_string())
+    }
+
+    /// Close `id`, but ask first when it would kill a live agent — a stray
+    /// click on ✕ shouldn't take a working agent down. Shells and exited
+    /// panes close immediately.
+    fn request_close(&mut self, id: PaneId) {
+        let live_agent = self
+            .runtimes
+            .get(&id)
+            .is_some_and(|rt| rt.kind.is_some() && rt.exited.is_none());
+        if live_agent {
+            self.mode = Mode::ConfirmClose(id);
+        } else {
+            self.close_pane(id);
+        }
+    }
+
     fn close_pane(&mut self, id: PaneId) {
         if self.placeholder == Some(id) {
             self.placeholder = None;
         }
+        if self.selection.map(|s| s.0) == Some(id) {
+            self.selection = None;
+        }
+        if self.sel_anchor.map(|s| s.0) == Some(id) {
+            self.sel_anchor = None;
+        }
+        // A session-owned pane dies on the server, not by drop.
+        if let Some(PaneIo::Remote { pane, .. }) = self.runtimes.get(&id).map(|rt| &rt.io) {
+            self.remote_send(&Frame::Close { pane: *pane });
+        }
         // Dropping the runtime kills and reaps the child.
         self.runtimes.remove(&id);
         self.session.close(id);
+    }
+
+    /// Deliver a host-terminal paste. In the launcher it feeds the filter
+    /// input; otherwise it goes to the focused pane — wrapped in paste
+    /// guards when the application asked for bracketed paste (so multi-line
+    /// prompts arrive as one paste, not keystrokes), with newlines
+    /// normalized to carriage returns when it didn't (what a terminal's
+    /// enter key sends).
+    fn handle_paste(&mut self, text: &str) {
+        if let Mode::Launch(state) = &mut self.mode {
+            for c in text.chars().filter(|c| !c.is_control()) {
+                state.push(c);
+            }
+            return;
+        }
+        let Some(id) = self.session.focused() else {
+            return;
+        };
+        // Pasting into the placeholder shell claims it, like typing does.
+        if self.placeholder == Some(id) {
+            self.placeholder = None;
+        }
+        let Some(rt) = self.runtimes.get_mut(&id) else {
+            return;
+        };
+        if rt.exited.is_some() {
+            return;
+        }
+        rt.screen.scroll_to_bottom();
+        let _ = if rt.screen.bracketed_paste() {
+            // Strip any end guard the clipboard could smuggle in: text must
+            // not be able to fake the end of the paste and inject input.
+            let safe = text.replace("\x1b[201~", "");
+            let mut framed = Vec::with_capacity(safe.len() + 12);
+            framed.extend_from_slice(b"\x1b[200~");
+            framed.extend_from_slice(safe.as_bytes());
+            framed.extend_from_slice(b"\x1b[201~");
+            rt.io.write(&framed)
+        } else {
+            let safe = text.replace("\r\n", "\r").replace('\n', "\r");
+            rt.io.write(safe.as_bytes())
+        };
     }
 
     fn write_to_focused(&mut self, bytes: &[u8]) {
@@ -751,23 +1546,23 @@ impl App {
         if self.placeholder == Some(id) {
             self.placeholder = None;
         }
+        // Typing drops the selection and snaps back to live output.
+        self.selection = None;
         let Some(rt) = self.runtimes.get_mut(&id) else {
             return;
         };
         if rt.exited.is_some() {
             return;
         }
-        if rt.pty.write(bytes).is_err() {
+        rt.screen.scroll_to_bottom();
+        if rt.io.write(bytes).is_err() {
             self.mark_exited(id);
         }
     }
 
     /// The status line: a badge while a mode is armed, plus contextual key
-    /// hints — or the latest notice, until the next keypress clears it.
+    /// hints.
     fn status_line(&self) -> (Option<&'static str>, String) {
-        if let Some(notice) = &self.notice {
-            return (Some("!"), notice.clone());
-        }
         match &self.mode {
             Mode::Normal => {
                 let focused = self
@@ -794,7 +1589,7 @@ impl App {
             }
             Mode::Prefix => (
                 Some("PREFIX"),
-                "c: new agent · z: solo · %/\": split shell · o: focus · j: jump · x: close · q: quit"
+                "c: new agent · n/p: windows · z: solo · %/\": split shell · o: focus · j: jump · x: close · d: detach · q: quit"
                     .to_string(),
             ),
             Mode::Jump => (
@@ -806,12 +1601,48 @@ impl App {
                 "type to filter or any command · click or ↑/↓ + enter to launch · esc: cancel"
                     .to_string(),
             ),
+            Mode::ConfirmClose(_) => (
+                Some("CLOSE?"),
+                "y/enter: close · esc: cancel".to_string(),
+            ),
         }
     }
 }
 
 fn is_prefix(key: &KeyEvent) -> bool {
     key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+/// Hand the text to the hosting terminal's clipboard via OSC 52 — it works
+/// locally and through SSH alike, wherever the terminal supports it.
+fn copy_to_clipboard(text: &str) {
+    use std::io::Write;
+    let mut out = io::stdout();
+    let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
+    let _ = out.flush();
+}
+
+/// Standard base64 with padding — small enough to not warrant a dependency.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// Tell the terminal which pointer to show (OSC 22, the xterm pointer-shape
@@ -831,4 +1662,21 @@ fn set_pointer(current: &mut Pointer, shape: Pointer) {
 /// The user's shell, for panes roster opens itself.
 pub fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_matches_known_vectors() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foob"), "Zm9vYg==");
+        assert_eq!(base64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64("selected text ✓".as_bytes()), "c2VsZWN0ZWQgdGV4dCDinJM=");
+    }
 }

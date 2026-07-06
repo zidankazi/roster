@@ -60,6 +60,7 @@ fn panes_get_title_bars_and_content_shifts_down() {
     let detector = Detector::builtin();
     let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
+    let scrolled = HashMap::new();
     let view = View {
         session: &session,
         grids: &grids,
@@ -70,6 +71,10 @@ fn panes_get_title_bars_and_content_shifts_down() {
         zoomed: false,
         side: SidebarSide::Left,
         launcher: None,
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
         welcome: false,
         mode_badge: None,
         status: "hints with ctrl-b",
@@ -152,6 +157,7 @@ fn hover_lights_up_interactive_chrome() {
     let exited = HashMap::new();
 
     let draw = |hover: Option<Hit>| -> Buffer {
+        let scrolled = HashMap::new();
         let view = View {
             session: &session,
             grids: &grids,
@@ -162,6 +168,10 @@ fn hover_lights_up_interactive_chrome() {
             zoomed: false,
             side: SidebarSide::Left,
             launcher: None,
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
             welcome: false,
             mode_badge: None,
             status: "",
@@ -218,6 +228,7 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
     let detector = Detector::builtin();
     let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
+    let scrolled = HashMap::new();
     let view = View {
         session: &session,
         grids: &grids,
@@ -228,6 +239,10 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
         zoomed: true,
         side: SidebarSide::Left,
         launcher: None,
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
         welcome: false,
         mode_badge: Some("SOLO"),
         status: "click agents on the left to switch",
@@ -273,6 +288,7 @@ fn launcher_modal_overlays_the_frame() {
     let exited = HashMap::new();
     let items = launch_items(&detector, "/bin/zsh");
     let state = LauncherState::new();
+    let scrolled = HashMap::new();
     let view = View {
         session: &session,
         grids: &grids,
@@ -283,6 +299,10 @@ fn launcher_modal_overlays_the_frame() {
         zoomed: false,
         side: SidebarSide::Left,
         launcher: Some((&items, &state)),
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
         welcome: false,
         mode_badge: Some("LAUNCH"),
         status: "type to filter",
@@ -312,6 +332,7 @@ fn welcome_screen_shows_wordmark_picker_and_any_command_hint() {
     let exited = HashMap::new();
     let items = launch_items(&detector, "/bin/zsh");
     let state = LauncherState::new();
+    let scrolled = HashMap::new();
     let view = View {
         session: &session,
         grids: &grids,
@@ -322,6 +343,10 @@ fn welcome_screen_shows_wordmark_picker_and_any_command_hint() {
         zoomed: false,
         side: SidebarSide::Left,
         launcher: Some((&items, &state)),
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
         welcome: true,
         mode_badge: Some("LAUNCH"),
         status: "type to filter",
@@ -365,6 +390,7 @@ fn welcome_wordmark_reveals_with_the_tick() {
     let state = LauncherState::new();
 
     let draw = |tick: u64| -> String {
+        let scrolled = HashMap::new();
         let view = View {
             session: &session,
             grids: &grids,
@@ -375,6 +401,10 @@ fn welcome_wordmark_reveals_with_the_tick() {
             zoomed: false,
             side: SidebarSide::Left,
             launcher: Some((&items, &state)),
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
             welcome: true,
             mode_badge: None,
             status: "",
@@ -416,9 +446,10 @@ fn welcome_wordmark_reveals_with_the_tick() {
 }
 
 #[test]
-fn exited_pane_notice_and_title_marker() {
-    let session = Session::new();
+fn exited_pane_overlay_card_and_title_marker() {
+    let mut session = Session::new();
     let only = session.focused().unwrap();
+    session.pane_mut(only).unwrap().command = Some("claude".into());
     let mut grid = Grid::from_text("final output");
     grid.cursor.visible = true;
 
@@ -427,6 +458,7 @@ fn exited_pane_notice_and_title_marker() {
     let mut exited = HashMap::new();
     exited.insert(only, 3u32);
 
+    let scrolled = HashMap::new();
     let view = View {
         session: &session,
         grids: &grids,
@@ -437,6 +469,10 @@ fn exited_pane_notice_and_title_marker() {
         zoomed: false,
         side: SidebarSide::Left,
         launcher: None,
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
         welcome: false,
         mode_badge: Some("PREFIX"),
         status: "hints",
@@ -447,15 +483,63 @@ fn exited_pane_notice_and_title_marker() {
     terminal.draw(|frame| render(frame, &view)).unwrap();
     let buf = terminal.backend().buffer().clone();
 
-    // Title marks the exit; notice sits on the pane's bottom content row.
+    // Title marks the exit; the pane hosts the overlay card with its
+    // restart/close buttons.
     let title = region_text(&buf, 32, 80, 0);
     assert!(title.contains("exited"), "title: {title}");
-    let notice = region_text(&buf, 32, 80, 8);
-    assert!(
-        notice.starts_with(" exited (3) — click ✕ to close"),
-        "notice: {notice}"
-    );
+    let all: String = (0..10u16)
+        .map(|y| region_text(&buf, 32, 80, y) + "\n")
+        .collect();
+    assert!(all.contains("claude · exit 3"), "card message:\n{all}");
+    assert!(all.contains("restart"), "restart button:\n{all}");
+    assert!(all.contains("close"), "close button:\n{all}");
 
     let status = region_text(&buf, 0, 80, 9);
     assert!(status.starts_with(" PREFIX "), "status: {status}");
+}
+
+#[test]
+fn exited_pane_too_small_for_the_card_keeps_the_strip() {
+    let mut session = Session::new();
+    let only = session.focused().unwrap();
+    session.pane_mut(only).unwrap().command = Some("claude".into());
+    let mut grids = HashMap::new();
+    grids.insert(only, Grid::from_text("out"));
+    let mut exited = HashMap::new();
+    exited.insert(only, 3u32);
+
+    let scrolled = HashMap::new();
+    let view = View {
+        session: &session,
+        grids: &grids,
+        exited: &exited,
+        entries: &[],
+        selected: None,
+        hover: None,
+        zoomed: false,
+        side: SidebarSide::Left,
+        launcher: None,
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
+        welcome: false,
+        mode_badge: None,
+        status: "hints",
+        tick: 0,
+    };
+
+    // 50 wide → sidebar 25, pane content 25 — too narrow for the 30-col
+    // card, so the one-line strip stays.
+    let mut terminal = Terminal::new(TestBackend::new(50, 8)).unwrap();
+    terminal.draw(|frame| render(frame, &view)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+    let all: String = (0..8u16)
+        .map(|y| region_text(&buf, 25, 50, y) + "\n")
+        .collect();
+    assert!(
+        all.contains("exited (3)"),
+        "strip fallback missing:\n{all}"
+    );
+    assert!(!all.contains("restart"), "card should not fit:\n{all}");
 }
