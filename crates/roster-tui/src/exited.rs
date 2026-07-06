@@ -61,7 +61,17 @@ pub fn draw_exited(
     fill(buf, card);
     frame(buf, card, " exited ");
 
-    let message = format!("{name} · exit {code}");
+    // The exit code is the payload — truncate the name, never the code.
+    let suffix = format!(" · exit {code}");
+    let room = usize::from(card.width.saturating_sub(4)).saturating_sub(suffix.chars().count());
+    let name: String = if name.chars().count() > room {
+        let mut cut: String = name.chars().take(room.saturating_sub(1)).collect();
+        cut.push('…');
+        cut
+    } else {
+        name.to_string()
+    };
+    let message = format!("{name}{suffix}");
     let msg_x = card.x + (card.width.saturating_sub(message.chars().count() as u16)) / 2;
     buf.set_stringn(
         msg_x.max(card.x + 2),
@@ -122,6 +132,30 @@ mod tests {
             false,
             false
         ));
+    }
+
+    #[test]
+    fn long_names_truncate_but_the_exit_code_survives() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        assert!(draw_exited(
+            &mut buf,
+            area,
+            "definitely-not-a-command-xyz",
+            127,
+            false,
+            false
+        ));
+        let all: String = (0..24u16)
+            .map(|y| {
+                (0..80u16)
+                    .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect();
+        assert!(all.contains("· exit 127"), "code cut off:\n{all}");
+        assert!(all.contains('…'), "name should show truncation:\n{all}");
     }
 
     #[test]
