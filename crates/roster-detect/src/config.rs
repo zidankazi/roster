@@ -48,6 +48,9 @@ pub struct AgentConfig {
     pub name: String,
     /// Binary names whose panes belong to this agent.
     pub match_command: Vec<String>,
+    /// The full command the launcher starts this agent with — flags
+    /// included. `None` falls back to the first `match_command` binary.
+    pub launch_command: Option<String>,
     /// Patterns meaning "blocked on input", in priority order.
     pub blocked: Vec<Regex>,
     /// Patterns meaning "actively working", in priority order.
@@ -123,6 +126,8 @@ impl std::error::Error for ConfigError {
 struct RawAgent {
     match_command: Vec<String>,
     #[serde(default)]
+    launch_command: Option<String>,
+    #[serde(default)]
     blocked: Vec<String>,
     #[serde(default)]
     working: Vec<String>,
@@ -173,6 +178,7 @@ fn compile_agent(name: String, raw: RawAgent) -> Result<AgentConfig, ConfigError
         idle: compile_patterns(&name, raw.idle)?,
         reason_ignore: compile_patterns(&name, raw.reason.ignore)?,
         match_command: raw.match_command,
+        launch_command: raw.launch_command,
         reason_blocked,
         reason_working,
         done_after_activity: Duration::from_secs(
@@ -219,6 +225,23 @@ mod tests {
             Duration::from_secs(DEFAULT_DONE_AFTER_SECS)
         );
         assert!(agent.blocked.is_empty());
+        assert_eq!(agent.launch_command, None);
+    }
+
+    #[test]
+    fn launch_command_parses_with_flags() {
+        let agents = parse_agents(
+            r#"
+            [claude-code]
+            match_command = ["claude"]
+            launch_command = "claude --dangerously-skip-permissions"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            agents[0].launch_command.as_deref(),
+            Some("claude --dangerously-skip-permissions")
+        );
     }
 
     #[test]

@@ -177,6 +177,20 @@ built-in config:
 roster --print-config > ~/.config/roster/agents.toml
 ```
 
+**Launching with flags.** Set `launch_command` on an agent to control
+exactly what the launcher runs — flags included:
+
+```toml
+[claude-code]
+match_command = ["claude"]
+launch_command = "claude --dangerously-skip-permissions"
+```
+
+For a one-off, press **tab** in the launcher: it expands the selected
+agent's command into the input so you can edit flags before hitting enter.
+(Anything you type in the launcher runs verbatim, so `claude --continue`
+always works too.)
+
 ## Building from source
 
 ```sh

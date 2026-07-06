@@ -1023,6 +1023,9 @@ impl App {
                         KeyCode::Down => state.select_next(&self.launchables),
                         KeyCode::Up => state.select_prev(&self.launchables),
                         KeyCode::Backspace => state.backspace(),
+                        // Tab expands the selection into the input so its
+                        // flags can be edited before launching.
+                        KeyCode::Tab => state.expand(&self.launchables),
                         KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             state.select_next(&self.launchables);
                         }
@@ -1690,7 +1693,7 @@ impl App {
             ),
             Mode::Launch(_) => (
                 Some("LAUNCH"),
-                "type to filter or any command · click or ↑/↓ + enter to launch · esc: cancel"
+                "type to filter or any command · enter: launch · tab: edit flags · esc: cancel"
                     .to_string(),
             ),
             Mode::ConfirmClose(_) => (

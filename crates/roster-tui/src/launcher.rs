@@ -22,15 +22,20 @@ pub struct LaunchItem {
     pub command: String,
 }
 
-/// Build the launcher's item list: every configured agent (launched via its
-/// first `match_command` binary) plus the user's shell.
+/// Build the launcher's item list: every configured agent — started with
+/// its `launch_command` when the config sets one (flags included), its
+/// first `match_command` binary otherwise — plus the user's shell.
 pub fn launch_items(detector: &Detector, shell: &str) -> Vec<LaunchItem> {
     let mut items: Vec<LaunchItem> = detector
         .agents()
         .filter_map(|agent| {
+            let command = agent
+                .launch_command
+                .clone()
+                .or_else(|| agent.match_command.first().cloned())?;
             Some(LaunchItem {
                 name: agent.name.clone(),
-                command: agent.match_command.first()?.clone(),
+                command,
             })
         })
         .collect();
@@ -63,6 +68,14 @@ impl LauncherState {
     pub fn push(&mut self, c: char) {
         self.input.push(c);
         self.selected = 0;
+    }
+
+    /// Expand the selected item's command into the input for editing —
+    /// add a flag, change a model — before launching it verbatim.
+    pub fn expand(&mut self, items: &[LaunchItem]) {
+        if let Some(index) = self.selected(items) {
+            self.input = self.filtered(items)[index].command.clone();
+        }
     }
 
     /// Delete the last typed character.
@@ -369,13 +382,30 @@ impl Widget for Launcher<'_> {
                     Style::default()
                 },
             );
-            let cmd = &item.command;
-            let cmd_len = cmd.chars().count() as u16;
-            if cmd_len + 4 < modal.width {
+            // The command sits right-aligned and dim — truncated with an
+            // ellipsis when it would otherwise run into the item's name.
+            let name_end = inner_x + 2 + item.name.chars().count() as u16;
+            let right_edge = modal.x + modal.width - 2;
+            let avail = right_edge.saturating_sub(name_end + 2);
+            let cmd_len = item.command.chars().count() as u16;
+            if cmd_len <= avail {
                 buf.set_string(
-                    modal.x + modal.width - 2 - cmd_len,
+                    right_edge - cmd_len,
                     y,
-                    cmd,
+                    &item.command,
+                    Style::default().add_modifier(Modifier::DIM),
+                );
+            } else if avail >= 8 {
+                let mut cut: String = item
+                    .command
+                    .chars()
+                    .take(usize::from(avail) - 1)
+                    .collect();
+                cut.push('…');
+                buf.set_string(
+                    right_edge - avail,
+                    y,
+                    &cut,
                     Style::default().add_modifier(Modifier::DIM),
                 );
             }
@@ -478,6 +508,48 @@ mod tests {
         assert_eq!(names, vec!["aider", "claude-code", "codex", "shell"]);
         assert_eq!(items[1].command, "claude");
         assert_eq!(items[3].command, "/bin/zsh");
+    }
+
+    #[test]
+    fn launch_command_overrides_the_bare_binary() {
+        let detector = Detector::from_toml(
+            r#"
+            [claude-code]
+            match_command = ["claude"]
+            launch_command = "claude --dangerously-skip-permissions"
+
+            [codex]
+            match_command = ["codex"]
+            "#,
+        )
+        .unwrap();
+        let items = launch_items(&detector, "/bin/zsh");
+        assert_eq!(items[0].name, "claude-code");
+        assert_eq!(items[0].command, "claude --dangerously-skip-permissions");
+        assert_eq!(items[1].command, "codex", "no override, bare binary");
+    }
+
+    #[test]
+    fn expand_pulls_the_selected_command_into_the_input() {
+        let items = items();
+        let mut state = LauncherState::new();
+        for c in "cla".chars() {
+            state.push(c);
+        }
+        state.expand(&items);
+        assert_eq!(state.input(), "claude");
+        // Editing after expansion runs the edited text verbatim.
+        for c in " --continue".chars() {
+            state.push(c);
+        }
+        assert_eq!(state.command(&items).as_deref(), Some("claude --continue"));
+        // Expanding with no match is a no-op.
+        let mut none = LauncherState::new();
+        for c in "zzz".chars() {
+            none.push(c);
+        }
+        none.expand(&items);
+        assert_eq!(none.input(), "zzz");
     }
 
     #[test]
