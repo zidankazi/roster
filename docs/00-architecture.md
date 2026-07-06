@@ -2,7 +2,7 @@
 
 *Read this first. It's the map. Every other doc in `/docs` drills into one piece named here.*
 
-`roster` is an agent-aware terminal multiplexer written in Rust. It runs the user's own coding-agent CLIs (Claude Code, Codex, Aider, etc.) in real terminal panes and surfaces, in a sidebar, which agent is 🔴 blocked / 🟡 working / 🔵 done / 🟢 idle — and **what each one is waiting on**. It never authenticates anyone and never calls a model API; it spawns the user's already-logged-in agents as child processes, exactly as tmux would.
+`roster` is a terminal multiplexer built for Claude Code, written in Rust. It runs Claude Code — and other agent CLIs like Codex or Aider — in real terminal panes and surfaces, in a sidebar, which agent is 🔴 blocked / 🟡 working / 🔵 done / 🟢 idle — and **what each one is waiting on**. It never authenticates anyone and never calls a model API; it spawns the user's already-logged-in agents as child processes, exactly as tmux would. Claude Code is the first-class target — the Claude-native attention layer in [`05-claude-native-attention.md`](05-claude-native-attention.md) is the direction; other agents run with their own screen-based detection.
 
 ## What v1 is (and is not)
 

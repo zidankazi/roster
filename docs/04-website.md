@@ -40,7 +40,7 @@ Plain HTML would ship the landing page faster, but you chose Next.js to leave ro
 
 Keep it to a single focused screen. Order:
 
-1. **Hero:** the positioning line — *"Agent awareness for the terminal you already run."* One sentence under it: run your coding agents in panes, see who's blocked / working / done at a glance, plus what each one needs.
+1. **Hero:** the positioning line — *"Claude Code awareness for the terminal you already run."* One sentence under it: run Claude Code (and your other agents) in panes, see who's blocked / working / done at a glance, plus what each one needs.
 2. **The demo:** an asciinema recording (preferred over gif — crisp, small, copy-able) of six agents running, the sidebar lighting up, you jumping straight to the blocked one. This is 80% of the page's job. Autoplay, loop, no controls needed.
 3. **Install:** the single line. `brew install roster` (and a curl fallback). Copy button.
 4. **The wedge, shown not told:** a tight comparison — bare tmux (no awareness), herdr (a dot), roster (a dot + the reason). Three columns. This is where you make the differentiator legible to someone who's never seen the tool.

@@ -1,6 +1,6 @@
 # 02 — state detection
 
-*The heart of the product and the differentiator. This is where the effort and the taste go. Everything here lives in `roster-detect` and is fully testable from `Grid` fixtures — no live process required.*
+*The heart of the product and the differentiator. This is where the effort and the taste go. Everything here lives in `roster-detect` and is fully testable from `Grid` fixtures — no live process required. This doc covers screen-based detection, which works for any agent; for Claude Code — roster's first-class target — the direction is to read its own state (hooks, statusline) instead, see [`05-claude-native-attention.md`](05-claude-native-attention.md).*
 
 ## The state model
 
@@ -76,7 +76,7 @@ reason.blocked = "matched_line"
 done.after_activity_secs = 5
 ```
 
-Ship v1 with Claude Code, Codex, and Aider tuned well. Breadth is a contribution surface later; getting three agents *rock solid* beats fifteen flaky ones.
+roster is built for Claude Code — tune its detection to a mirror shine first; Codex and Aider ship as solid fallbacks, and other agents are a contribution surface. Depth on Claude Code beats breadth across fifteen flaky agents. The deeper move, reading Claude Code's own hooks and statusline instead of screen-scraping, is [`05-claude-native-attention.md`](05-claude-native-attention.md).
 
 ## Testing (why this is agent-safe)
 

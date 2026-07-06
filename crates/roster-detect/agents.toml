@@ -1,6 +1,8 @@
 # Per-agent detection rules — the shipped defaults for roster.
 #
-# New agents are added here as data, not code. Patterns are regular
+# roster is built for Claude Code: its claude-code rules are tuned the most
+# carefully and verified against live sessions. Codex and Aider ship as working
+# fallbacks. New agents are added here as data, not code. Patterns are regular
 # expressions evaluated against the visible grid rows (trailing whitespace
 # trimmed), bottom rows first; within a state, patterns are tried in the
 # order listed. Priority when several states match: blocked > working > idle.

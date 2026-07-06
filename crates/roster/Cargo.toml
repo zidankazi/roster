@@ -1,6 +1,6 @@
 [package]
 name = "roster"
-description = "Terminal multiplexer for coding agents"
+description = "Terminal multiplexer for Claude Code agents"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

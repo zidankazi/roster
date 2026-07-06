@@ -1,8 +1,9 @@
 # roster
 
-A terminal multiplexer for coding agents. Run them — Claude Code, Codex,
-Aider — in real terminal panes, and see at a glance which one is 🔴 blocked,
-🟡 working, 🔵 done, or 🟢 idle, **plus what each one is waiting on**.
+A terminal multiplexer for Claude Code. Run your agents in real terminal
+panes and see at a glance which one is 🔴 blocked, 🟡 working, 🔵 done, or
+🟢 idle, **plus what each one is waiting on**. Codex, Aider, and any other
+command run too — but roster is built around Claude Code.
 
 ```
  agents               1 blocked │ ⠼ claude-code      ✕ │▎ ◉ codex             ✕
@@ -43,10 +44,11 @@ double-click any pane's title bar to toggle solo, like maximizing a window.
 
 Start bare — `roster` opens a welcome screen: the wordmark over an agent
 picker. Click a row (or type to filter and press enter) and that agent takes
-over the window. **Any agent works**: type any command — `gemini`,
-`npx my-agent`, whatever — and enter runs it in a pane. Agents defined in
-`agents.toml` (`roster --print-config` shows the format) get named cards and
-state detection on top.
+over the window. **Claude Code is first-class, but any command runs**: type
+`gemini`, `npx my-agent`, whatever — and enter runs it in a pane. Agents
+defined in `agents.toml` (`roster --print-config` shows the format) get named
+cards and state detection on top — Claude Code's rules are tuned the most
+carefully.
 
 Each agent launched from the **+ new agent** button opens in its own
 workspace window rather than splitting the current pane. The sidebar groups
@@ -100,6 +102,16 @@ roster attach user@devbox:work   # needs roster installed on devbox
 | persistent sessions    | ✓    | —            | ✓      |
 | detach / reattach      | ✓    | —            | ✓      |
 | remote attach over ssh | ✓ (by hand) | —     | ✓ (built in) |
+
+## Built for Claude Code
+
+roster runs any agent, but it is built around Claude Code. Detection is tuned
+to it first, and the direction is to stop reading the screen and read Claude
+Code's own state instead — its hooks and statusline — for exact *blocked /
+working / done* and the things the screen never shows: context left, cost, and
+the tool it is about to run. That Claude-native attention layer is the roadmap;
+[`docs/05-claude-native-attention.md`](docs/05-claude-native-attention.md) is
+the spec. Other agents keep working with screen-based detection.
 
 ## Two toolchains, one repo
 
@@ -169,9 +181,9 @@ detection rules live in
 [`crates/roster-detect/agents.toml`](crates/roster-detect/agents.toml) and can
 be overridden at `~/.config/roster/agents.toml`.
 
-Agent detection is tuned against **Claude Code 2.1**, Codex, and Aider, and
-verified against live Claude Code sessions. To customize, start from the
-built-in config:
+Agent detection is tuned first and foremost against **Claude Code 2.1**,
+verified against live sessions; Codex and Aider run too, with their own
+screen-based detection. To customize, start from the built-in config:
 
 ```sh
 roster --print-config > ~/.config/roster/agents.toml
