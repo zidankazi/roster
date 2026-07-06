@@ -56,8 +56,6 @@ pub enum Pointer {
     Default,
     /// A hand — over anything clickable.
     Hand,
-    /// An I-beam — over live terminal content.
-    Text,
     /// Horizontal resize arrows — over a vertical divider.
     ResizeEw,
     /// Vertical resize arrows — over a horizontal divider.
@@ -70,7 +68,6 @@ impl Pointer {
         match self {
             Pointer::Default => "default",
             Pointer::Hand => "pointer",
-            Pointer::Text => "text",
             Pointer::ResizeEw => "ew-resize",
             Pointer::ResizeNs => "ns-resize",
         }
@@ -90,8 +87,9 @@ pub fn pointer_for(hit: Hit) -> Pointer {
         | Hit::PaneClose(_)
         | Hit::PaneRestart(_)
         | Hit::StatusWindows => Pointer::Hand,
-        Hit::Pane(_) => Pointer::Text,
-        Hit::Sidebar | Hit::Status | Hit::Outside => Pointer::Default,
+        // Pane content keeps the plain arrow: an I-beam over most of the
+        // screen reads as noise, and selection works regardless.
+        Hit::Pane(_) | Hit::Sidebar | Hit::Status | Hit::Outside => Pointer::Default,
     }
 }
 

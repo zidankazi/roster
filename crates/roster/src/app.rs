@@ -555,6 +555,15 @@ impl App {
     /// Drive the loop until quit or every pane is gone.
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         let started = Instant::now();
+        // Claim the pointer up front: without this the terminal keeps its
+        // native I-beam over the whole app until the first hover writes a
+        // shape. OSC 22 "default" is the plain arrow.
+        {
+            use std::io::Write;
+            let mut out = io::stdout();
+            let _ = write!(out, "\x1b]22;{}\x07", Pointer::Default.name());
+            let _ = out.flush();
+        }
         while !self.quit && !self.session.is_empty() {
             self.drain_output();
             self.drain_remote();
@@ -1403,8 +1412,8 @@ impl App {
     }
 
     /// The pointer shape for the position: a hand over anything clickable,
-    /// resize arrows over a draggable divider, an I-beam over terminal
-    /// content. Buttons win over dividers — a ✕ that shares a divider row
+    /// resize arrows over a draggable divider, the plain arrow everywhere
+    /// else. Buttons win over dividers — a ✕ that shares a divider row
     /// still reads as a button.
     fn pointer_shape_at(&self, x: u16, y: u16) -> Pointer {
         if self.toast_at(x, y).is_some() {
