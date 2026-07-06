@@ -8,8 +8,7 @@ use roster_core::{AgentState, Grid};
 use crate::config::{parse_agents, AgentConfig, ConfigError, ReasonSource};
 use crate::track::History;
 
-/// The default `agents.toml` shipped with roster: Claude Code, Codex, and
-/// Aider.
+/// The default `agents.toml` shipped with roster: Claude Code only.
 const BUILTIN_AGENTS: &str = include_str!("../agents.toml");
 
 /// One classification result: a state plus the human-readable reason for it.
@@ -45,8 +44,7 @@ impl Detector {
         Ok(Detector::new(parse_agents(text)?))
     }
 
-    /// The detector for the shipped default config (Claude Code, Codex,
-    /// Aider).
+    /// The detector for the shipped default config (Claude Code only).
     pub fn builtin() -> Self {
         Detector::from_toml(BUILTIN_AGENTS).expect("embedded agents.toml is valid")
     }
@@ -209,10 +207,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_config_parses_with_three_agents() {
+    fn builtin_config_parses_with_only_claude_code() {
         let detector = Detector::builtin();
         let names: Vec<&str> = detector.agents().map(|a| a.name.as_str()).collect();
-        assert_eq!(names, vec!["aider", "claude-code", "codex"]);
+        assert_eq!(names, vec!["claude-code"]);
     }
 
     #[test]
@@ -229,10 +227,6 @@ mod tests {
             .identify("/opt/homebrew/bin/claude --continue")
             .unwrap();
         assert_eq!(detector.agent(kind).name, "claude-code");
-        let kind = detector.identify("codex exec 'fix tests'").unwrap();
-        assert_eq!(detector.agent(kind).name, "codex");
-        let kind = detector.identify("aider --model sonnet").unwrap();
-        assert_eq!(detector.agent(kind).name, "aider");
     }
 
     #[test]
@@ -242,6 +236,9 @@ mod tests {
         assert!(detector.identify("/bin/bash -l").is_none());
         assert!(detector.identify("").is_none());
         assert!(detector.identify("claudette").is_none());
+        // roster is Claude-exclusive: other agent CLIs are not identified.
+        assert!(detector.identify("codex exec 'fix tests'").is_none());
+        assert!(detector.identify("aider --model sonnet").is_none());
     }
 
     #[test]

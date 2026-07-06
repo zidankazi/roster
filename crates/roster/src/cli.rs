@@ -169,8 +169,8 @@ mod tests {
 
     #[test]
     fn commands_are_positional() {
-        let args = parse(strings(&["claude", "codex exec 'fix'"])).unwrap();
-        assert_eq!(args.commands, vec!["claude", "codex exec 'fix'"]);
+        let args = parse(strings(&["claude", "claude --continue"])).unwrap();
+        assert_eq!(args.commands, vec!["claude", "claude --continue"]);
         assert!(!args.help);
     }
 

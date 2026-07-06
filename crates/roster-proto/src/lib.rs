@@ -412,7 +412,7 @@ mod tests {
         round_trip(Frame::Exited { pane: 2, code: 130 });
         round_trip(Frame::PaneOpened {
             pane: 4,
-            command: "codex".into(),
+            command: "claude".into(),
         });
         round_trip(Frame::Shutdown {
             reason: "another client attached".into(),

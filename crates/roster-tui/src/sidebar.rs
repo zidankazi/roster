@@ -426,8 +426,8 @@ mod tests {
         let d = session.split(c, SplitDirection::Vertical).unwrap();
 
         session.pane_mut(a).unwrap().command = Some("claude".into());
-        session.pane_mut(b).unwrap().command = Some("codex".into());
-        session.pane_mut(c).unwrap().command = Some("aider --model sonnet".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
+        session.pane_mut(c).unwrap().command = Some("claude".into());
         session.pane_mut(d).unwrap().command = Some("zsh".into());
 
         session.set_reading(
@@ -470,7 +470,7 @@ mod tests {
             states,
             vec![AgentState::Blocked, AgentState::Done, AgentState::Working]
         );
-        assert_eq!(entries[0].agent, "codex");
+        assert_eq!(entries[0].agent, "claude-code");
         assert_eq!(entries[0].age, Some(Duration::from_secs(30)));
     }
 
@@ -481,7 +481,7 @@ mod tests {
         let a = session.focused().unwrap();
         let b = session.split(a, SplitDirection::Horizontal).unwrap();
         session.pane_mut(a).unwrap().command = Some("claude".into());
-        session.pane_mut(b).unwrap().command = Some("codex".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
         session.set_reading(
             a,
             AgentState::Blocked,
@@ -495,8 +495,9 @@ mod tests {
             now - Duration::from_secs(60),
         );
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
-        assert_eq!(entries[0].agent, "codex");
-        assert_eq!(entries[1].agent, "claude-code");
+        // Both panes run claude; the longer-waiting one (pane b, 60s) leads.
+        assert_eq!(entries[0].pane, b);
+        assert_eq!(entries[1].pane, a);
     }
 
     #[test]
@@ -507,7 +508,7 @@ mod tests {
         session.pane_mut(a).unwrap().command = Some("claude".into());
         session.set_reading(a, AgentState::Idle, None, now);
         let b = session.new_window();
-        session.pane_mut(b).unwrap().command = Some("codex".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
         session.set_reading(b, AgentState::Blocked, Some("q".into()), now);
 
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
@@ -516,7 +517,7 @@ mod tests {
         assert_eq!(entries[0].window, 0);
         assert_eq!(entries[0].agent, "claude-code");
         assert_eq!(entries[1].window, 1);
-        assert_eq!(entries[1].agent, "codex");
+        assert_eq!(entries[1].agent, "claude-code");
     }
 
     #[test]
@@ -562,11 +563,11 @@ mod tests {
         assert!(header.starts_with(" agents"), "header: {header}");
         assert!(header.ends_with("1 blocked"), "header: {header}");
 
-        // Cards start after a blank row: blocked codex first (glyph, bold
+        // Cards start after a blank row: the blocked card first (glyph, bold
         // name, right-aligned age; state word + dim reason below), then a
         // blank spacer before the next card.
         let name_row = buffer_row(&buf, 2);
-        assert!(name_row.starts_with("  ◉ codex"), "row: {name_row}");
+        assert!(name_row.starts_with("  ◉ claude-code"), "row: {name_row}");
         assert!(name_row.ends_with("30s"), "row: {name_row}");
         let detail_row = buffer_row(&buf, 3);
         assert!(
@@ -574,7 +575,14 @@ mod tests {
             "row: {detail_row}"
         );
         assert_eq!(buffer_row(&buf, 4), "");
-        assert!(buffer_row(&buf, 5).contains("aider"), "second card follows");
+        // The second card (after the spacer) is the done pane; assert its
+        // detail row — the state + reason still distinguishes cards now that
+        // every card shares the name "claude-code".
+        assert!(
+            buffer_row(&buf, 6).starts_with("    done · finished"),
+            "second card is the done pane: {}",
+            buffer_row(&buf, 6)
+        );
 
         // The state word is colored, the reason after it is not.
         assert_eq!(
@@ -617,7 +625,7 @@ mod tests {
         session.pane_mut(a).unwrap().command = Some("claude".into());
         session.set_reading(a, AgentState::Idle, None, now);
         let b = session.new_window();
-        session.pane_mut(b).unwrap().command = Some("codex".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
         session.set_reading(b, AgentState::Working, Some("go".into()), now);
 
         let entries = sidebar_entries(&session, &Detector::builtin(), now);

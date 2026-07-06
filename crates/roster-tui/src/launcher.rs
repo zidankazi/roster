@@ -312,7 +312,7 @@ impl Widget for Launcher<'_> {
                 }
             }
             y += WORDMARK.len() as u16 + 1;
-            let tagline = "terminal multiplexer for coding agents";
+            let tagline = "terminal multiplexer for Claude Code";
             let tag_x = modal.x + (modal.width.saturating_sub(tagline.chars().count() as u16)) / 2;
             buf.set_stringn(
                 tag_x,
@@ -501,9 +501,9 @@ mod tests {
     fn items_cover_agents_and_shell() {
         let items = items();
         let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
-        assert_eq!(names, vec!["aider", "claude-code", "codex", "shell"]);
-        assert_eq!(items[1].command, "claude");
-        assert_eq!(items[3].command, "/bin/zsh");
+        assert_eq!(names, vec!["claude-code", "shell"]);
+        assert_eq!(items[0].command, "claude");
+        assert_eq!(items[1].command, "/bin/zsh");
     }
 
     #[test]
@@ -514,15 +514,15 @@ mod tests {
             match_command = ["claude"]
             launch_command = "claude --dangerously-skip-permissions"
 
-            [codex]
-            match_command = ["codex"]
+            [worker]
+            match_command = ["worker"]
             "#,
         )
         .unwrap();
         let items = launch_items(&detector, "/bin/zsh");
         assert_eq!(items[0].name, "claude-code");
         assert_eq!(items[0].command, "claude --dangerously-skip-permissions");
-        assert_eq!(items[1].command, "codex", "no override, bare binary");
+        assert_eq!(items[1].command, "worker", "no override, bare binary");
     }
 
     #[test]
@@ -579,7 +579,7 @@ mod tests {
     fn empty_input_defaults_to_first_item() {
         let items = items();
         let state = LauncherState::new();
-        assert_eq!(state.command(&items).as_deref(), Some("aider"));
+        assert_eq!(state.command(&items).as_deref(), Some("claude"));
     }
 
     #[test]
@@ -587,7 +587,7 @@ mod tests {
         let items = items();
         let mut state = LauncherState::new();
         state.select_prev(&items);
-        assert_eq!(state.selected(&items), Some(3));
+        assert_eq!(state.selected(&items), Some(1));
         state.select_next(&items);
         assert_eq!(state.selected(&items), Some(0));
 
@@ -597,7 +597,7 @@ mod tests {
         assert_eq!(state.command(&items).as_deref(), Some("zz"));
         state.backspace();
         state.backspace();
-        assert_eq!(state.filtered(&items).len(), 4);
+        assert_eq!(state.filtered(&items).len(), 2);
     }
 
     #[test]
@@ -639,6 +639,5 @@ mod tests {
         assert!(all.contains("new agent"), "missing title:\n{all}");
         assert!(all.contains("❯ c"), "missing input line:\n{all}");
         assert!(all.contains("claude-code"), "missing item:\n{all}");
-        assert!(all.contains("codex"), "missing item:\n{all}");
     }
 }

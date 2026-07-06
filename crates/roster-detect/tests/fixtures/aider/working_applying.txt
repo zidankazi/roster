@@ -1,3 +1,0 @@
-Model: claude-sonnet-5
-
-Applying edit to src/app.py

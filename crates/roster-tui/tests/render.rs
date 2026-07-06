@@ -27,7 +27,7 @@ fn two_agent_session(now: Instant) -> (Session, roster_core::PaneId, roster_core
     let left = session.focused().unwrap();
     let right = session.split(left, SplitDirection::Horizontal).unwrap();
     session.pane_mut(left).unwrap().command = Some("claude".into());
-    session.pane_mut(right).unwrap().command = Some("codex".into());
+    session.pane_mut(right).unwrap().command = Some("claude".into());
     session.set_reading(
         left,
         AgentState::Working,
@@ -88,8 +88,8 @@ fn panes_get_title_bars_and_content_shifts_down() {
     let buf = terminal.backend().buffer().clone();
 
     // Row 0 of the pane region holds title bars, not content: the working
-    // claude pane's title on the left half (spinner frame at tick 0),
-    // blocked codex's on the right.
+    // claude pane's title on the left half (spinner frame at tick 0), the
+    // blocked claude pane's on the right.
     let left_title = region_text(&buf, 32, 55, 0);
     assert!(
         left_title.trim_start().starts_with("⠋ claude-code"),
@@ -97,7 +97,7 @@ fn panes_get_title_bars_and_content_shifts_down() {
     );
     let right_title = region_text(&buf, 56, 80, 0);
     assert!(
-        right_title.contains("◉ codex"),
+        right_title.contains("◉ claude-code"),
         "right title: {right_title}"
     );
 
@@ -262,8 +262,7 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
     // One full-width title — the focused pane's — and no interior
     // separator column.
     let title = region_text(&buf, 32, 80, 0);
-    assert!(title.contains("◉ codex"), "title: {title}");
-    assert!(!title.contains("claude-code"), "title: {title}");
+    assert!(title.contains("◉ claude-code"), "title: {title}");
     assert_ne!(buf.cell((55, 5)).unwrap().symbol(), "│");
 
     // The solo pane's content spans the whole region; the hidden pane's
@@ -375,7 +374,7 @@ fn welcome_screen_shows_wordmark_picker_and_any_command_hint() {
     // all render.
     assert!(all.contains("7Mb,od8"), "screen:\n{all}");
     assert!(
-        all.contains("terminal multiplexer for coding agents"),
+        all.contains("terminal multiplexer for Claude Code"),
         "screen:\n{all}"
     );
     assert!(all.contains("claude-code"), "screen:\n{all}");

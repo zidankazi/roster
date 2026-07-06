@@ -1,9 +1,0 @@
-╭ OpenAI Codex (research preview)
-│
-• I need to run the test suite to verify the fix.
-
-  $ cargo test --workspace
-
-Approve this command?
-❯ yes
-  no

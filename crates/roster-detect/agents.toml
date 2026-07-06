@@ -1,8 +1,8 @@
-# Per-agent detection rules — the shipped defaults for roster.
+# Detection rules for roster — Claude Code only.
 #
-# roster is built for Claude Code: its claude-code rules are tuned the most
-# carefully and verified against live sessions. Codex and Aider ship as working
-# fallbacks. New agents are added here as data, not code. Patterns are regular
+# roster is built exclusively for Claude Code: this is the single shipped agent,
+# tuned and verified against live sessions. Rules are data, not code. Patterns
+# are regular
 # expressions evaluated against the visible grid rows (trailing whitespace
 # trimmed), bottom rows first; within a state, patterns are tried in the
 # order listed. Priority when several states match: blocked > working > idle.
@@ -29,21 +29,3 @@ reason.working = "last_nonempty"
 # prompt, or the interrupt/shortcut hints.
 reason.ignore = ['^\s*●', 'to interrupt', '\? for shortcuts', '^\s*⎿', '^\s*❯', '^\s*▎']
 done.after_activity_secs = 8
-
-[codex]
-match_command = ["codex"]
-blocked = ['Approve this command\?', 'Allow\?']
-working = ['Running', '\bthinking\b']
-# rows are matched with trailing whitespace trimmed, so the prompt pattern
-# ends in \s*$ rather than a literal trailing space
-idle    = ['^\S+ ❯\s*$']
-reason.blocked = "matched_line"
-done.after_activity_secs = 6
-
-[aider]
-match_command = ["aider"]
-blocked = ['\(Y\)es/\(N\)o', 'Add .* to the chat\?']
-working = ['Applying edit', 'Committing']
-idle    = ['^>\s*$']
-reason.blocked = "matched_line"
-done.after_activity_secs = 5

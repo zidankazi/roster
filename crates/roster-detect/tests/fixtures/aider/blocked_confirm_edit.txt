@@ -1,3 +1,0 @@
-aider v0.85.0
-
-Add tests/test_app.py to the chat?

@@ -209,7 +209,7 @@ mod tests {
         let a = session.focused().unwrap();
         let b = session.split(a, SplitDirection::Horizontal).unwrap();
         session.pane_mut(a).unwrap().command = Some("claude".into());
-        session.pane_mut(b).unwrap().command = Some("codex".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
         session.set_reading(a, AgentState::Working, Some("w".into()), now);
         session.set_reading(b, AgentState::Blocked, Some("b".into()), now);
         let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);

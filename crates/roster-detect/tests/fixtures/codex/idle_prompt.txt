@@ -1,5 +1,0 @@
-╭ OpenAI Codex
-
-• Session ready.
-
-~/roster ❯

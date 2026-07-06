@@ -1,4 +1,0 @@
-aider v0.85.0
-Model: claude-sonnet-5 with diff edit format
-
->
