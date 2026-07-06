@@ -170,12 +170,12 @@ fn hover_lights_up_interactive_chrome() {
             zoomed: false,
             side: SidebarSide::Left,
             launcher: None,
-        confirm: None,
-        toasts: &[],
-        selection: None,
-        scrolled: &scrolled,
-        window_names: &[],
-        rename: None,
+            confirm: None,
+            toasts: &[],
+            selection: None,
+            scrolled: &scrolled,
+            window_names: &[],
+            rename: None,
             welcome: false,
             mode_badge: None,
             status: "",
@@ -411,12 +411,12 @@ fn welcome_wordmark_reveals_with_the_tick() {
             zoomed: false,
             side: SidebarSide::Left,
             launcher: Some((&items, &state)),
-        confirm: None,
-        toasts: &[],
-        selection: None,
-        scrolled: &scrolled,
-        window_names: &[],
-        rename: None,
+            confirm: None,
+            toasts: &[],
+            selection: None,
+            scrolled: &scrolled,
+            window_names: &[],
+            rename: None,
             welcome: true,
             mode_badge: None,
             status: "",
@@ -553,9 +553,6 @@ fn exited_pane_too_small_for_the_card_keeps_the_strip() {
     let all: String = (0..8u16)
         .map(|y| region_text(&buf, 25, 50, y) + "\n")
         .collect();
-    assert!(
-        all.contains("exited (3)"),
-        "strip fallback missing:\n{all}"
-    );
+    assert!(all.contains("exited (3)"), "strip fallback missing:\n{all}");
     assert!(!all.contains("restart"), "card should not fit:\n{all}");
 }

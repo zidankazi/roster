@@ -24,10 +24,10 @@ mod toast;
 
 pub use confirm::{confirm_button_at, confirm_contains, Confirm, ConfirmButton};
 pub use exited::{draw_exited, exited_buttons, exited_card_rect};
-pub use rename::{draw_rename, rename_contains, rename_cursor, rename_rect};
 pub use hit::{hit_test, pointer_for, Hit, Pointer};
 pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
+pub use rename::{draw_rename, rename_contains, rename_cursor, rename_rect};
 pub use sidebar::{
     format_age, sidebar_entries, sidebar_rows, Message, Sidebar, SidebarEntry, SidebarRow,
     SidebarState,
@@ -602,7 +602,9 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
                 .fg(style::ACCENT)
                 .add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
-            Style::default().fg(style::ACCENT).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(style::ACCENT)
+                .add_modifier(Modifier::BOLD)
         };
         buf.set_string(rect.x + 1, rect.y, &text, style);
     }

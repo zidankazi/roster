@@ -110,8 +110,8 @@ pub fn run(name: &str) -> Result<(), String> {
             }
             // A stale socket from a dead server: reclaim it.
             std::fs::remove_file(&path).map_err(|e| format!("removing stale socket: {e}"))?;
-            let listener =
-                UnixListener::bind(&path).map_err(|e| format!("binding {}: {e}", path.display()))?;
+            let listener = UnixListener::bind(&path)
+                .map_err(|e| format!("binding {}: {e}", path.display()))?;
             serve(name, listener, &path)
         }
         Err(e) => Err(format!("binding {}: {e}", path.display())),
@@ -274,24 +274,33 @@ fn event_loop(name: &str, tx: &Sender<Ev>, rx: &Receiver<Ev>) -> Result<(), Stri
                                 exited: None,
                             },
                         );
-                        send_to_client(&mut client, &Frame::PaneOpened {
-                            pane: pane_id,
-                            command,
-                        });
+                        send_to_client(
+                            &mut client,
+                            &Frame::PaneOpened {
+                                pane: pane_id,
+                                command,
+                            },
+                        );
                     }
                     Err(error) => {
-                        send_to_client(&mut client, &Frame::SpawnFailed {
-                            error: error.to_string(),
-                        });
+                        send_to_client(
+                            &mut client,
+                            &Frame::SpawnFailed {
+                                error: error.to_string(),
+                            },
+                        );
                     }
                 },
                 Frame::Close { pane } => {
                     // Dropping the runtime kills and reaps the child.
                     panes.remove(&pane);
                     if panes.is_empty() && ever_spawned {
-                        send_to_client(&mut client, &Frame::Shutdown {
-                            reason: "session ended".into(),
-                        });
+                        send_to_client(
+                            &mut client,
+                            &Frame::Shutdown {
+                                reason: "session ended".into(),
+                            },
+                        );
                         return Ok(());
                     }
                 }
@@ -313,20 +322,26 @@ fn event_loop(name: &str, tx: &Sender<Ev>, rx: &Receiver<Ev>) -> Result<(), Stri
                         let excess = p.replay.len() - REPLAY_CAP;
                         p.replay.drain(..excess);
                     }
-                    send_to_client(&mut client, &Frame::Output {
-                        pane: pane_id,
-                        bytes,
-                    });
+                    send_to_client(
+                        &mut client,
+                        &Frame::Output {
+                            pane: pane_id,
+                            bytes,
+                        },
+                    );
                 }
             }
             Ev::Eof(pane_id) => {
                 if let Some(p) = panes.get_mut(&pane_id) {
                     let code = p.pty.wait().map(|status| status.code).unwrap_or(1);
                     p.exited = Some(code);
-                    send_to_client(&mut client, &Frame::Exited {
-                        pane: pane_id,
-                        code,
-                    });
+                    send_to_client(
+                        &mut client,
+                        &Frame::Exited {
+                            pane: pane_id,
+                            code,
+                        },
+                    );
                 }
             }
         }

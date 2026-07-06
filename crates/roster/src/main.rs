@@ -123,8 +123,7 @@ fn run_session(name: &str, args: &cli::Args, create: bool) -> Result<(), String>
         spawn_server(name)?;
     }
     let path = server::socket_path(name).ok_or("no home directory")?;
-    let stream =
-        UnixStream::connect(&path).map_err(|e| format!("connecting to {name}: {e}"))?;
+    let stream = UnixStream::connect(&path).map_err(|e| format!("connecting to {name}: {e}"))?;
     let reader = stream
         .try_clone()
         .map_err(|e| format!("cloning connection: {e}"))?;

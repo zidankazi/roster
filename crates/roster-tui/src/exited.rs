@@ -115,7 +115,10 @@ mod tests {
         assert_eq!(restart.y, card.y + card.height - 2);
         assert_eq!(restart.y, close.y);
         assert!(restart.x >= card.x && close.x + close.width <= card.x + card.width);
-        assert!(restart.x + restart.width < close.x, "buttons must not touch");
+        assert!(
+            restart.x + restart.width < close.x,
+            "buttons must not touch"
+        );
     }
 
     #[test]

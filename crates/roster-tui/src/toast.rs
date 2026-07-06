@@ -137,6 +137,9 @@ mod tests {
             .map(|x| buf.cell((x, rect.y + 1)).unwrap().symbol().to_string())
             .collect();
         assert!(row.contains("✗ launch failed: nope"), "row: {row}");
-        assert_eq!(buf.cell((rect.x, rect.y)).unwrap().style().fg, Some(Color::Red));
+        assert_eq!(
+            buf.cell((rect.x, rect.y)).unwrap().style().fg,
+            Some(Color::Red)
+        );
     }
 }

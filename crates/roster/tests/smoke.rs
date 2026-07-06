@@ -463,7 +463,9 @@ fn exited_pane_stays_until_closed() {
     // The overlay card carries restart and close buttons.
     let lines = screen.grid().lines();
     assert!(
-        lines.iter().any(|l| l.contains("restart") && l.contains("close")),
+        lines
+            .iter()
+            .any(|l| l.contains("restart") && l.contains("close")),
         "overlay buttons missing:\n{}",
         lines.join("\n")
     );
@@ -608,25 +610,22 @@ fn closing_a_live_agent_asks_first() {
     });
 
     let mut screen = Screen::new(cols, rows);
-    let drain_while = |screen: &mut Screen,
-                       needle: &str,
-                       want: bool,
-                       rx: &mpsc::Receiver<Vec<u8>>|
-     -> bool {
-        let start = Instant::now();
-        while start.elapsed() < DEADLINE {
-            let present = screen.grid().lines().iter().any(|l| l.contains(needle));
-            if present == want {
-                return true;
+    let drain_while =
+        |screen: &mut Screen, needle: &str, want: bool, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
+            let start = Instant::now();
+            while start.elapsed() < DEADLINE {
+                let present = screen.grid().lines().iter().any(|l| l.contains(needle));
+                if present == want {
+                    return true;
+                }
+                match rx.recv_timeout(Duration::from_millis(200)) {
+                    Ok(chunk) => screen.advance(&chunk),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+                }
             }
-            match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(chunk) => screen.advance(&chunk),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-            }
-        }
-        false
-    };
+            false
+        };
 
     assert!(
         drain_while(&mut screen, "blocked · Do y", true, &rx),
@@ -675,12 +674,8 @@ fn wheel_scrolls_history_and_typing_snaps_back() {
     let (cols, rows) = (100u16, 24u16);
     // 200 numbered lines then a live shell read: plenty of history, primary
     // screen (no alternate-screen TUI), process stays alive.
-    let mut pty = Pty::spawn(
-        &format!("'{}' 'seq 1 200; cat'", bin()),
-        cols,
-        rows,
-    )
-    .expect("spawn roster");
+    let mut pty =
+        Pty::spawn(&format!("'{}' 'seq 1 200; cat'", bin()), cols, rows).expect("spawn roster");
     let mut reader = pty.reader().expect("reader");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -693,25 +688,22 @@ fn wheel_scrolls_history_and_typing_snaps_back() {
     });
 
     let mut screen = Screen::new(cols, rows);
-    let drain_while = |screen: &mut Screen,
-                       needle: &str,
-                       want: bool,
-                       rx: &mpsc::Receiver<Vec<u8>>|
-     -> bool {
-        let start = Instant::now();
-        while start.elapsed() < DEADLINE {
-            let present = screen.grid().lines().iter().any(|l| l.contains(needle));
-            if present == want {
-                return true;
+    let drain_while =
+        |screen: &mut Screen, needle: &str, want: bool, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
+            let start = Instant::now();
+            while start.elapsed() < DEADLINE {
+                let present = screen.grid().lines().iter().any(|l| l.contains(needle));
+                if present == want {
+                    return true;
+                }
+                match rx.recv_timeout(Duration::from_millis(200)) {
+                    Ok(chunk) => screen.advance(&chunk),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+                }
             }
-            match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(chunk) => screen.advance(&chunk),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-            }
-        }
-        false
-    };
+            false
+        };
 
     // The tail of the output is on screen; line 1 has scrolled away. Gate
     // on a line number that appears only in the output — the status line
@@ -850,25 +842,22 @@ fn persistent_session_survives_detach_and_reattach() {
     let name = format!("smoke{}", std::process::id());
 
     let (cols, rows) = (100u16, 24u16);
-    let drain_while = |screen: &mut Screen,
-                       needle: &str,
-                       want: bool,
-                       rx: &mpsc::Receiver<Vec<u8>>|
-     -> bool {
-        let start = Instant::now();
-        while start.elapsed() < DEADLINE {
-            let present = screen.grid().lines().iter().any(|l| l.contains(needle));
-            if present == want {
-                return true;
+    let drain_while =
+        |screen: &mut Screen, needle: &str, want: bool, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
+            let start = Instant::now();
+            while start.elapsed() < DEADLINE {
+                let present = screen.grid().lines().iter().any(|l| l.contains(needle));
+                if present == want {
+                    return true;
+                }
+                match rx.recv_timeout(Duration::from_millis(200)) {
+                    Ok(chunk) => screen.advance(&chunk),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+                }
             }
-            match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(chunk) => screen.advance(&chunk),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-            }
-        }
-        false
-    };
+            false
+        };
     let pump = |pty: &Pty| -> mpsc::Receiver<Vec<u8>> {
         let mut reader = pty.reader().expect("reader");
         let (tx, rx) = mpsc::channel();
@@ -885,8 +874,12 @@ fn persistent_session_survives_detach_and_reattach() {
 
     // First client: create the session with a long-lived pane and leave a
     // marker in its output.
-    let mut pty = Pty::spawn(&format!("'{}' -s {name} 'seq 1 50; cat'", bin()), cols, rows)
-        .expect("spawn roster -s");
+    let mut pty = Pty::spawn(
+        &format!("'{}' -s {name} 'seq 1 50; cat'", bin()),
+        cols,
+        rows,
+    )
+    .expect("spawn roster -s");
     let rx = pump(&pty);
     let mut screen = Screen::new(cols, rows);
     assert!(
@@ -932,8 +925,8 @@ fn persistent_session_survives_detach_and_reattach() {
 
     // Reattach: the pane is still there, screen rebuilt from replay —
     // marker included.
-    let mut pty = Pty::spawn(&format!("'{}' attach {name}", bin()), cols, rows)
-        .expect("spawn roster attach");
+    let mut pty =
+        Pty::spawn(&format!("'{}' attach {name}", bin()), cols, rows).expect("spawn roster attach");
     let rx = pump(&pty);
     let mut screen = Screen::new(cols, rows);
     assert!(

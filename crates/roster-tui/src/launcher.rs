@@ -396,11 +396,7 @@ impl Widget for Launcher<'_> {
                     Style::default().add_modifier(Modifier::DIM),
                 );
             } else if avail >= 8 {
-                let mut cut: String = item
-                    .command
-                    .chars()
-                    .take(usize::from(avail) - 1)
-                    .collect();
+                let mut cut: String = item.command.chars().take(usize::from(avail) - 1).collect();
                 cut.push('…');
                 buf.set_string(
                     right_edge - avail,

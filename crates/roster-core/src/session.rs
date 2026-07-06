@@ -732,10 +732,7 @@ mod tests {
         assert_eq!(restored.window_count(), 2);
         assert_eq!(restored.active_window(), s.active_window());
         assert_eq!(restored.focused(), Some(b));
-        assert_eq!(
-            restored.pane(a).unwrap().command.as_deref(),
-            Some("claude")
-        );
+        assert_eq!(restored.pane(a).unwrap().command.as_deref(), Some("claude"));
         assert_eq!(
             restored.pane(b).unwrap().command.as_deref(),
             Some("npx my-agent --flag x")
@@ -797,7 +794,9 @@ mod tests {
         assert_eq!(s.focused(), Some(adopted));
         assert!(s.adopt_window(100).is_none(), "id taken");
 
-        let split = s.adopt_split(adopted, 101, SplitDirection::Horizontal).unwrap();
+        let split = s
+            .adopt_split(adopted, 101, SplitDirection::Horizontal)
+            .unwrap();
         assert_eq!(split.raw(), 101);
         assert_eq!(s.layout(80, 24).len(), 2);
 

@@ -339,9 +339,12 @@ impl App {
                 commands.to_vec()
             };
             for command in &to_spawn {
-                write_frame(&mut writer, &Frame::Spawn {
-                    command: command.clone(),
-                })
+                write_frame(
+                    &mut writer,
+                    &Frame::Spawn {
+                        command: command.clone(),
+                    },
+                )
                 .map_err(|e| format!("spawning {command}: {e}"))?;
             }
             let mut opened = 0;
@@ -641,7 +644,9 @@ impl App {
                 zoomed: self.zoomed,
                 side: self.side,
                 launcher,
-                confirm: confirm.as_ref().map(|(name, hover)| (name.as_str(), *hover)),
+                confirm: confirm
+                    .as_ref()
+                    .map(|(name, hover)| (name.as_str(), *hover)),
                 toasts: &toast_view,
                 selection: self.selection,
                 scrolled: &scrolled,
@@ -1313,8 +1318,7 @@ impl App {
                                     && y >= content.y
                                     && y < content.y + content.height
                                 {
-                                    self.sel_anchor =
-                                        Some((id, (x - content.x, y - content.y)));
+                                    self.sel_anchor = Some((id, (x - content.x, y - content.y)));
                                 }
                             }
                         }
@@ -1340,8 +1344,7 @@ impl App {
                         let clamp = |v: u16, lo: u16, hi: u16| v.max(lo).min(hi);
                         let cx = clamp(x, content.x, content.x + content.width.saturating_sub(1));
                         let cy = clamp(y, content.y, content.y + content.height.saturating_sub(1));
-                        self.selection =
-                            Some((id, anchor, (cx - content.x, cy - content.y)));
+                        self.selection = Some((id, anchor, (cx - content.x, cy - content.y)));
                     }
                 }
             }
@@ -1383,7 +1386,9 @@ impl App {
             }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let hit = self.hit_at(x, y);
-                if let Hit::Pane(id) | Hit::PaneTitle(id) | Hit::PaneClose(id)
+                if let Hit::Pane(id)
+                | Hit::PaneTitle(id)
+                | Hit::PaneClose(id)
                 | Hit::PaneRestart(id) = hit
                 {
                     let up = mouse.kind == MouseEventKind::ScrollUp;
@@ -1501,7 +1506,9 @@ impl App {
             return;
         };
         if let Some(remote) = &mut self.remote {
-            remote.pending.push_back(Placement::Split(target, direction));
+            remote
+                .pending
+                .push_back(Placement::Split(target, direction));
             remote.send(&Frame::Spawn {
                 command: default_shell(),
             });
@@ -1735,7 +1742,11 @@ fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
         let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
         out.push(ALPHABET[(n >> 18) as usize & 63] as char);
         out.push(ALPHABET[(n >> 12) as usize & 63] as char);
@@ -1785,6 +1796,9 @@ mod tests {
         assert_eq!(base64(b"foob"), "Zm9vYg==");
         assert_eq!(base64(b"fooba"), "Zm9vYmE=");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
-        assert_eq!(base64("selected text ✓".as_bytes()), "c2VsZWN0ZWQgdGV4dCDinJM=");
+        assert_eq!(
+            base64("selected text ✓".as_bytes()),
+            "c2VsZWN0ZWQgdGV4dCDinJM="
+        );
     }
 }

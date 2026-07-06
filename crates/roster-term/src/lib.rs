@@ -415,6 +415,9 @@ mod tests {
         }
         assert!(screen.history_size() > 0, "no history accumulated");
         screen.scroll_display(3);
-        assert!(screen.display_offset() > 0, "offset stuck after early resize");
+        assert!(
+            screen.display_offset() > 0,
+            "offset stuck after early resize"
+        );
     }
 }

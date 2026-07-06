@@ -151,7 +151,9 @@ pub fn write_frame(w: &mut impl Write, frame: &Frame) -> io::Result<()> {
     let mut payload = Vec::new();
     match frame {
         Frame::Attach | Frame::Detach | Frame::Kill | Frame::Ping | Frame::Pong => {}
-        Frame::Input { pane, bytes } | Frame::Replay { pane, bytes } | Frame::Output { pane, bytes } => {
+        Frame::Input { pane, bytes }
+        | Frame::Replay { pane, bytes }
+        | Frame::Output { pane, bytes } => {
             put_u64(&mut payload, *pane);
             put_bytes(&mut payload, bytes);
         }
@@ -279,9 +281,7 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Frame>> {
             reason: p.string()?,
         },
         70 => Frame::Pong,
-        71 => Frame::SpawnFailed {
-            error: p.string()?,
-        },
+        71 => Frame::SpawnFailed { error: p.string()? },
         _ => return Err(corrupt("unknown frame tag")),
     };
     if p.at != p.buf.len() {

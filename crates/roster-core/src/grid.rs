@@ -273,15 +273,9 @@ mod tests {
     #[test]
     fn linear_text_spans_rows_in_reading_order() {
         let g = Grid::from_text("first line\nmiddle\nlast line");
-        assert_eq!(
-            g.linear_text((6, 0), (3, 2)),
-            "line\nmiddle\nlast"
-        );
+        assert_eq!(g.linear_text((6, 0), (3, 2)), "line\nmiddle\nlast");
         // Dragging upward selects the same text.
-        assert_eq!(
-            g.linear_text((3, 2), (6, 0)),
-            "line\nmiddle\nlast"
-        );
+        assert_eq!(g.linear_text((3, 2), (6, 0)), "line\nmiddle\nlast");
     }
 
     #[test]
