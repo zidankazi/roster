@@ -66,9 +66,12 @@ agent process --bytes--> roster-pty --raw stream--> roster-term --screen grid-->
 
 herdr shows a colored dot; `roster` shows the dot **plus the reason** — "blocked: *Allow edit to config.ts?*". State-with-explanation is the distinctive spine. The lane is real and contested (rmux is doing from-scratch-Rust-multiplexer-for-agents too), so v1's job is to nail that one differentiator and stay tight, not to out-feature anyone.
 
+**Where this is heading (post-persistence):** the reason spine widens into a Claude-native attention layer — read Claude Code's own hooks + statusline instead of scraping pixels, and organize the UI around who needs you and why. This is the committed strategic direction; **[05-claude-native-attention.md](05-claude-native-attention.md) is the north star** for what we build next and how it separates us from herdr. Read it before starting new feature work.
+
 ## Where to go next
 
 - `01-crates.md` — every crate's responsibility, public types, and boundaries.
 - `02-state-detection.md` — the heart: how state and reason are derived, debouncing, per-agent config.
 - `03-build-sequence.md` — the order to build in, and the agent-safe vs keyboard split per milestone.
 - `04-website.md` — the Next.js landing page and how it stays isolated.
+- `05-claude-native-attention.md` — **the strategic direction after persistence**: the Claude-native attention layer, how it differs from herdr, and the phased plan. Start here for new feature work.
