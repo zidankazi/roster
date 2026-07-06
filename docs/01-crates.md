@@ -5,10 +5,11 @@
 The dependency direction is strictly one-way, bottom to top. Nothing lower depends on anything higher.
 
 ```
-roster (binary)
+roster (binary: client, event loop, and the session server)
   └─ roster-tui ─┐
   └─ roster-detect ─┐
-  └─ roster-core ───┤
+  └─ roster-proto ──┤   (framed wire protocol for persistent sessions;
+  └─ roster-core ───┤    depends on nothing)
        roster-term ─┤   (core/detect/tui depend on the grid type from term,
        roster-pty ──┘    but NOT on pty — see note in roster-term)
 ```
@@ -62,9 +63,17 @@ Renders everything with `ratatui`: the pane contents and the sidebar.
 - Public surface (sketch): `render(frame, &Session, &[StateReading])`, `Sidebar` widget, `PaneView` widget.
 - **Why agent-safe:** rendering a known model into a ratatui buffer is deterministic and snapshot-testable. Agents can build and polish the sidebar look while you're away — and this is the part your UX strength should own.
 
+## roster-proto — **agent-safe**
+
+The wire protocol between a roster client and a persistent session server: length-prefixed binary frames over any `Read`/`Write` pair (a unix socket locally, an ssh subprocess's stdio remotely).
+
+- Hand-rolled encoding, zero dependencies; the message set is small (attach, input, resize, spawn, close, layout blob, detach, kill / hello, replay, output, exited, pane-opened, shutdown).
+- Public surface: `Frame`, `read_frame`, `write_frame`, `MAX_FRAME`.
+- **Why agent-safe:** pure serialization with round-trip and corruption tests; no I/O beyond the passed-in streams.
+
 ## roster (binary) — **mostly do-at-keyboard**
 
-The event loop that ties it together: read PTY output → advance the emulator → run detection → update core → repaint. Owns key/mouse input, the refresh cadence, and the actual pane-switch side effects.
+The event loop that ties it together: read PTY output → advance the emulator → run detection → update core → repaint. Owns key/mouse input, the refresh cadence, and the actual pane-switch side effects. Also hosts the session server (`_server`) — a headless process owning the PTYs of a persistent session, speaking `roster-proto` over a unix socket — and the `_proxy` stdio bridge that carries the same protocol over ssh.
 
 - **Why keyboard:** this is where the async plumbing, timing, and real terminals meet. The loop's correctness is a live-system property. Agents can draft it; you verify and debug it at the keyboard.
 

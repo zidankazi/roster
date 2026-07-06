@@ -23,8 +23,17 @@ gets a title bar with its agent's live state; the focused pane is highlighted.
 **Use it like an app — no hotkeys to learn.** Every action is a visible click
 target: click a pane to focus it, a sidebar card to jump to that agent, the
 pinned **+ new agent** button to open the launcher, a title bar's **✕** to
-close that pane. Drag the dividers to resize, and scroll the pane under your
-cursor. Closing the last pane quits.
+close that pane (closing a live agent asks first, in a real dialog — a stray
+click won't kill it). Drag the dividers to resize. An exited pane shows a
+card with **restart** and **close** buttons; launch failures arrive as
+dismissable toasts, not buried status text. Closing the last pane quits.
+
+**A real terminal underneath.** Every pane keeps 10,000 lines of scrollback —
+wheel-scroll any pane to read history (an `↑ n` chip shows how far back you
+are; typing snaps back to live). Full-screen TUIs still get their arrow keys.
+Drag across pane text to select it; release copies it to your clipboard via
+OSC 52, which works over ssh too. Pastes arrive bracketed, so multi-line
+prompts don't self-execute line by line.
 
 **Two layouts.** The grid tiles every pane; **solo** shows one agent at a
 time, full size, with the sidebar as the switcher — click cards on the left
@@ -39,9 +48,37 @@ over the window. **Any agent works**: type any command — `gemini`,
 `agents.toml` (`roster --print-config` shows the format) get named cards and
 state detection on top.
 
+Each agent launched from the **+ new agent** button opens in its own
+workspace window rather than splitting the current pane. The sidebar groups
+cards by workspace — click a workspace header to jump there (shell-only
+windows included), click the `⧉ 2/3` indicator in the status bar or press
+`ctrl-b n`/`p` to cycle.
+
 Keyboard equivalents exist for everything (`ctrl-b` is the prefix — `c` new
-agent, `z` solo, `j` jump, `o` focus, `x` close, `q` quit); the status bar
-keeps the hints on screen.
+agent, `n`/`p` windows, `z` solo, `j` jump, `o` focus, `x` close, `d`
+detach, `q` quit); the status bar keeps the hints on screen.
+
+## Persistent sessions
+
+Agents shouldn't die because a terminal window closed. Run roster inside a
+named session and every pane lives in a background server that survives the
+UI — detach, close the laptop lid, reattach later; the agents kept working
+and the sidebar rebuilds itself, states and all:
+
+```sh
+roster -s work claude    # run claude in the persistent session "work"
+# … ctrl-b d to detach (or just quit — quitting a session detaches) …
+roster ls                # sessions still running
+roster attach work       # back where you left off, layout restored
+roster kill work         # end the session and every agent in it
+```
+
+Attach from another machine over plain ssh — roster runs a thin stdio proxy
+on the remote side, so the session server never touches the network:
+
+```sh
+roster attach user@devbox:work   # needs roster installed on devbox
+```
 
 ## How it compares
 
@@ -54,8 +91,9 @@ keeps the hints on screen.
 | real terminal views    | ✓    | —            | ✓      |
 | mouse-native           | —    | ✓            | ✓      |
 | lightweight binary     | ✓    | —            | ✓ (~4 MB) |
-| persistent sessions    | ✓    | —            | planned |
-| detach / reattach      | ✓    | —            | planned |
+| persistent sessions    | ✓    | —            | ✓      |
+| detach / reattach      | ✓    | —            | ✓      |
+| remote attach over ssh | ✓ (by hand) | —     | ✓ (built in) |
 
 ## Two toolchains, one repo
 
@@ -75,11 +113,12 @@ artifact the site reads at build time — that is the only bridge.
 | Crate | Role |
 |---|---|
 | `roster-pty` | PTY allocation + agent child-process spawn |
-| `roster-term` | Byte stream → screen grid (via `alacritty_terminal`) |
-| `roster-core` | Panes, layout tree, session state |
+| `roster-term` | Byte stream → screen grid + scrollback (via `alacritty_terminal`) |
+| `roster-core` | Panes, layout tree, session state + snapshot/restore |
 | `roster-detect` | Agent identification + state heuristics + config |
-| `roster-tui` | ratatui rendering: panes + the sidebar |
-| `roster` | The binary; wires everything, owns the event loop |
+| `roster-proto` | Framed client/server protocol for persistent sessions |
+| `roster-tui` | ratatui rendering: panes, sidebar, dialogs, toasts |
+| `roster` | The binary; the event loop, and the session server |
 
 Architecture docs live in [`docs/`](docs) — start with
 [`docs/00-architecture.md`](docs/00-architecture.md).
