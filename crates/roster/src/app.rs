@@ -44,6 +44,15 @@ const DETECT_EVERY: Duration = Duration::from_millis(400);
 /// this grace, a committed non-blocked scrape means the prompt is gone and
 /// the pin is stale (a missed clear — e.g. an interrupt at the prompt).
 const HOOK_PIN_GRACE: Duration = Duration::from_secs(2);
+
+/// Whether a hook-reported ask still outranks the committed scrape: always
+/// within the paint grace, and for as long as the settled screen keeps
+/// reading blocked (the pin's verbatim ask is richer than the scraped one).
+/// Hook events are facts, never fed through the debouncer — this predicate
+/// is the single point where the pin and the scrape reconcile.
+fn hook_pin_wins(pin_age: Duration, scraped: AgentState) -> bool {
+    pin_age < HOOK_PIN_GRACE || scraped == AgentState::Blocked
+}
 /// Reasons arriving over the hook socket are capped defensively — the
 /// `_hook` sender already truncates, but the socket accepts frames from
 /// any same-uid process.
@@ -1103,14 +1112,11 @@ impl App {
             // the fallback, never suspended.
             let grid = rt.screen.grid();
             let reading = rt.tracker.update(&self.detector, kind, &grid, now);
-            // A hook-reported ask outranks a fresh scrape (richer reason,
-            // zero latency; the prompt may not even have painted yet). But
-            // once past the paint grace, a committed non-blocked scrape
-            // means the prompt is gone and the clear was missed — an
-            // interrupt at the prompt fires no hook — so the screen wins.
+            // The hook wins on freshness and richness, the screen wins on
+            // settled reality — a missed clear (an interrupt at the prompt
+            // fires no hook) self-heals here. See `hook_pin_wins`.
             if let Some(pin) = &rt.hook_blocked {
-                let settled = now.duration_since(pin.at) >= HOOK_PIN_GRACE;
-                if !settled || reading.state == AgentState::Blocked {
+                if hook_pin_wins(now.duration_since(pin.at), reading.state) {
                     // set_reading only bumps last_change on a state change,
                     // so re-pinning keeps the blocked-for age honest.
                     self.session.set_reading(
@@ -2120,6 +2126,29 @@ mod tests {
             base64("selected text ✓".as_bytes()),
             "c2VsZWN0ZWQgdGV4dCDinJM="
         );
+    }
+
+    #[test]
+    fn hook_still_bypasses_debounce() {
+        // A fresh pin outranks the committed scrape no matter what state
+        // the debouncer settled on — the hook event was never fed through
+        // it, and a blocked pin needs no consecutive-reading cushion.
+        for scraped in [
+            AgentState::Idle,
+            AgentState::Working,
+            AgentState::Done,
+            AgentState::Blocked,
+        ] {
+            assert!(
+                hook_pin_wins(Duration::ZERO, scraped),
+                "a fresh pin must outrank a {scraped:?} scrape"
+            );
+        }
+        // Past the paint grace the settled screen wins on reality — except
+        // when it still reads blocked, where the pin's verbatim ask stays.
+        assert!(!hook_pin_wins(HOOK_PIN_GRACE, AgentState::Idle));
+        assert!(!hook_pin_wins(HOOK_PIN_GRACE, AgentState::Working));
+        assert!(hook_pin_wins(HOOK_PIN_GRACE, AgentState::Blocked));
     }
 
     #[test]

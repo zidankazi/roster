@@ -51,7 +51,7 @@ The differentiator. Identifies which panes are agents and classifies each one's 
 - **State classification:** given a `Grid` snapshot, apply per-agent patterns to decide blocked / working / done / idle, and extract the human-readable reason (e.g. the prompt text it's blocked on).
 - **Config:** load a declarative `agents.toml` (see `02-state-detection.md`) so new agents are added as data, not code.
 - **Statusline telemetry:** `statusline::parse` maps Claude Code's statusline JSON payload into `roster_core::Telemetry` (model, context %, cost, five-hour rate limit) — fixture-tested against documented payloads; the never-parse-the-transcript rule from `05-claude-native-attention.md` applies.
-- Public surface (sketch): `Detector::from_config(cfg)`, `detector.identify(cmd) -> Option<AgentKind>`, `detector.classify(agent, grid, history) -> StateReading { state, reason }`.
+- Public surface (sketch): `Detector::from_config(cfg)`, `detector.identify(cmd) -> Option<AgentKind>`, `detector.classify(agent, grid, history) -> StateReading { state, reason, telemetry }` (telemetry always `None` from the scrape; `PaneTracker` attaches and ages the statusline-fed value).
 - **Why agent-safe:** consumes `Grid` fixtures, emits a state. You can write an enormous test suite from captured agent screens with no live process. This is the crate to pour agent effort into.
 
 ## roster-tui — **agent-safe**

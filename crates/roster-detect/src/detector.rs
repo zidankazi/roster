@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use regex::Regex;
-use roster_core::{AgentState, Grid};
+use roster_core::{AgentState, Grid, Telemetry};
 
 use crate::config::{parse_agents, AgentConfig, ConfigError, ReasonSource};
 use crate::track::History;
@@ -12,13 +12,20 @@ use crate::track::History;
 const BUILTIN_AGENTS: &str = include_str!("../agents.toml");
 
 /// One classification result: a state plus the human-readable reason for it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// Not `Eq`: telemetry carries `f32` readings.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct StateReading {
     /// The classified state.
     pub state: AgentState,
     /// Why — the question a blocked agent is asking, a hint at what a
     /// working agent is doing. `None` when the screen offers nothing usable.
     pub reason: Option<String>,
+    /// Statusline-fed numbers for the pane, when its bridge feed is live.
+    /// Never scraped: [`Detector::classify`] always leaves it `None`;
+    /// [`crate::PaneTracker`] attaches and ages it, so scraping-only panes
+    /// are untouched by its existence.
+    pub telemetry: Option<Telemetry>,
 }
 
 /// Identifies a configured agent within a [`Detector`].
@@ -107,43 +114,48 @@ impl Detector {
         let lines = grid.lines();
 
         if let Some(found) = find_match(&config.blocked, &lines) {
-            return StateReading {
-                state: AgentState::Blocked,
-                reason: reason_from(config.reason_blocked, &found, &lines, &config.reason_ignore),
-            };
+            return scraped(
+                AgentState::Blocked,
+                reason_from(config.reason_blocked, &found, &lines, &config.reason_ignore),
+            );
         }
         if let Some(found) = find_match(&config.working, &lines) {
-            return StateReading {
-                state: AgentState::Working,
-                reason: reason_from(config.reason_working, &found, &lines, &config.reason_ignore),
-            };
+            return scraped(
+                AgentState::Working,
+                reason_from(config.reason_working, &found, &lines, &config.reason_ignore),
+            );
         }
         if history.content_changed(grid) == Some(true) {
-            return StateReading {
-                state: AgentState::Working,
-                reason: last_worded_line(&lines, &config.reason_ignore),
-            };
+            return scraped(
+                AgentState::Working,
+                last_worded_line(&lines, &config.reason_ignore),
+            );
         }
         if let Some(found) = find_match(&config.idle, &lines) {
             let recently_active = history.last_activity_at().is_some_and(|last| {
                 at.saturating_duration_since(last) <= config.done_after_activity
             });
             return if recently_active {
-                StateReading {
-                    state: AgentState::Done,
-                    reason: last_worded_line(&lines[..found.row], &config.reason_ignore),
-                }
+                scraped(
+                    AgentState::Done,
+                    last_worded_line(&lines[..found.row], &config.reason_ignore),
+                )
             } else {
-                StateReading {
-                    state: AgentState::Idle,
-                    reason: None,
-                }
+                scraped(AgentState::Idle, None)
             };
         }
-        StateReading {
-            state: AgentState::Idle,
-            reason: None,
-        }
+        scraped(AgentState::Idle, None)
+    }
+}
+
+/// A reading as the scrape produces it: state and reason only. The single
+/// chokepoint for the invariant that bridge-sourced fields (telemetry) are
+/// never set from a screen — [`crate::PaneTracker`] attaches those.
+fn scraped(state: AgentState, reason: Option<String>) -> StateReading {
+    StateReading {
+        state,
+        reason,
+        telemetry: None,
     }
 }
 

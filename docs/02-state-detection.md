@@ -17,10 +17,11 @@ Four states, defined by what they mean for the human:
 
 ## Two things to extract, always
 
-For every agent pane, detection produces a `StateReading { state, reason }`:
+For every agent pane, detection produces a `StateReading { state, reason, telemetry }`:
 
 - **state** — one of the four above.
 - **reason** — a short human string. For `blocked`, it's the actual question ("Allow edit to src/config.ts?"). For `working`, a hint ("running tests…"). For `done`, a summary if available ("finished — 3 files changed"). The reason is the whole reason `roster` beats a bare dot; never skip it.
+- **telemetry** — bridge-fed numbers (model, context %, cost, rate limit; the `roster-core` `Telemetry` type), only when the pane has a live statusline feed (docs/05). Never scraped: `classify` always leaves it `None`; the `PaneTracker` attaches the freshest payload without debouncing and ages it out after 30 idle seconds, so a scraping-only pane behaves exactly as before the field existed.
 
 ## How classification works
 

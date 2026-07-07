@@ -6,11 +6,16 @@
 //! "working" signal), how recently the agent was active (the done-vs-idle
 //! call), and enough persistence to refuse to flip the committed state on
 //! one noisy frame.
+//!
+//! [`PaneTracker`] is also the multi-source seam (see
+//! `docs/05-claude-native-attention.md`): bridge-fed telemetry supersedes
+//! the scrape when present, is never debounced (a statusline payload is a
+//! fact, not a noisy frame), and ages out rather than freezing.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use roster_core::{AgentState, Grid};
+use roster_core::{AgentState, Grid, Telemetry};
 
 use crate::detector::StateReading;
 
@@ -20,6 +25,15 @@ const DEFAULT_COMMIT_AFTER: u32 = 2;
 /// surface quickly, and a brief false-blocked is less costly than a missed
 /// one.
 const DEFAULT_BLOCKED_COMMIT_AFTER: u32 = 1;
+/// How long a statusline payload keeps riding committed readings. A live
+/// feed refreshes far more often than this whenever the agent is doing
+/// anything, so a gap this long means the feed is gone (session exited,
+/// bridge unhooked) — and stale numbers presented as current are worse than
+/// none. A blocked or idle pane can legitimately outlast the window; the
+/// next payload restores telemetry instantly, so absence reads as "not
+/// currently confirmed", never as an error. Retune against live cadence
+/// once the feed is wired (docs/05).
+const TELEMETRY_STALE_AFTER: Duration = Duration::from_secs(30);
 
 fn grid_fingerprint(grid: &Grid) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -71,6 +85,9 @@ impl History {
 /// [`AgentState::Blocked`] use a lower threshold. While the raw state agrees
 /// with the committed state, the committed reason follows the raw reason, so
 /// e.g. a working pane's hint stays fresh without any state change.
+/// Telemetry never routes through the debouncer: the scrape never carries
+/// it, and [`PaneTracker`] attaches the bridge-fed value after debouncing —
+/// a statusline payload is a fact, not a noisy frame.
 #[derive(Debug)]
 pub struct Debouncer {
     committed: StateReading,
@@ -134,12 +151,17 @@ impl Default for Debouncer {
     }
 }
 
-/// Everything detection keeps per pane: history plus debouncer, driven once
-/// per refresh via [`PaneTracker::update`].
+/// Everything detection keeps per pane: history, debouncer, and the pane's
+/// freshest bridge telemetry, driven once per refresh via
+/// [`PaneTracker::update`].
 #[derive(Debug, Default)]
 pub struct PaneTracker {
     history: History,
     debouncer: Debouncer,
+    /// The freshest statusline payload and when it arrived. Bridge data,
+    /// not a scraped signal: it rides committed readings without debouncing
+    /// and ages out after [`TELEMETRY_STALE_AFTER`].
+    telemetry: Option<(Telemetry, Instant)>,
 }
 
 impl PaneTracker {
@@ -148,8 +170,21 @@ impl PaneTracker {
         PaneTracker::default()
     }
 
+    /// Record a statusline payload for this pane; the freshest payload wins
+    /// — one stamped older than the held payload is ignored, so out-of-order
+    /// delivery cannot regress the data. Telemetry is authoritative bridge
+    /// data: it attaches to the reading on the very next
+    /// [`PaneTracker::update`] with no debounce delay, and drops back to
+    /// `None` once [`TELEMETRY_STALE_AFTER`] passes without a newer payload.
+    pub fn set_telemetry(&mut self, telemetry: Telemetry, at: Instant) {
+        if self.telemetry.as_ref().is_some_and(|(_, seen)| *seen > at) {
+            return;
+        }
+        self.telemetry = Some((telemetry, at));
+    }
+
     /// Run one detection step: classify the grid, record the frame, debounce,
-    /// and return the committed reading.
+    /// attach the pane's live telemetry, and return the committed reading.
     pub fn update(
         &mut self,
         detector: &crate::detector::Detector,
@@ -159,12 +194,31 @@ impl PaneTracker {
     ) -> StateReading {
         let raw = detector.classify(kind, grid, &self.history, at);
         self.history.record(raw.state, grid, at);
-        self.debouncer.observe(raw)
+        let mut reading = self.debouncer.observe(raw);
+        // A payload past the staleness window stops being asserted instead
+        // of freezing its last numbers; a held one supersedes the scrape's
+        // `None`. The reading's telemetry always equals the post-purge slot.
+        self.telemetry = self
+            .telemetry
+            .take()
+            .filter(|(_, seen)| at.saturating_duration_since(*seen) <= TELEMETRY_STALE_AFTER);
+        reading.telemetry = self
+            .telemetry
+            .as_ref()
+            .map(|(telemetry, _)| telemetry.clone());
+        reading
     }
 
-    /// The committed reading as of the last update.
-    pub fn committed(&self) -> &StateReading {
-        self.debouncer.committed()
+    /// The scrape-committed reading with the pane's held telemetry attached.
+    /// Aging is evaluated by [`PaneTracker::update`], so a quiet feed's last
+    /// payload lingers here until the next update purges it.
+    pub fn committed(&self) -> StateReading {
+        let mut reading = self.debouncer.committed().clone();
+        reading.telemetry = self
+            .telemetry
+            .as_ref()
+            .map(|(telemetry, _)| telemetry.clone());
+        reading
     }
 }
 
@@ -177,6 +231,30 @@ mod tests {
         StateReading {
             state,
             reason: Some(reason.to_string()),
+            telemetry: None,
+        }
+    }
+
+    /// A detector with one working pattern, plus its kind — enough to drive
+    /// a [`PaneTracker`] without the builtin config.
+    fn tracker_detector() -> (crate::detector::Detector, crate::detector::AgentKind) {
+        let detector = crate::detector::Detector::from_toml(
+            r#"
+            [test-agent]
+            match_command = ["ta"]
+            working = ['SPINNING']
+            "#,
+        )
+        .expect("test agents.toml parses");
+        let kind = detector.identify("ta").expect("ta identifies");
+        (detector, kind)
+    }
+
+    fn sample_telemetry(context_pct: f32) -> Telemetry {
+        Telemetry {
+            model: Some("Opus".to_string()),
+            context_pct: Some(context_pct),
+            ..Telemetry::default()
         }
     }
 
@@ -278,5 +356,77 @@ mod tests {
         d.observe(reading(AgentState::Working, "w"));
         let seen = d.observe(reading(AgentState::Done, "d"));
         assert_eq!(seen.state, AgentState::Working);
+    }
+
+    #[test]
+    fn telemetry_supersedes_when_present() {
+        let (detector, kind) = tracker_detector();
+        let mut tracker = PaneTracker::new();
+        let t0 = Instant::now();
+        let grid = Grid::from_text("SPINNING away");
+
+        // The payload rides the very next reading — even one whose scraped
+        // state is still mid-debounce (working is only a candidate here).
+        // Bridge data is a fact, not a noisy frame; it never waits.
+        tracker.set_telemetry(sample_telemetry(62.0), t0);
+        let seen = tracker.update(&detector, kind, &grid, t0);
+        assert_eq!(seen.state, AgentState::Idle);
+        assert_eq!(seen.telemetry, Some(sample_telemetry(62.0)));
+        assert_eq!(tracker.committed().telemetry, Some(sample_telemetry(62.0)));
+
+        // The freshest payload wins over the one it replaces.
+        tracker.set_telemetry(sample_telemetry(58.5), t0 + Duration::from_secs(1));
+        let seen = tracker.update(&detector, kind, &grid, t0 + Duration::from_secs(1));
+        assert_eq!(seen.state, AgentState::Working);
+        assert_eq!(seen.telemetry, Some(sample_telemetry(58.5)));
+
+        // An out-of-order payload stamped older than the held one is
+        // ignored — arrival order cannot regress the data.
+        tracker.set_telemetry(sample_telemetry(99.0), t0);
+        let seen = tracker.update(&detector, kind, &grid, t0 + Duration::from_secs(2));
+        assert_eq!(seen.telemetry, Some(sample_telemetry(58.5)));
+    }
+
+    #[test]
+    fn scrape_only_unchanged() {
+        // A pane with no bridge feed reads exactly as before the field
+        // existed: scraped state and reason, telemetry never `Some`.
+        let (detector, kind) = tracker_detector();
+        let mut tracker = PaneTracker::new();
+        let t0 = Instant::now();
+        let grid = Grid::from_text("SPINNING away");
+
+        let seen = tracker.update(&detector, kind, &grid, t0);
+        assert_eq!(seen.telemetry, None);
+        let seen = tracker.update(&detector, kind, &grid, t0 + Duration::from_secs(1));
+        assert_eq!(seen.state, AgentState::Working);
+        assert_eq!(seen.telemetry, None);
+        assert_eq!(tracker.committed().telemetry, None);
+        assert_eq!(StateReading::default().telemetry, None);
+    }
+
+    #[test]
+    fn stale_telemetry_ages_out() {
+        let (detector, kind) = tracker_detector();
+        let mut tracker = PaneTracker::new();
+        let t0 = Instant::now();
+        let grid = Grid::from_text("SPINNING away");
+        tracker.set_telemetry(sample_telemetry(41.0), t0);
+
+        // At the window boundary the payload still rides (inclusive)...
+        let seen = tracker.update(&detector, kind, &grid, t0 + TELEMETRY_STALE_AFTER);
+        assert_eq!(seen.telemetry, Some(sample_telemetry(41.0)));
+
+        // ...one second past it, the reading drops back to None.
+        let t_stale = t0 + TELEMETRY_STALE_AFTER + Duration::from_secs(1);
+        let seen = tracker.update(&detector, kind, &grid, t_stale);
+        assert_eq!(seen.telemetry, None);
+        assert_eq!(tracker.committed().telemetry, None);
+
+        // A fresh payload restores it instantly.
+        let t_fresh = t_stale + Duration::from_secs(1);
+        tracker.set_telemetry(sample_telemetry(12.0), t_fresh);
+        let seen = tracker.update(&detector, kind, &grid, t_fresh);
+        assert_eq!(seen.telemetry, Some(sample_telemetry(12.0)));
     }
 }
