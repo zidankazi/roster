@@ -857,12 +857,14 @@ impl App {
             .unwrap_or(false)
     }
 
-    /// Flip auto-approve for `pane`, returning the new state. In a session
-    /// the server owns the authoritative set (told via `SetAutoApprove`); the
-    /// local set still drives the card chip. Recovers a poisoned lock rather
-    /// than panicking — losing the whole hook path would be far worse than a
+    /// Flip auto-approve for `pane` and toast the new state — the shared
+    /// tail of the chip click and jump-mode `a`, so mouse and keyboard
+    /// feedback can't drift apart. In a session the server owns the
+    /// authoritative set (told via `SetAutoApprove`); the local set still
+    /// drives the card chip. Recovers a poisoned lock rather than
+    /// panicking — losing the whole hook path would be far worse than a
     /// stale toggle.
-    fn toggle_auto_approve(&mut self, pane: u64) -> bool {
+    fn toggle_auto_approve(&mut self, pane: u64) {
         let now_on = {
             let mut set = self
                 .auto_approve
@@ -876,7 +878,24 @@ impl App {
             }
         };
         self.remote_send(&Frame::SetAutoApprove { pane, on: now_on });
-        now_on
+        // The toast names the pane — its title (agent CLIs put their task
+        // there) over the generic agent name: cards re-sort as states
+        // change, so the feedback must say which agent actually toggled.
+        let id = PaneId::from_raw(pane);
+        let name = self
+            .runtimes
+            .get(&id)
+            .and_then(|rt| rt.screen.title())
+            .map(|title| title.trim().to_string())
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| self.pane_name(id));
+        self.toast(
+            format!(
+                "auto-approve {} — {name}",
+                if now_on { "on" } else { "off" }
+            ),
+            ToastLevel::Info,
+        );
     }
 
     /// Apply frames from the session server: output repaints screens,
@@ -1338,11 +1357,7 @@ impl App {
                 KeyCode::Char('a') => {
                     if let Some(index) = self.sidebar.selected(self.last_entries.len()) {
                         let pane = self.last_entries[index].pane.raw();
-                        let on = self.toggle_auto_approve(pane);
-                        self.toast(
-                            format!("auto-approve {}", if on { "on" } else { "off" }),
-                            ToastLevel::Info,
-                        );
+                        self.toggle_auto_approve(pane);
                     }
                 }
                 KeyCode::Enter => {
@@ -1479,11 +1494,7 @@ impl App {
                         // toggle without stealing focus from the pane the
                         // user is watching.
                         if let Some(pane) = self.last_entries.get(index).map(|e| e.pane.raw()) {
-                            let on = self.toggle_auto_approve(pane);
-                            self.toast(
-                                format!("auto-approve {}", if on { "on" } else { "off" }),
-                                ToastLevel::Info,
-                            );
+                            self.toggle_auto_approve(pane);
                         }
                     }
                     Hit::SidebarWindow(window) => {

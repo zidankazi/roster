@@ -172,8 +172,8 @@ pub fn hit_test(
             Some(SidebarRow::EntryDetail(index)) => {
                 // The `auto` chip's columns toggle auto-approve; the rest
                 // of the row is the card, same as the name row above it.
-                let on_chip = auto_chip_cols(entries[*index].state, bar.width)
-                    .is_some_and(|cols| cols.contains(&(x - bar.x)));
+                let on_chip =
+                    auto_chip_cols(bar.width).is_some_and(|cols| cols.contains(&(x - bar.x)));
                 if on_chip {
                     Hit::SidebarAuto(*index)
                 } else {
@@ -289,9 +289,8 @@ mod tests {
     fn auto_chip_cols_resolve_to_auto_hits_on_detail_rows_only() {
         let (session, entries) = setup();
         let area = Rect::new(0, 0, 120, 30);
-        // Sidebar inner is 31 wide; both cards' state words are 7 chars
-        // (blocked, working), so each chip spans cols 26..30 of its detail
-        // row — rows 3 and 6.
+        // Sidebar inner is 31 wide, so every card's chip spans cols 26..30
+        // of its detail row — rows 3 and 6.
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, 26, 3),
             Hit::SidebarAuto(0)

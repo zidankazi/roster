@@ -179,16 +179,33 @@ pub fn sidebar_rows(entries: &[SidebarEntry], workspaces: usize) -> Vec<SidebarR
 /// The `auto` chip's text — the per-card auto-approve toggle.
 const AUTO_CHIP: &str = "auto";
 
-/// The columns of an entry's detail row occupied by its `auto` chip, in
-/// sidebar-inner columns: the word right-aligned one column in from the
-/// edge, mirroring the age on the name row above. `None` when the row is
-/// too narrow to host it clear of the state word. Render draws it and
-/// `hit_test` targets it, so the chip can't drift off its click target.
-pub fn auto_chip_cols(state: AgentState, width: u16) -> Option<std::ops::Range<u16>> {
+/// The minimum reason budget the chip must leave on its row. The reason is
+/// the signal and outranks chrome: a sidebar too cramped for both drops
+/// the chip (the keyboard toggle still works), never the reason.
+const MIN_REASON: u16 = 8;
+
+/// The columns of an entry detail row's `auto` chip, in sidebar-inner
+/// columns: the word right-aligned one column in from the edge, mirroring
+/// the age on the name row above. `None` when the row can't host it and a
+/// useful reason. Deliberately width-only: sized to the *longest* state
+/// label so the chip — and its click target — never flickers as a card's
+/// state changes value. Render draws it and `hit_test` targets it, so the
+/// chip can't drift off its click target.
+pub fn auto_chip_cols(width: u16) -> Option<std::ops::Range<u16>> {
     let chip = AUTO_CHIP.chars().count() as u16;
-    // Card indent + the state word + a gap: the chip never crowds the
-    // signal it annotates.
-    let taken = 4 + state_label(state).chars().count() as u16 + 1;
+    let longest_label = [
+        AgentState::Blocked,
+        AgentState::Working,
+        AgentState::Done,
+        AgentState::Idle,
+    ]
+    .into_iter()
+    .map(|state| state_label(state).chars().count())
+    .max()
+    .unwrap_or(0) as u16;
+    // Card indent + the longest state word + a gap + the reason's reserve
+    // + the gutter before the chip.
+    let taken = 4 + longest_label + 1 + MIN_REASON + 1;
     (width > taken + chip).then(|| width - 1 - chip..width - 1)
 }
 
@@ -378,12 +395,12 @@ impl Widget for Sidebar<'_> {
                         width.saturating_sub(4),
                         Style::default().fg(state_color(entry.state)),
                     );
-                    let used = 4 + label.chars().count();
-                    let chip = auto_chip_cols(entry.state, area.width);
+                    let chip = auto_chip_cols(area.width);
                     if let Some(reason) = &entry.reason {
                         // The reason yields to the chip: its budget ends a
                         // gutter column short of it (or one column in from
                         // the edge when no chip fits).
+                        let used = 4 + label.chars().count();
                         let end = chip.as_ref().map_or(width.saturating_sub(1), |cols| {
                             usize::from(cols.start).saturating_sub(1)
                         });
@@ -399,8 +416,13 @@ impl Widget for Sidebar<'_> {
                         }
                     }
                     if let Some(cols) = chip {
+                        // On mirrors the layout switcher's active word —
+                        // accent + bold — so the state survives terminals
+                        // that drop color; off is plain muted chrome.
                         let mut style = if entry.auto_approve {
-                            Style::default().fg(crate::style::ACCENT)
+                            Style::default()
+                                .fg(crate::style::ACCENT)
+                                .add_modifier(Modifier::BOLD)
                         } else {
                             muted()
                         };
@@ -629,13 +651,15 @@ mod tests {
 
     #[test]
     fn auto_chip_cols_right_align_and_guard_narrow_widths() {
-        // Right-aligned one column in from the edge, whatever the label.
-        assert_eq!(auto_chip_cols(AgentState::Blocked, 31), Some(26..30));
-        assert_eq!(auto_chip_cols(AgentState::Done, 14), Some(9..13));
-        // Too narrow to clear the state word: no chip, no click target.
-        assert_eq!(auto_chip_cols(AgentState::Blocked, 17), Some(12..16));
-        assert_eq!(auto_chip_cols(AgentState::Blocked, 16), None);
-        assert_eq!(auto_chip_cols(AgentState::Done, 13), None);
+        // Right-aligned one column in from the edge.
+        assert_eq!(auto_chip_cols(31), Some(26..30));
+        assert_eq!(auto_chip_cols(40), Some(35..39));
+        // One width-only threshold — sized to the longest state word plus
+        // a reason reserve — so the chip never flickers as a card's state
+        // changes and never starves the reason of its sliver.
+        assert_eq!(auto_chip_cols(26), Some(21..25));
+        assert_eq!(auto_chip_cols(25), None);
+        assert_eq!(auto_chip_cols(0), None);
     }
 
     #[test]
@@ -654,16 +678,17 @@ mod tests {
         assert!(detail.ends_with("auto"), "chip missing: {detail}");
         let other = buffer_row(&buf, 6);
         assert!(other.ends_with("auto"), "chip missing: {other}");
-        // Accent when on — the state it flips — muted when off.
-        let on = auto_chip_cols(entries[0].state, 40).unwrap();
-        assert_eq!(
-            buf.cell((on.start, 3)).unwrap().style().fg,
-            Some(crate::style::ACCENT)
-        );
-        let off = auto_chip_cols(entries[1].state, 40).unwrap();
-        assert_eq!(buf.cell((off.start, 6)).unwrap().style().fg, muted().fg);
+        // Accent + bold when on — mirroring the layout switcher's active
+        // word, and legible without color — plain muted when off.
+        let cols = auto_chip_cols(40).unwrap();
+        let on = buf.cell((cols.start, 3)).unwrap().style();
+        assert_eq!(on.fg, Some(crate::style::ACCENT));
+        assert!(on.add_modifier.contains(Modifier::BOLD));
+        let off = buf.cell((cols.start, 6)).unwrap().style();
+        assert_eq!(off.fg, muted().fg);
+        assert!(!off.add_modifier.contains(Modifier::BOLD));
         // A gutter column separates the truncated reason from the chip.
-        assert_eq!(buf.cell((on.start - 1, 3)).unwrap().symbol(), " ");
+        assert_eq!(buf.cell((cols.start - 1, 3)).unwrap().symbol(), " ");
     }
 
     #[test]
@@ -675,7 +700,7 @@ mod tests {
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .hovered_auto(Some(0))
             .render(Rect::new(0, 0, 40, 14), &mut buf);
-        let cols = auto_chip_cols(entries[0].state, 40).unwrap();
+        let cols = auto_chip_cols(40).unwrap();
         assert!(buf
             .cell((cols.start, 3))
             .unwrap()
@@ -683,9 +708,8 @@ mod tests {
             .add_modifier
             .contains(Modifier::REVERSED));
         // Hovering one chip leaves the others plain.
-        let other = auto_chip_cols(entries[1].state, 40).unwrap();
         assert!(!buf
-            .cell((other.start, 6))
+            .cell((cols.start, 6))
             .unwrap()
             .style()
             .add_modifier
@@ -693,13 +717,20 @@ mod tests {
     }
 
     #[test]
-    fn auto_chip_gives_way_on_a_narrow_sidebar() {
+    fn auto_chip_gives_way_to_the_reason_on_a_narrow_sidebar() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 12, 14));
+        // One column below the chip's threshold: the reason — the signal —
+        // still renders; the chip is what yields.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 25, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
-            .render(Rect::new(0, 0, 12, 14), &mut buf);
+            .render(Rect::new(0, 0, 25, 14), &mut buf);
+        let detail = buffer_row(&buf, 3);
+        assert!(
+            detail.starts_with("    blocked · Approve"),
+            "reason lost: {detail}"
+        );
         for y in 0..14 {
             let row = buffer_row(&buf, y);
             assert!(!row.contains("auto"), "chip on a narrow row: {row}");
