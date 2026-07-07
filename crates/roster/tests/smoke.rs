@@ -31,6 +31,46 @@ fn smoke_sock_dir() -> PathBuf {
     dir
 }
 
+/// Pump the pty's output on a background thread, forwarding each chunk to
+/// the returned channel until the pty closes.
+fn pump(pty: &Pty) -> mpsc::Receiver<Vec<u8>> {
+    let mut reader = pty.reader().expect("reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    rx
+}
+
+/// Advance `screen` with pty output until the needle's presence matches
+/// `want` — wait for it to appear (`true`) or clear (`false`). False when
+/// the deadline passes or the pty closes first.
+fn drain_while(
+    screen: &mut Screen,
+    needle: &str,
+    want: bool,
+    rx: &mpsc::Receiver<Vec<u8>>,
+) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < DEADLINE {
+        let present = screen.grid().lines().iter().any(|l| l.contains(needle));
+        if present == want {
+            return true;
+        }
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+        }
+    }
+    false
+}
+
 #[test]
 fn version_flag_prints_and_exits() {
     let output = Command::new(bin()).arg("--version").output().expect("run");
@@ -95,36 +135,13 @@ fn launcher_spawns_an_agent_at_runtime() {
 
     let (cols, rows) = (120u16, 30u16);
     let mut pty = Pty::spawn(&format!("'{}' 'sleep 60'", bin()), cols, rows).expect("spawn");
-    let mut reader = pty.reader().expect("reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    let rx = pump(&pty);
 
     let mut screen = Screen::new(cols, rows);
-    let drain_until = |screen: &mut Screen, needle: &str, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
-        let start = Instant::now();
-        while start.elapsed() < DEADLINE {
-            match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(chunk) => screen.advance(&chunk),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-            }
-            if screen.grid().lines().iter().any(|l| l.contains(needle)) {
-                return true;
-            }
-        }
-        false
-    };
 
     // Wait for the first frame (status line renders the hint text).
     assert!(
-        drain_until(&mut screen, "ctrl-b", &rx),
+        drain_while(&mut screen, "ctrl-b", true, &rx),
         "first frame never rendered:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -133,7 +150,7 @@ fn launcher_spawns_an_agent_at_runtime() {
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"c").expect("open launcher");
     assert!(
-        drain_until(&mut screen, "new agent", &rx),
+        drain_while(&mut screen, "new agent", true, &rx),
         "launcher never opened:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -142,7 +159,7 @@ fn launcher_spawns_an_agent_at_runtime() {
 
     // The fake agent's blocked prompt must reach a pane and the sidebar.
     assert!(
-        drain_until(&mut screen, "blocked · Do y", &rx),
+        drain_while(&mut screen, "blocked · Do y", true, &rx),
         "launched agent never showed blocked:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -180,36 +197,13 @@ fn mouse_clicks_focus_launch_and_jump() {
     let (cols, rows) = (120u16, 30u16);
     let mut pty =
         Pty::spawn(&format!("'{}' 'sleep 60' 'sleep 70'", bin()), cols, rows).expect("spawn");
-    let mut reader = pty.reader().expect("reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    let rx = pump(&pty);
 
     let mut screen = Screen::new(cols, rows);
-    let drain_until = |screen: &mut Screen, needle: &str, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
-        let start = Instant::now();
-        while start.elapsed() < DEADLINE {
-            match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(chunk) => screen.advance(&chunk),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-            }
-            if screen.grid().lines().iter().any(|l| l.contains(needle)) {
-                return true;
-            }
-        }
-        false
-    };
 
     // The second command has focus at startup; the status line names it.
     assert!(
-        drain_until(&mut screen, "sleep 70   click", &rx),
+        drain_while(&mut screen, "sleep 70   click", true, &rx),
         "first frame:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -240,7 +234,7 @@ fn mouse_clicks_focus_launch_and_jump() {
     // focus follows the mouse click.
     pty.write(&click(40, 10)).expect("click left pane");
     assert!(
-        drain_until(&mut screen, "sleep 60   click", &rx),
+        drain_while(&mut screen, "sleep 60   click", true, &rx),
         "click did not focus the left pane:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -283,13 +277,13 @@ fn mouse_clicks_focus_launch_and_jump() {
     // → 1-based 11.
     pty.write(&click(5, 29)).expect("click + new agent");
     assert!(
-        drain_until(&mut screen, "new agent", &rx),
+        drain_while(&mut screen, "new agent", true, &rx),
         "launcher never opened:\n{}",
         screen.grid().lines().join("\n")
     );
     pty.write(&click(45, 11)).expect("click claude-code row");
     assert!(
-        drain_until(&mut screen, "blocked · Do y", &rx),
+        drain_while(&mut screen, "blocked · Do y", true, &rx),
         "clicked launch never went blocked:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -301,13 +295,13 @@ fn mouse_clicks_focus_launch_and_jump() {
     // header) jumps to the agent again.
     pty.write(&click(5, 3)).expect("click workspace 1 header");
     assert!(
-        drain_until(&mut screen, "sleep 60   click", &rx),
+        drain_while(&mut screen, "sleep 60   click", true, &rx),
         "workspace header click did not switch windows:\n{}",
         screen.grid().lines().join("\n")
     );
     pty.write(&click(5, 7)).expect("click sidebar card");
     assert!(
-        drain_until(&mut screen, "claude   click", &rx),
+        drain_while(&mut screen, "claude   click", true, &rx),
         "sidebar click did not jump to the agent:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -324,35 +318,12 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     let (cols, rows) = (120u16, 30u16);
     let mut pty =
         Pty::spawn(&format!("'{}' 'sleep 60' 'sleep 70'", bin()), cols, rows).expect("spawn");
-    let mut reader = pty.reader().expect("reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    let rx = pump(&pty);
 
     let mut screen = Screen::new(cols, rows);
-    let drain_until = |screen: &mut Screen, needle: &str, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
-        let start = Instant::now();
-        while start.elapsed() < DEADLINE {
-            match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(chunk) => screen.advance(&chunk),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-            }
-            if screen.grid().lines().iter().any(|l| l.contains(needle)) {
-                return true;
-            }
-        }
-        false
-    };
 
     assert!(
-        drain_until(&mut screen, "sleep 70   click", &rx),
+        drain_while(&mut screen, "sleep 70   click", true, &rx),
         "first frame:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -361,7 +332,7 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     // agent button: 0-based y 27 → 1-based 28; word at cols 8..12).
     pty.write(&click(10, 28)).expect("click solo");
     assert!(
-        drain_until(&mut screen, "sleep 70   click agents", &rx),
+        drain_while(&mut screen, "sleep 70   click agents", true, &rx),
         "solo never engaged:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -383,7 +354,7 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"o").expect("focus next");
     assert!(
-        drain_until(&mut screen, "sleep 60   click agents", &rx),
+        drain_while(&mut screen, "sleep 60   click agents", true, &rx),
         "solo did not follow focus:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -392,7 +363,7 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     // separator is back.
     pty.write(&click(3, 28)).expect("click grid");
     assert!(
-        drain_until(&mut screen, "sleep 60   click a pane", &rx),
+        drain_while(&mut screen, "sleep 60   click a pane", true, &rx),
         "grid never returned:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -408,7 +379,7 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     pty.write(&click(40, 1)).expect("first click");
     pty.write(&click(40, 1)).expect("second click");
     assert!(
-        drain_until(&mut screen, "sleep 60   click agents", &rx),
+        drain_while(&mut screen, "sleep 60   click agents", true, &rx),
         "double-click did not go solo:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -424,38 +395,11 @@ fn exited_pane_stays_until_closed() {
     let (cols, rows) = (100u16, 24u16);
     let mut pty =
         Pty::spawn(&format!("'{}' 'echo done'", bin()), cols, rows).expect("spawn roster");
-    let mut reader = pty.reader().expect("reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    let rx = pump(&pty);
 
     let mut screen = Screen::new(cols, rows);
-    let start = Instant::now();
-    let mut saw_notice = false;
-    while start.elapsed() < DEADLINE {
-        match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(chunk) => screen.advance(&chunk),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-        if screen
-            .grid()
-            .lines()
-            .iter()
-            .any(|l| l.contains("echo · exit 0"))
-        {
-            saw_notice = true;
-            break;
-        }
-    }
     assert!(
-        saw_notice,
+        drain_while(&mut screen, "echo · exit 0", true, &rx),
         "exited overlay never appeared; screen was:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -518,43 +462,20 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
 
     let (cols, rows) = (120u16, 30u16);
     let mut pty = Pty::spawn(&format!("'{}'", bin()), cols, rows).expect("spawn roster");
-    let mut reader = pty.reader().expect("reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    let rx = pump(&pty);
 
     let mut screen = Screen::new(cols, rows);
-    let drain_until = |screen: &mut Screen, needle: &str, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
-        let start = Instant::now();
-        while start.elapsed() < DEADLINE {
-            match rx.recv_timeout(Duration::from_millis(200)) {
-                Ok(chunk) => screen.advance(&chunk),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-            }
-            if screen.grid().lines().iter().any(|l| l.contains(needle)) {
-                return true;
-            }
-        }
-        false
-    };
 
     // Bare `roster` opens the welcome screen: wordmark + picker + the
     // run-a-command hint.
     assert!(
-        drain_until(&mut screen, "run a command", &rx),
+        drain_while(&mut screen, "run a command", true, &rx),
         "welcome screen never appeared:\n{}",
         screen.grid().lines().join("\n")
     );
     // The wordmark sweeps in over ~1s; wait for its leading glyphs.
     assert!(
-        drain_until(&mut screen, "7Mb,od8", &rx),
+        drain_while(&mut screen, "7Mb,od8", true, &rx),
         "no wordmark:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -564,7 +485,7 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
     pty.write(b"cla").expect("filter");
     pty.write(b"\r").expect("launch");
     assert!(
-        drain_until(&mut screen, "blocked · Do y", &rx),
+        drain_while(&mut screen, "blocked · Do y", true, &rx),
         "launched agent never showed blocked:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -598,34 +519,9 @@ fn closing_a_live_agent_asks_first() {
 
     let (cols, rows) = (120u16, 30u16);
     let mut pty = Pty::spawn(&format!("'{}' claude", bin()), cols, rows).expect("spawn roster");
-    let mut reader = pty.reader().expect("reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    let rx = pump(&pty);
 
     let mut screen = Screen::new(cols, rows);
-    let drain_while =
-        |screen: &mut Screen, needle: &str, want: bool, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
-            let start = Instant::now();
-            while start.elapsed() < DEADLINE {
-                let present = screen.grid().lines().iter().any(|l| l.contains(needle));
-                if present == want {
-                    return true;
-                }
-                match rx.recv_timeout(Duration::from_millis(200)) {
-                    Ok(chunk) => screen.advance(&chunk),
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-                }
-            }
-            false
-        };
 
     assert!(
         drain_while(&mut screen, "blocked · Do y", true, &rx),
@@ -676,34 +572,9 @@ fn wheel_scrolls_history_and_typing_snaps_back() {
     // screen (no alternate-screen TUI), process stays alive.
     let mut pty =
         Pty::spawn(&format!("'{}' 'seq 1 200; cat'", bin()), cols, rows).expect("spawn roster");
-    let mut reader = pty.reader().expect("reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    let rx = pump(&pty);
 
     let mut screen = Screen::new(cols, rows);
-    let drain_while =
-        |screen: &mut Screen, needle: &str, want: bool, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
-            let start = Instant::now();
-            while start.elapsed() < DEADLINE {
-                let present = screen.grid().lines().iter().any(|l| l.contains(needle));
-                if present == want {
-                    return true;
-                }
-                match rx.recv_timeout(Duration::from_millis(200)) {
-                    Ok(chunk) => screen.advance(&chunk),
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-                }
-            }
-            false
-        };
 
     // The tail of the output is on screen; line 1 has scrolled away. Gate
     // on a line number that appears only in the output — the status line
@@ -842,35 +713,6 @@ fn persistent_session_survives_detach_and_reattach() {
     let name = format!("smoke{}", std::process::id());
 
     let (cols, rows) = (100u16, 24u16);
-    let drain_while =
-        |screen: &mut Screen, needle: &str, want: bool, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
-            let start = Instant::now();
-            while start.elapsed() < DEADLINE {
-                let present = screen.grid().lines().iter().any(|l| l.contains(needle));
-                if present == want {
-                    return true;
-                }
-                match rx.recv_timeout(Duration::from_millis(200)) {
-                    Ok(chunk) => screen.advance(&chunk),
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-                }
-            }
-            false
-        };
-    let pump = |pty: &Pty| -> mpsc::Receiver<Vec<u8>> {
-        let mut reader = pty.reader().expect("reader");
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 8192];
-            while let Ok(n) = reader.read(&mut buf) {
-                if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                    break;
-                }
-            }
-        });
-        rx
-    };
 
     // First client: create the session with a long-lived pane and leave a
     // marker in its output.
@@ -968,38 +810,14 @@ fn full_pipeline_shows_blocked_agent_and_quits() {
 
     let (cols, rows) = (120u16, 30u16);
     let mut pty = Pty::spawn(&format!("'{}' claude", bin()), cols, rows).expect("spawn roster");
-    let mut reader = pty.reader().expect("reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    let rx = pump(&pty);
 
     // Roster's own output is a terminal byte stream: parse it with our
-    // emulator and watch the screen it draws.
+    // emulator and watch the screen it draws. The sidebar card is two
+    // lines: the agent name on one, the state and reason on the next.
     let mut screen = Screen::new(cols, rows);
-    let start = Instant::now();
-    let mut saw_blocked = false;
-    while start.elapsed() < DEADLINE {
-        match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(chunk) => screen.advance(&chunk),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-        // The sidebar card is two lines: the agent name on one, the state
-        // and reason (truncated) on the next.
-        let lines = screen.grid().lines();
-        let has_name = lines.iter().any(|l| l.contains("claude-code"));
-        let has_reason = lines.iter().any(|l| l.contains("blocked · Do y"));
-        if has_name && has_reason {
-            saw_blocked = true;
-            break;
-        }
-    }
+    let saw_blocked = drain_while(&mut screen, "claude-code", true, &rx)
+        && drain_while(&mut screen, "blocked · Do y", true, &rx);
     assert!(
         saw_blocked,
         "sidebar never showed the blocked agent; screen was:\n{}",
@@ -1065,34 +883,9 @@ fn hook_bridge_pins_blocked_and_clears_end_to_end() {
     let (cols, rows) = (120u16, 30u16);
     let pty = Pty::spawn(&format!("'{}' '{}'", bin(), script.display()), cols, rows)
         .expect("spawn roster");
-    let mut reader = pty.reader().expect("reader");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+    let rx = pump(&pty);
 
     let mut screen = Screen::new(cols, rows);
-    let drain_while =
-        |screen: &mut Screen, needle: &str, want: bool, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
-            let start = Instant::now();
-            while start.elapsed() < DEADLINE {
-                let present = screen.grid().lines().iter().any(|l| l.contains(needle));
-                if present == want {
-                    return true;
-                }
-                match rx.recv_timeout(Duration::from_millis(200)) {
-                    Ok(chunk) => screen.advance(&chunk),
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return false,
-                }
-            }
-            false
-        };
 
     // The hook-delivered ask, verbatim, in the sidebar — while the pane
     // itself only ever printed "thinking hard...".
