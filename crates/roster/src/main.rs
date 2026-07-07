@@ -122,13 +122,17 @@ fn run_session(name: &str, args: &cli::Args, create: bool) -> Result<(), String>
             "invalid session name {name:?} (letters, digits, - and _)"
         ));
     }
-    if !server::session_alive(name) {
+    // Vet the socket dir before touching any socket path: an attach that
+    // probes/connects through an unvetted `/tmp/roster-<uid>` could be
+    // steered to a socket a local attacker pre-created there.
+    let dir = server::vetted_sessions_dir()?;
+    if !server::session_alive(&dir, name) {
         if !create {
             return Err(format!("no session named {name} — `roster ls` lists them"));
         }
-        spawn_server(name)?;
+        spawn_server(name, &dir)?;
     }
-    let path = server::socket_path(name).ok_or("no home directory")?;
+    let path = server::socket_in(&dir, name);
     let stream = UnixStream::connect(&path).map_err(|e| format!("connecting to {name}: {e}"))?;
     let reader = stream
         .try_clone()
@@ -146,14 +150,12 @@ fn run_session(name: &str, args: &cli::Args, create: bool) -> Result<(), String>
 }
 
 /// Start the session server as a detached background process and wait for
-/// its socket to answer.
-fn spawn_server(name: &str) -> Result<(), String> {
+/// its socket to answer. `dir` is the caller's already-vetted sessions dir:
+/// the client-side refusal happens there, before we spawn, which matters
+/// because the detached server's stderr goes to /dev/null and its own
+/// refusal of a hostile dir would otherwise surface only as "never came up".
+fn spawn_server(name: &str, dir: &Path) -> Result<(), String> {
     use std::os::unix::process::CommandExt;
-    // Vet the socket dir client-side too: the detached server's stderr goes
-    // to /dev/null, so its refusal of a hostile dir would otherwise surface
-    // only as "never came up".
-    let dir = server::sessions_dir().ok_or("no home directory")?;
-    server::ensure_private_dir(&dir)?;
     let exe = std::env::current_exe().map_err(|e| format!("finding roster binary: {e}"))?;
     let mut command = std::process::Command::new(exe);
     command
@@ -169,7 +171,7 @@ fn spawn_server(name: &str) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("starting session server: {e}"))?;
     for _ in 0..100 {
-        if server::session_alive(name) {
+        if server::session_alive(dir, name) {
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -227,10 +229,11 @@ fn proxy(name: &str) -> Result<(), String> {
     if !server::valid_name(name) {
         return Err(format!("invalid session name {name:?}"));
     }
-    if !server::session_alive(name) {
+    let dir = server::vetted_sessions_dir()?;
+    if !server::session_alive(&dir, name) {
         return Err(format!("no session named {name} on this machine"));
     }
-    let path = server::socket_path(name).ok_or("no home directory")?;
+    let path = server::socket_in(&dir, name);
     let stream = UnixStream::connect(&path).map_err(|e| format!("connecting: {e}"))?;
     let mut socket_read = stream
         .try_clone()
@@ -275,9 +278,7 @@ fn proxy(name: &str) -> Result<(), String> {
 
 /// `roster ls` — list sessions, sweeping dead sockets.
 fn list_sessions() -> Result<(), String> {
-    let Some(dir) = server::sessions_dir() else {
-        return Err("no home directory".to_string());
-    };
+    let dir = server::vetted_sessions_dir()?;
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(_) => {
@@ -295,14 +296,12 @@ fn list_sessions() -> Result<(), String> {
     names.sort();
     let mut any = false;
     for name in names {
-        if server::session_alive(&name) {
+        if server::session_alive(&dir, &name) {
             println!("{name}");
             any = true;
         } else {
             // A socket with no server behind it is litter from a crash.
-            if let Some(path) = server::socket_path(&name) {
-                let _ = std::fs::remove_file(path);
-            }
+            let _ = std::fs::remove_file(server::socket_in(&dir, &name));
         }
     }
     if !any {
@@ -316,7 +315,8 @@ fn kill_session(name: &str) -> Result<(), String> {
     if !server::valid_name(name) {
         return Err(format!("invalid session name {name:?}"));
     }
-    let path = server::socket_path(name).ok_or("no home directory")?;
+    let dir = server::vetted_sessions_dir()?;
+    let path = server::socket_in(&dir, name);
     let Ok(mut stream) = UnixStream::connect(&path) else {
         let _ = std::fs::remove_file(&path);
         return Err(format!("no session named {name}"));

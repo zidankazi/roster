@@ -26,19 +26,45 @@ const SPAWN_ROWS: u16 = 24;
 
 /// Where session sockets live: `$ROSTER_SOCK_DIR`, or `/tmp/roster-<uid>`
 /// (the tmux convention). Unix socket paths must stay under ~104 bytes on
-/// macOS, which rules out deep per-user state directories. Anything that
-/// creates this directory must go through [`ensure_private_dir`].
-pub fn sessions_dir() -> Option<PathBuf> {
+/// macOS, which rules out deep per-user state directories.
+///
+/// Private and unvetted on purpose: [`vetted_sessions_dir`] is the only way
+/// to reach this path from outside the module, and it vets the dir first.
+/// Keeping the raw resolver private is what makes "every socket path is
+/// built under a vetted dir" a structural fact rather than a promise in a
+/// comment — no caller can resolve a socket path (to probe, connect, list,
+/// or unlink) before the dir has been confirmed ours.
+fn sessions_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("ROSTER_SOCK_DIR") {
-        return Some(PathBuf::from(dir));
+        return PathBuf::from(dir);
     }
     let uid = unsafe { libc::getuid() };
-    Some(PathBuf::from(format!("/tmp/roster-{uid}")))
+    PathBuf::from(format!("/tmp/roster-{uid}"))
 }
 
-/// The socket path for a named session.
-pub fn socket_path(name: &str) -> Option<PathBuf> {
-    Some(sessions_dir()?.join(format!("{name}.sock")))
+/// The socket file for session `name` inside an already-vetted sessions
+/// dir. Takes the dir (from [`vetted_sessions_dir`]) instead of resolving
+/// it, so a socket path can't be built before the dir has been vetted.
+pub fn socket_in(dir: &std::path::Path, name: &str) -> PathBuf {
+    dir.join(format!("{name}.sock"))
+}
+
+/// Create-and-vet the sessions dir and hand back its path. This is the one
+/// way a command obtains the dir: [`sessions_dir`] is private, so no caller
+/// can reach a socket path before the dir is confirmed a real 0700
+/// directory owned by us. That closes the world-writable-`/tmp`
+/// pre-creation and symlink-swap attacks on the read/attach/list/kill
+/// paths, not only the create/bind path.
+///
+/// Vet-and-create, not vet-only-if-exists: a query like `roster ls` on a
+/// host with no sessions leaves an empty 0700 dir behind. That is harmless
+/// — it is the same dir a server would create — and it pre-claims the
+/// predictable `/tmp` name for the user, so there is nothing left for an
+/// attacker to plant there afterward.
+pub fn vetted_sessions_dir() -> Result<PathBuf, String> {
+    let dir = sessions_dir();
+    ensure_private_dir(&dir)?;
+    Ok(dir)
 }
 
 /// Create `dir` private to the current user (mode 0700), or vet the one
@@ -92,12 +118,11 @@ pub fn valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// Probe a session socket: `true` when a server answers.
-pub fn session_alive(name: &str) -> bool {
-    let Some(path) = socket_path(name) else {
-        return false;
-    };
-    let Ok(mut stream) = UnixStream::connect(&path) else {
+/// Probe a session socket: `true` when a server answers. `dir` must come
+/// from [`vetted_sessions_dir`]: a probe walks the same socket path a later
+/// attach would connect to, so it must never run against an unvetted dir.
+pub fn session_alive(dir: &std::path::Path, name: &str) -> bool {
+    let Ok(mut stream) = UnixStream::connect(socket_in(dir, name)) else {
         return false;
     };
     if write_frame(&mut stream, &Frame::Ping).is_err() {
@@ -142,13 +167,12 @@ pub fn run(name: &str) -> Result<(), String> {
         libc::signal(libc::SIGHUP, libc::SIG_IGN);
     }
 
-    let dir = sessions_dir().ok_or("no home directory")?;
-    ensure_private_dir(&dir)?;
-    let path = socket_path(name).expect("dir resolved");
+    let dir = vetted_sessions_dir()?;
+    let path = socket_in(&dir, name);
     match UnixListener::bind(&path) {
         Ok(listener) => serve(name, listener, &path),
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-            if session_alive(name) {
+            if session_alive(&dir, name) {
                 return Err(format!("session {name} already running"));
             }
             // A stale socket from a dead server: reclaim it.
@@ -179,17 +203,22 @@ fn serve(name: &str, listener: UnixListener, path: &std::path::Path) -> Result<(
         }
     });
 
-    let result = event_loop(name, &tx, &rx);
+    let result = event_loop(name, path, &tx, &rx);
     let _ = std::fs::remove_file(path);
     result
 }
 
-fn event_loop(name: &str, tx: &Sender<Ev>, rx: &Receiver<Ev>) -> Result<(), String> {
+fn event_loop(
+    name: &str,
+    path: &std::path::Path,
+    tx: &Sender<Ev>,
+    rx: &Receiver<Ev>,
+) -> Result<(), String> {
     let mut panes: HashMap<u64, ServerPane> = HashMap::new();
     let mut next_pane: u64 = 1;
     // Agents report hook events to the session socket itself; the frames
     // are relayed to the attached client, which owns detection.
-    let hook_sock = socket_path(name).map(|path| path.to_string_lossy().into_owned());
+    let hook_sock = path.to_string_lossy().into_owned();
     let mut layout: Vec<u8> = Vec::new();
     // The attached client: connection id + write handle.
     let mut client: Option<(u64, UnixStream)> = None;
@@ -315,11 +344,10 @@ fn event_loop(name: &str, tx: &Sender<Ev>, rx: &Receiver<Ev>) -> Result<(), Stri
                 }
                 Frame::Spawn { command } => {
                     let pane_var = next_pane.to_string();
-                    let mut env: Vec<(&str, &str)> =
-                        vec![(crate::hook::PANE_ENV, pane_var.as_str())];
-                    if let Some(sock) = &hook_sock {
-                        env.push((crate::hook::SOCK_ENV, sock.as_str()));
-                    }
+                    let env: Vec<(&str, &str)> = vec![
+                        (crate::hook::PANE_ENV, pane_var.as_str()),
+                        (crate::hook::SOCK_ENV, hook_sock.as_str()),
+                    ];
                     match Pty::spawn_with_env(&command, SPAWN_COLS, SPAWN_ROWS, &env) {
                         Ok(pty) => {
                             let pane_id = next_pane;

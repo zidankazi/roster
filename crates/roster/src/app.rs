@@ -2014,8 +2014,7 @@ fn start_hook_listener(
     tx: Sender<Output>,
     auto_approve: Arc<Mutex<HashSet<u64>>>,
 ) -> Option<PathBuf> {
-    let base = crate::server::sessions_dir()?;
-    crate::server::ensure_private_dir(&base).ok()?;
+    let base = crate::server::vetted_sessions_dir().ok()?;
     let dir = base.join("hook");
     crate::server::ensure_private_dir(&dir).ok()?;
     let path = dir.join(format!("{}.sock", std::process::id()));

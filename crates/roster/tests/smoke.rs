@@ -705,6 +705,52 @@ fn ssh_proxy_bridges_the_protocol_over_stdio() {
 }
 
 #[test]
+fn read_paths_refuse_a_symlinked_socket_dir() {
+    // A symlink where the session sockets should be is the world-writable-
+    // /tmp swap attack: a local user plants /tmp/roster-<uid> pointing at a
+    // dir they own. `ls`, `attach`, and `kill` must vet the dir and refuse
+    // it — not follow the link to probe, connect to, or unlink sockets at
+    // the attacker's chosen target. Each command reaches the sockets by a
+    // different route (read_dir, attach-connect, kill-connect); all must
+    // route through the same vet first.
+    //
+    // `.env` scopes ROSTER_SOCK_DIR to each child, so this never disturbs
+    // the process-global value the other session tests share.
+    let pid = std::process::id();
+    let target = std::env::temp_dir().join(format!("roster-evil-target-{pid}"));
+    std::fs::create_dir_all(&target).expect("attacker target dir");
+    let link = std::env::temp_dir().join(format!("roster-evil-link-{pid}"));
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(&target, &link).expect("plant symlink");
+
+    for args in [
+        &["ls"][..],
+        &["attach", "victim"][..],
+        &["kill", "victim"][..],
+    ] {
+        let output = Command::new(bin())
+            .args(args)
+            .env("ROSTER_SOCK_DIR", &link)
+            .output()
+            .expect("run roster");
+        assert!(
+            !output.status.success(),
+            "`roster {}` followed a symlinked socket dir",
+            args.join(" ")
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("not a directory"),
+            "`roster {}` did not refuse via the dir vet; stderr: {stderr}",
+            args.join(" ")
+        );
+    }
+
+    let _ = std::fs::remove_file(&link);
+    let _ = std::fs::remove_dir_all(&target);
+}
+
+#[test]
 fn persistent_session_survives_detach_and_reattach() {
     // Sessions live under ROSTER_SOCK_DIR; keep the test's sockets in a
     // scratch dir of their own (short: unix socket paths cap out ~104
