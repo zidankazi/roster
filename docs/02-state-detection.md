@@ -1,6 +1,6 @@
 # 02 — state detection
 
-*The heart of the product and the differentiator. This is where the effort and the taste go. Everything here lives in `roster-detect` and is fully testable from `Grid` fixtures — no live process required. This doc covers screen-based detection — how roster reads Claude Code's state today; the committed direction is to read Claude Code's own state (hooks, statusline) instead, see [`05-claude-native-attention.md`](05-claude-native-attention.md).*
+*The heart of the product and the differentiator. This is where the effort and the taste go. Everything here lives in `roster-detect` and is fully testable from `Grid` fixtures — no live process required. This doc covers screen-based detection — how roster reads Claude Code's state today; the committed direction is to read Claude Code's own state (hooks, statusline) instead, see [`05-claude-native-attention.md`](05-claude-native-attention.md). The crate also hosts the hook-payload destructive-ask predicate (`destructive.rs`) — string classification for the attention inbox, not grid detection.*
 
 ## The state model
 
