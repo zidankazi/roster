@@ -7,7 +7,7 @@
 //! so a reattaching client can rebuild each screen, and stores the client's
 //! layout blob verbatim — layout is the client's business.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -195,6 +195,10 @@ fn event_loop(name: &str, tx: &Sender<Ev>, rx: &Receiver<Ev>) -> Result<(), Stri
     let mut client: Option<(u64, UnixStream)> = None;
     // Connections that exist but haven't attached (probes, fresh attaches).
     let mut conns: HashMap<u64, UnixStream> = HashMap::new();
+    // Panes whose permission asks the server auto-approves, told by the
+    // client via `SetAutoApprove`. Keyed by server pane id (the `ROSTER_PANE`
+    // value a hook reports), which the client mirrors 1:1.
+    let mut auto_approve: HashSet<u64> = HashSet::new();
     let mut ever_spawned = false;
 
     while let Ok(ev) = rx.recv() {
@@ -250,6 +254,10 @@ fn event_loop(name: &str, tx: &Sender<Ev>, rx: &Receiver<Ev>) -> Result<(), Stri
                                 pane: *id,
                                 command: p.command.clone(),
                                 exited: p.exited,
+                                // Seed the reattaching client's auto-approve
+                                // mirror so it doesn't false-pin blocked panes
+                                // the server is silently approving.
+                                auto_approve: auto_approve.contains(id),
                             })
                             .collect(),
                         layout: layout.clone(),
@@ -345,15 +353,40 @@ fn event_loop(name: &str, tx: &Sender<Ev>, rx: &Receiver<Ev>) -> Result<(), Stri
                         }
                     }
                 }
-                frame @ (Frame::HookBlocked { .. } | Frame::HookClear { .. }) => {
-                    // Hook reports relay verbatim to the attached client,
-                    // where detection applies them. No client, no harm: the
-                    // scrape re-detects the prompt on reattach.
+                Frame::HookBlocked { pane, .. } => {
+                    // Answer the ask from this pane's auto-approve state, on
+                    // the originating hook connection, BEFORE relaying to the
+                    // client. Writing first (to a socket `_hook` is actively
+                    // reading) keeps the single-threaded loop from stalling
+                    // the reply behind a slow client write. Best-effort: an
+                    // old or gone `_hook` simply never reads it. No server
+                    // read timeout is needed to reap the connection — `_hook`
+                    // closes it within its own reply deadline, and a blanket
+                    // read timeout would wrongly drop idle attached clients
+                    // that share this reader.
+                    if let Some(stream) = conns.get_mut(&conn_id) {
+                        let allow = auto_approve.contains(&pane);
+                        let _ = write_frame(stream, &Frame::HookDecision { allow });
+                    }
                     send_to_client(&mut client, &frame);
+                }
+                Frame::HookClear { .. } => {
+                    // Clears relay verbatim to the attached client, where
+                    // detection applies them. No client, no harm: the scrape
+                    // re-detects the prompt on reattach.
+                    send_to_client(&mut client, &frame);
+                }
+                Frame::SetAutoApprove { pane, on } => {
+                    if on {
+                        auto_approve.insert(pane);
+                    } else {
+                        auto_approve.remove(&pane);
+                    }
                 }
                 Frame::Close { pane } => {
                     // Dropping the runtime kills and reaps the child.
                     panes.remove(&pane);
+                    auto_approve.remove(&pane);
                     if panes.is_empty() && ever_spawned {
                         send_to_client(
                             &mut client,

@@ -18,12 +18,12 @@
 //! roster is listening — a claude launched outside roster simply has no
 //! [`PANE_ENV`], and the hook does nothing.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use roster_proto::{write_frame, Frame};
+use roster_proto::{read_frame, write_frame, Frame};
 
 /// The environment variable carrying the pane id into spawned processes.
 pub const PANE_ENV: &str = "ROSTER_PANE";
@@ -41,6 +41,17 @@ const MAX_REASON: usize = 120;
 /// JSON and closes; a runner that never closes stdin (or a human trying
 /// `roster _hook` at a tty) must not hang the session behind it.
 const STDIN_DEADLINE: Duration = Duration::from_secs(2);
+
+/// How long `_hook` waits for the socket owner's auto-approve decision after
+/// reporting a permission ask. The owner replies the instant it reads the
+/// ask (a local socket round-trip, sub-millisecond in practice), so this is
+/// a safety cap, not latency the user feels. Kept short so the worst case
+/// (`STDIN_DEADLINE` + connect/write + this) stays well under the 5s hook
+/// timeout in [`settings_snippet`], after which Claude Code kills the hook
+/// and shows its own prompt regardless. A missing reply — owner gone, an
+/// older roster that predates the reply channel, a wedged loop — simply
+/// means "no auto-approve", identical to the behavior before this channel.
+const REPLY_DEADLINE: Duration = Duration::from_secs(1);
 
 /// The hooks to merge into `~/.claude/settings.json`, printed by
 /// `roster --print-hooks`. Uses this binary's absolute path so the hook
@@ -101,8 +112,42 @@ pub fn run() -> Result<(), String> {
     };
     // A wedged listener must not stall the Claude session behind it.
     let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
-    let _ = write_frame(&mut stream, &frame);
+    // Only a permission ask (`HookBlocked`) can be auto-approved; clears are
+    // fire-and-forget and get no reply.
+    let is_ask = matches!(frame, Frame::HookBlocked { .. });
+    if write_frame(&mut stream, &frame).is_err() {
+        return Ok(());
+    }
+    if is_ask {
+        // Wait, deadlined, for the owner's decision. Approve only on an
+        // explicit allow; a timeout, EOF, or any other reply leaves stdout
+        // empty so Claude shows its own prompt — exactly as before.
+        let _ = stream.set_read_timeout(Some(REPLY_DEADLINE));
+        if let Ok(Some(Frame::HookDecision { allow: true })) = read_frame(&mut stream) {
+            let mut out = std::io::stdout();
+            let _ = out.write_all(approve_json().as_bytes());
+            let _ = out.flush();
+        }
+    }
     Ok(())
+}
+
+/// The stdout a `PermissionRequest` hook prints to auto-approve its ask.
+/// Claude Code honors `hookSpecificOutput.decision.behavior = "allow"` (with
+/// exit 0) by running the tool without painting its prompt. Pinned to the
+/// Claude Code 2.x contract (see [docs/05](../../../docs/05-claude-native-attention.md));
+/// the envelope moves across major versions, so this one function is where
+/// to re-pin it. `decision.behavior` is `PermissionRequest`-specific — the
+/// `permissionDecision` field belongs to `PreToolUse`, which cannot suppress
+/// the prompt.
+fn approve_json() -> String {
+    serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PermissionRequest",
+            "decision": { "behavior": "allow" },
+        }
+    })
+    .to_string()
 }
 
 /// Map one hook payload to the frame it should send, or `None` for events
@@ -344,6 +389,25 @@ mod tests {
         let emoji = "🦀".repeat(200);
         let reason = truncate(&format!("Bash: {emoji}"));
         assert_eq!(reason.chars().count(), MAX_REASON);
+    }
+
+    #[test]
+    fn approve_json_is_the_permission_request_allow_contract() {
+        let json: serde_json::Value = serde_json::from_str(&approve_json()).expect("valid json");
+        assert_eq!(
+            json["hookSpecificOutput"]["hookEventName"], "PermissionRequest",
+            "the decision must name the event it answers"
+        );
+        assert_eq!(
+            json["hookSpecificOutput"]["decision"]["behavior"], "allow",
+            "PermissionRequest allows via decision.behavior"
+        );
+        // `permissionDecision` is the PreToolUse field and cannot suppress a
+        // prompt — using it here would silently fail to auto-approve.
+        assert!(
+            json["hookSpecificOutput"]["permissionDecision"].is_null(),
+            "must not use the PreToolUse-only permissionDecision field"
+        );
     }
 
     #[test]

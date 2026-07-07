@@ -21,11 +21,18 @@ pub struct HelloPane {
     pub command: String,
     /// The exit code, when the process has ended (the pane lingers).
     pub exited: Option<u32>,
+    /// Whether the server auto-approves this pane's permission asks, so a
+    /// reattaching client seeds its local mirror (the `auto` badge and the
+    /// blocked-pin suppression) instead of diverging from the server's set.
+    pub auto_approve: bool,
 }
 
 /// Every message either side can send. Tags 1–63 flow client → server,
 /// 64+ server → client — except the hook frames (tags 10/11), which enter
-/// from `roster _hook` and are also relayed server → client verbatim.
+/// from `roster _hook` and are also relayed server → client verbatim, and
+/// the hook reply (tag 12, [`Frame::HookDecision`]), written back to
+/// `roster _hook` on its own connection — never relayed to a client, never
+/// valid client → server.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Frame {
     // Client → server.
@@ -71,6 +78,17 @@ pub enum Frame {
     /// Liveness probe; the server replies `Pong` without disturbing an
     /// attached client.
     Ping,
+    /// Turn auto-approval on or off for a pane. The session server owns the
+    /// auto-approve set for its panes and answers hook asks from it; the
+    /// client sends this when the user toggles auto-approve. `pane` is the
+    /// server-side pane id (the `ROSTER_PANE` value a hook reports), which
+    /// the client mirrors 1:1.
+    SetAutoApprove {
+        /// Target pane (server-side id).
+        pane: u64,
+        /// Auto-approve the pane's future asks when true.
+        on: bool,
+    },
 
     // Hook → server (or the in-process app). Sent by `roster _hook` when a
     // Claude Code hook fires; a session server relays these two frames
@@ -95,6 +113,17 @@ pub enum Frame {
         /// The tool whose ask this clears; an empty string clears any ask
         /// (end of turn — nothing can still be pending).
         tool: String,
+    },
+
+    // Hook reply (owner → `roster _hook`). Written back on the hook
+    // connection after a `HookBlocked`, never relayed to a client.
+    /// The socket owner's answer to a pane's permission ask: auto-approve it
+    /// (`allow: true`) or not. On `true` the hook prints an allow decision
+    /// and Claude proceeds without its prompt; otherwise the hook stays
+    /// silent and Claude asks the human as before.
+    HookDecision {
+        /// Approve the ask when true.
+        allow: bool,
     },
 
     // Server → client.
@@ -162,6 +191,8 @@ impl Frame {
             Frame::Ping => 9,
             Frame::HookBlocked { .. } => 10,
             Frame::HookClear { .. } => 11,
+            Frame::HookDecision { .. } => 12,
+            Frame::SetAutoApprove { .. } => 13,
             Frame::Hello { .. } => 64,
             Frame::Replay { .. } => 65,
             Frame::Output { .. } => 66,
@@ -201,6 +232,11 @@ pub fn write_frame(w: &mut impl Write, frame: &Frame) -> io::Result<()> {
             put_u64(&mut payload, *pane);
             put_bytes(&mut payload, tool.as_bytes());
         }
+        Frame::HookDecision { allow } => payload.push(*allow as u8),
+        Frame::SetAutoApprove { pane, on } => {
+            put_u64(&mut payload, *pane);
+            payload.push(*on as u8);
+        }
         Frame::SetLayout { blob } => put_bytes(&mut payload, blob),
         Frame::Hello { panes, layout } => {
             put_u64(&mut payload, panes.len() as u64);
@@ -214,6 +250,7 @@ pub fn write_frame(w: &mut impl Write, frame: &Frame) -> io::Result<()> {
                     }
                     None => payload.push(0),
                 }
+                payload.push(p.auto_approve as u8);
             }
             put_bytes(&mut payload, layout);
         }
@@ -282,6 +319,13 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Frame>> {
             pane: p.u64()?,
             tool: p.string()?,
         },
+        12 => Frame::HookDecision {
+            allow: p.u8()? != 0,
+        },
+        13 => Frame::SetAutoApprove {
+            pane: p.u64()?,
+            on: p.u8()? != 0,
+        },
         64 => {
             let count = p.u64()?;
             if count > 4096 {
@@ -296,10 +340,12 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Frame>> {
                     1 => Some(p.u32()?),
                     _ => return Err(corrupt("bad exited flag")),
                 };
+                let auto_approve = p.u8()? != 0;
                 panes.push(HelloPane {
                     pane,
                     command,
                     exited,
+                    auto_approve,
                 });
             }
             Frame::Hello {
@@ -446,17 +492,23 @@ mod tests {
             pane: 3,
             tool: String::new(),
         });
+        round_trip(Frame::HookDecision { allow: true });
+        round_trip(Frame::HookDecision { allow: false });
+        round_trip(Frame::SetAutoApprove { pane: 5, on: true });
+        round_trip(Frame::SetAutoApprove { pane: 5, on: false });
         round_trip(Frame::Hello {
             panes: vec![
                 HelloPane {
                     pane: 1,
                     command: "claude".into(),
                     exited: None,
+                    auto_approve: true,
                 },
                 HelloPane {
                     pane: 2,
                     command: "zsh".into(),
                     exited: Some(130),
+                    auto_approve: false,
                 },
             ],
             layout: b"blob".to_vec(),

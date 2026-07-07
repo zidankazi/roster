@@ -29,6 +29,9 @@ pub struct SidebarEntry {
     pub reason: Option<String>,
     /// Time since the state last changed, if it ever has.
     pub age: Option<Duration>,
+    /// Whether roster auto-approves this pane's permission asks. Set by the
+    /// binary (which owns the auto-approve set); the sidebar only renders it.
+    pub auto_approve: bool,
 }
 
 /// Build the sidebar rows from the session: every pane whose command
@@ -49,6 +52,9 @@ pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> 
                 state: pane.state,
                 reason: pane.reason.clone(),
                 age: pane.last_change.map(|at| now.saturating_duration_since(at)),
+                // The binary lights this from its auto-approve set; the
+                // session model here has no notion of it.
+                auto_approve: false,
             })
         })
         .collect();
@@ -332,8 +338,9 @@ impl Widget for Sidebar<'_> {
                     }
                 }
                 SidebarRow::EntryDetail(index) => {
-                    // The state word in its own color — the signal — with
-                    // the reason dimmed after it.
+                    // The state word in its own color — the signal — then an
+                    // `auto` badge if roster auto-approves this pane, then the
+                    // reason dimmed after it.
                     let entry = &self.entries[index];
                     let label = state_label(entry.state);
                     buf.set_stringn(
@@ -343,8 +350,25 @@ impl Widget for Sidebar<'_> {
                         width.saturating_sub(4),
                         Style::default().fg(state_color(entry.state)),
                     );
+                    let mut used = 4 + label.chars().count();
+                    // `auto` sits right after the state it modifies, in the
+                    // accent color, and gives way to the reason on a narrow
+                    // sidebar (guarded like the reason below).
+                    if entry.auto_approve {
+                        let badge = " · auto";
+                        let rest = width.saturating_sub(used + 1);
+                        if rest > badge.chars().count() {
+                            buf.set_stringn(
+                                area.x + used as u16,
+                                y,
+                                badge,
+                                rest,
+                                Style::default().fg(crate::style::ACCENT),
+                            );
+                            used += badge.chars().count();
+                        }
+                    }
                     if let Some(reason) = &entry.reason {
-                        let used = 4 + label.chars().count();
                         let rest = width.saturating_sub(used + 1);
                         if rest > 4 {
                             buf.set_stringn(
@@ -572,6 +596,24 @@ mod tests {
             buf.cell((4, 3)).unwrap().style().fg,
             Some(state_color(AgentState::Blocked))
         );
+    }
+
+    #[test]
+    fn auto_approve_badge_renders_after_the_state_word() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // Mark the first (blocked) card auto-approved; leave the rest off.
+        entries[0].auto_approve = true;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 40, 14), &mut buf);
+        // The badge sits on the detail row, after the state word.
+        let detail = buffer_row(&buf, 3);
+        assert!(detail.contains("auto"), "auto badge missing: {detail}");
+        // The next card (not auto-approved) shows no badge.
+        let other = buffer_row(&buf, 6);
+        assert!(!other.contains("auto"), "unexpected auto badge: {other}");
     }
 
     #[test]

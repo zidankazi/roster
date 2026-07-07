@@ -6,7 +6,7 @@
 //! view). Remote pane ids mirror the server's, so the layout snapshot the
 //! server stores needs no translation on reattach.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
@@ -247,6 +247,12 @@ pub struct App {
     /// `None` in remote mode (the session server owns the hook socket) or
     /// when the listener could not start (scraping still works).
     hook_sock: Option<PathBuf>,
+    /// Panes whose permission asks roster auto-approves. Shared with the
+    /// hook-listener thread, which answers each ask from it; toggled from
+    /// the sidebar. In remote mode the session server owns the authoritative
+    /// set (told via `SetAutoApprove`) and this local copy only drives the
+    /// card's `auto` badge. Default empty — auto-approve is opt-in per pane.
+    auto_approve: Arc<Mutex<HashSet<u64>>>,
 }
 
 impl App {
@@ -261,7 +267,8 @@ impl App {
         open_launcher: bool,
     ) -> Result<App, String> {
         let (output_tx, output_rx) = mpsc::channel();
-        let hook_sock = start_hook_listener(output_tx.clone());
+        let auto_approve: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
+        let hook_sock = start_hook_listener(output_tx.clone(), Arc::clone(&auto_approve));
         let launchables = launch_items(&detector, &default_shell());
         let mut app = App {
             session: Session::new(),
@@ -293,6 +300,7 @@ impl App {
             output_tx,
             output_rx,
             hook_sock,
+            auto_approve,
         };
 
         let first = app.session.focused().expect("new session has a pane");
@@ -473,6 +481,18 @@ impl App {
             // The session server owns the panes and their hook socket;
             // hook frames arrive relayed over the session connection.
             hook_sock: None,
+            // Seed the auto-approve mirror from the server's `Hello` so a
+            // reattach doesn't false-pin (or drop the `auto` badge on) panes
+            // the server keeps silently approving. The server stays the
+            // authoritative set (told via `SetAutoApprove`); this local copy
+            // drives the card badge and blocked-pin suppression.
+            auto_approve: Arc::new(Mutex::new(
+                panes
+                    .iter()
+                    .filter(|p| p.auto_approve)
+                    .map(|p| p.pane)
+                    .collect(),
+            )),
         };
         for pane in &panes {
             app.attach_remote_pane(PaneId::from_raw(pane.pane), pane.pane, &pane.command);
@@ -637,6 +657,14 @@ impl App {
             self.sync_remote_layout();
 
             self.last_entries = sidebar_entries(&self.session, &self.detector, Instant::now());
+            // Light the `auto` badge from the shared set (a poisoned lock
+            // just leaves badges off). Different fields than last_entries, so
+            // the borrows are disjoint.
+            if let Ok(set) = self.auto_approve.lock() {
+                for entry in &mut self.last_entries {
+                    entry.auto_approve = set.contains(&entry.pane.raw());
+                }
+            }
             let grids: HashMap<_, _> = self
                 .runtimes
                 .iter()
@@ -775,6 +803,15 @@ impl App {
     /// running an identified agent take pins: nothing renders state for
     /// other panes, so a pin there would just be stale model state.
     fn apply_hook_blocked(&mut self, pane: u64, tool: String, reason: String) {
+        // An auto-approved pane's ask is answered without the human, so it
+        // must not pin 🔴 blocked: that would demand attention for something
+        // already waved through, and — since no prompt ever paints — the
+        // scrape has nothing to reconcile against, so the paint grace would
+        // hold a false blocked. The `auto` badge is the pane's sidebar
+        // signal; the scrape keeps its real (working) state.
+        if self.is_auto_approve(pane) {
+            return;
+        }
         let id = PaneId::from_raw(pane);
         let Some(rt) = self.runtimes.get_mut(&id) else {
             return;
@@ -809,6 +846,37 @@ impl App {
                 rt.hook_blocked = None;
             }
         }
+    }
+
+    /// Whether `pane`'s asks are auto-approved. Poison-tolerant: a poisoned
+    /// lock reads as not auto-approved (safe — the human is asked).
+    fn is_auto_approve(&self, pane: u64) -> bool {
+        self.auto_approve
+            .lock()
+            .map(|set| set.contains(&pane))
+            .unwrap_or(false)
+    }
+
+    /// Flip auto-approve for `pane`, returning the new state. In a session
+    /// the server owns the authoritative set (told via `SetAutoApprove`); the
+    /// local set still drives the card badge. Recovers a poisoned lock rather
+    /// than panicking — losing the whole hook path would be far worse than a
+    /// stale toggle.
+    fn toggle_auto_approve(&mut self, pane: u64) -> bool {
+        let now_on = {
+            let mut set = self
+                .auto_approve
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if set.remove(&pane) {
+                false
+            } else {
+                set.insert(pane);
+                true
+            }
+        };
+        self.remote_send(&Frame::SetAutoApprove { pane, on: now_on });
+        now_on
     }
 
     /// Apply frames from the session server: output repaints screens,
@@ -1263,6 +1331,19 @@ impl App {
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.sidebar.select_prev(self.last_entries.len());
+                }
+                // Toggle auto-approve on the selected agent and stay in jump
+                // mode. Forward-looking: it answers the pane's *next* asks,
+                // not any prompt already waiting.
+                KeyCode::Char('a') => {
+                    if let Some(index) = self.sidebar.selected(self.last_entries.len()) {
+                        let pane = self.last_entries[index].pane.raw();
+                        let on = self.toggle_auto_approve(pane);
+                        self.toast(
+                            format!("auto-approve {}", if on { "on" } else { "off" }),
+                            ToastLevel::Info,
+                        );
+                    }
                 }
                 KeyCode::Enter => {
                     if let Some(Message::JumpToPane(id)) = self.sidebar.activate(&self.last_entries)
@@ -1921,7 +2002,18 @@ pub fn default_shell() -> String {
 /// The socket lives in a `hook/` subdirectory, NOT next to the session
 /// sockets: `roster ls`/`kill`/`attach` probe every top-level `*.sock` as
 /// a session, and this listener speaks no session protocol.
-fn start_hook_listener(tx: Sender<Output>) -> Option<PathBuf> {
+///
+/// `auto_approve` is the shared set of auto-approved panes: on a `HookBlocked`
+/// (a permission ask) the reader answers the hook with a [`Frame::HookDecision`]
+/// on the same connection — `allow` iff the pane is in the set — *before*
+/// forwarding the frame to the app loop, so a busy loop can't delay the
+/// decision. Every ask gets a reply (the common `allow: false` too), so the
+/// hook never waits out its deadline on the normal path. A poisoned lock
+/// degrades to `allow: false` and keeps the listener alive.
+fn start_hook_listener(
+    tx: Sender<Output>,
+    auto_approve: Arc<Mutex<HashSet<u64>>>,
+) -> Option<PathBuf> {
     let base = crate::server::sessions_dir()?;
     crate::server::ensure_private_dir(&base).ok()?;
     let dir = base.join("hook");
@@ -1940,14 +2032,30 @@ fn start_hook_listener(tx: Sender<Output>) -> Option<PathBuf> {
                 continue;
             };
             let tx = tx.clone();
+            let auto_approve = Arc::clone(&auto_approve);
             // One bounded thread per hook invocation: a real `_hook` sends
-            // one frame and disconnects. The read timeout and frame cap
-            // keep a stray or hostile peer from parking threads forever.
+            // one frame, reads its reply (asks only), and disconnects. The
+            // read timeout and frame cap keep a stray or hostile peer from
+            // parking threads forever.
             std::thread::spawn(move || {
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
                 for _ in 0..16 {
                     match read_frame(&mut stream) {
-                        Ok(Some(frame @ (Frame::HookBlocked { .. } | Frame::HookClear { .. }))) => {
+                        Ok(Some(Frame::HookBlocked { pane, tool, reason })) => {
+                            // Answer the ask on this same connection before
+                            // handing it to the app loop. A poisoned lock is
+                            // a safe `false` (ask the human), never a panic.
+                            let allow = auto_approve
+                                .lock()
+                                .map(|set| set.contains(&pane))
+                                .unwrap_or(false);
+                            let _ = write_frame(&mut stream, &Frame::HookDecision { allow });
+                            let frame = Frame::HookBlocked { pane, tool, reason };
+                            if tx.send(Output::Hook(frame)).is_err() {
+                                return;
+                            }
+                        }
+                        Ok(Some(frame @ Frame::HookClear { .. })) => {
                             if tx.send(Output::Hook(frame)).is_err() {
                                 return;
                             }
@@ -1989,5 +2097,66 @@ mod tests {
             base64("selected text ✓".as_bytes()),
             "c2VsZWN0ZWQgdGV4dCDinJM="
         );
+    }
+
+    #[test]
+    fn hook_listener_answers_asks_from_the_auto_approve_set() {
+        use std::os::unix::net::UnixStream;
+
+        let (tx, rx) = mpsc::channel::<Output>();
+        let auto: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
+        auto.lock().unwrap().insert(7);
+        let Some(path) = start_hook_listener(tx, Arc::clone(&auto)) else {
+            // No sessions dir available (locked-down sandbox): nothing to do.
+            return;
+        };
+
+        // An auto-approved pane's ask is answered allow: true, and the block
+        // still reaches the app loop for the card.
+        let mut s = UnixStream::connect(&path).expect("connect hook socket");
+        s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        write_frame(
+            &mut s,
+            &Frame::HookBlocked {
+                pane: 7,
+                tool: "Bash".into(),
+                reason: "Bash: ls".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_frame(&mut s).unwrap(),
+            Some(Frame::HookDecision { allow: true }),
+            "auto-approved pane must be allowed"
+        );
+        assert!(
+            matches!(
+                rx.recv_timeout(Duration::from_secs(2)),
+                Ok(Output::Hook(Frame::HookBlocked { pane: 7, .. }))
+            ),
+            "the ask must still reach the app loop"
+        );
+        drop(s);
+
+        // A pane that isn't in the set is answered allow: false — Claude asks
+        // the human, exactly as before.
+        let mut s = UnixStream::connect(&path).expect("connect hook socket");
+        s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        write_frame(
+            &mut s,
+            &Frame::HookBlocked {
+                pane: 9,
+                tool: String::new(),
+                reason: "x".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            read_frame(&mut s).unwrap(),
+            Some(Frame::HookDecision { allow: false }),
+            "a non-auto pane must not be auto-approved"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -61,7 +61,8 @@ automatic. Manual names persist across detach/reattach.
 
 Keyboard equivalents exist for everything (`ctrl-b` is the prefix — `c` new
 agent, `n`/`p` windows, `z` solo, `j` jump, `o` focus, `x` close, `d`
-detach, `q` quit); the status bar keeps the hints on screen.
+detach, `q` quit); in jump mode, `a` toggles auto-approve on the selected
+agent. The status bar keeps the hints on screen.
 
 ## Persistent sessions
 
@@ -119,6 +120,17 @@ The hooks are silent no-ops for any claude running outside roster, so
 registering them costs nothing. Screen-based detection keeps running
 underneath and reconciles: if a clear ever goes missing (say, you interrupt
 at the prompt), the settled screen wins and the stale ask drops off.
+
+Because the hook is a two-way channel, roster can also *answer* an ask. Select
+an agent in the sidebar (`ctrl-b j`, then `a`) to toggle **auto-approve** on
+that pane: roster says yes to its permission asks for you, so it runs
+uninterrupted — but stays observable. Unlike launching with
+`--dangerously-skip-permissions` (which turns Claude's own gate off, so roster
+never sees the asks at all), auto-approve keeps roster in the loop: the card
+carries an `auto` badge, the pane isn't yanked to the top as 🔴 blocked, and
+you can flip it off mid-session without relaunching. It's per-pane and
+forward-looking — it approves the pane's *next* asks (including any its
+subagents make), not a prompt already waiting for you.
 
 This is the first slice of the Claude-native attention layer — reading hooks
 and statusline for exact state, context-left, and cost;
