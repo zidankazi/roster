@@ -20,12 +20,76 @@ body {
     "Liberation Mono", monospace;
 }
 
+/* Sticky top navigation. */
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 clamp(16px, 4vw, 40px);
+  background: rgba(251, 250, 247, 0.85);
+  backdrop-filter: saturate(180%) blur(8px);
+  border-bottom: 1px solid #ece9e2;
+}
+
+.nav-brand {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #df2c2c;
+  text-decoration: none;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: clamp(14px, 3vw, 24px);
+}
+
+.nav-link {
+  font-size: 14px;
+  color: #4a463f;
+  text-decoration: none;
+  transition: color 160ms ease;
+}
+
+.nav-link:hover {
+  color: #df2c2c;
+}
+
+.nav-gh {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  font-size: 14px;
+  color: #2b2b2b;
+  text-decoration: none;
+  background: #fff;
+  border: 1px solid #e0ddd5;
+  border-radius: 8px;
+  transition: border-color 160ms ease, color 160ms ease;
+}
+
+.nav-gh:hover {
+  color: #df2c2c;
+  border-color: #df2c2c;
+}
+
+.nav-gh svg {
+  width: 16px;
+  height: 16px;
+}
+
 main {
-  min-height: 100%;
+  min-height: calc(100% - 56px);
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding-top: 14vh;
+  padding-top: 9vh;
   gap: 2.75rem;
 }
 
@@ -48,26 +112,30 @@ main {
   font-weight: 700;
 }
 
+/* Flex-center the line so the mark aligns to the text optically, instead of
+   fighting font baselines with vertical-align. */
 .tagline-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem 0.5ch;
   margin-top: 6px;
   color: #6f6a63;
   font-size: clamp(13px, 3.1vw, 16px);
 }
 
 .nowrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25ch;
   white-space: nowrap;
 }
 
 .claude-mark {
-  display: inline-block;
+  flex: none;
   width: 2.3em;
   height: 1.55em;
-  margin: 0 0.12em;
-  vertical-align: middle;
-  /* The artwork is bottom-heavy in its frame (thin tail up top, body + legs
-     below), so centering the box still reads low. Nudge it up ~1/6 of its
-     height to sit the body level with the text. */
-  transform: translateY(-16%);
 }
 
 .wordmark-row {

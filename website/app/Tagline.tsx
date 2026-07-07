@@ -7,10 +7,10 @@ export function Tagline() {
     <div className="tagline">
       <p className="tagline-lead">Terminal multiplexer for Claude Code agents.</p>
       <p className="tagline-sub">
-        The best way to build with{" "}
+        <span>The best way to build with</span>
         <span className="nowrap">
           <ClaudeMark />
-          Claude.
+          <span>Claude.</span>
         </span>
       </p>
     </div>
