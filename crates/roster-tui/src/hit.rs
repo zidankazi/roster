@@ -7,7 +7,7 @@
 use ratatui::layout::Rect;
 use roster_core::{PaneId, Session};
 
-use crate::sidebar::{sidebar_rows, SidebarEntry, SidebarRow};
+use crate::sidebar::{auto_chip_cols, sidebar_rows, SidebarEntry, SidebarRow};
 use crate::{
     close_button_cols, local_panes, panes_area, sidebar_button_row, sidebar_inner,
     sidebar_view_row, status_windows_span, view_toggle_cols, SidebarSide, STATUS_HEIGHT,
@@ -18,6 +18,9 @@ use crate::{
 pub enum Hit {
     /// A sidebar agent card.
     SidebarEntry(usize),
+    /// An agent card's `auto` chip on its detail row — click toggles
+    /// auto-approve for that pane.
+    SidebarAuto(usize),
     /// A sidebar workspace header (window index) — or an agent-less
     /// workspace's placeholder row. Clicking jumps to that window.
     SidebarWindow(usize),
@@ -79,6 +82,7 @@ impl Pointer {
 pub fn pointer_for(hit: Hit) -> Pointer {
     match hit {
         Hit::SidebarEntry(_)
+        | Hit::SidebarAuto(_)
         | Hit::SidebarWindow(_)
         | Hit::SidebarNewAgent
         | Hit::SidebarViewGrid
@@ -164,8 +168,17 @@ pub fn hit_test(
             Some(SidebarRow::Header(window)) | Some(SidebarRow::Empty(window)) => {
                 Hit::SidebarWindow(*window)
             }
-            Some(SidebarRow::EntryName(index)) | Some(SidebarRow::EntryDetail(index)) => {
-                Hit::SidebarEntry(*index)
+            Some(SidebarRow::EntryName(index)) => Hit::SidebarEntry(*index),
+            Some(SidebarRow::EntryDetail(index)) => {
+                // The `auto` chip's columns toggle auto-approve; the rest
+                // of the row is the card, same as the name row above it.
+                let on_chip = auto_chip_cols(entries[*index].state, bar.width)
+                    .is_some_and(|cols| cols.contains(&(x - bar.x)));
+                if on_chip {
+                    Hit::SidebarAuto(*index)
+                } else {
+                    Hit::SidebarEntry(*index)
+                }
             }
             Some(SidebarRow::Blank) | None => Hit::Sidebar,
         };
@@ -269,6 +282,41 @@ mod tests {
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 26),
             Hit::Sidebar
+        );
+    }
+
+    #[test]
+    fn auto_chip_cols_resolve_to_auto_hits_on_detail_rows_only() {
+        let (session, entries) = setup();
+        let area = Rect::new(0, 0, 120, 30);
+        // Sidebar inner is 31 wide; both cards' state words are 7 chars
+        // (blocked, working), so each chip spans cols 26..30 of its detail
+        // row — rows 3 and 6.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 26, 3),
+            Hit::SidebarAuto(0)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 29, 3),
+            Hit::SidebarAuto(0)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 27, 6),
+            Hit::SidebarAuto(1)
+        );
+        // Off the chip — before it, past it, or the name row above — the
+        // click is the card.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 25, 3),
+            Hit::SidebarEntry(0)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 30, 3),
+            Hit::SidebarEntry(0)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 26, 2),
+            Hit::SidebarEntry(0)
         );
     }
 

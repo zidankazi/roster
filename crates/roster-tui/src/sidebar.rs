@@ -1,7 +1,8 @@
 //! The agent-state sidebar: agents grouped by workspace, each rendered as a
 //! two-line card — a colored status glyph, the agent name, and its age on
-//! top; the state and its reason below. Blocked and done float to the top of
-//! each workspace so the agents that need you are always in view.
+//! top; the state, its reason, and the clickable `auto` (auto-approve) chip
+//! below. Blocked and done float to the top of each workspace so the agents
+//! that need you are always in view.
 
 use std::time::{Duration, Instant};
 
@@ -175,11 +176,28 @@ pub fn sidebar_rows(entries: &[SidebarEntry], workspaces: usize) -> Vec<SidebarR
     rows
 }
 
+/// The `auto` chip's text — the per-card auto-approve toggle.
+const AUTO_CHIP: &str = "auto";
+
+/// The columns of an entry's detail row occupied by its `auto` chip, in
+/// sidebar-inner columns: the word right-aligned one column in from the
+/// edge, mirroring the age on the name row above. `None` when the row is
+/// too narrow to host it clear of the state word. Render draws it and
+/// `hit_test` targets it, so the chip can't drift off its click target.
+pub fn auto_chip_cols(state: AgentState, width: u16) -> Option<std::ops::Range<u16>> {
+    let chip = AUTO_CHIP.chars().count() as u16;
+    // Card indent + the state word + a gap: the chip never crowds the
+    // signal it annotates.
+    let taken = 4 + state_label(state).chars().count() as u16 + 1;
+    (width > taken + chip).then(|| width - 1 - chip..width - 1)
+}
+
 /// The agent-state sidebar widget.
 pub struct Sidebar<'a> {
     entries: &'a [SidebarEntry],
     selected: Option<usize>,
     hovered: Option<usize>,
+    hovered_auto: Option<usize>,
     hovered_window: Option<usize>,
     workspaces: usize,
     active: usize,
@@ -204,12 +222,20 @@ impl<'a> Sidebar<'a> {
             entries,
             selected,
             hovered,
+            hovered_auto: None,
             hovered_window: None,
             workspaces,
             active: 0,
             names: &[],
             tick,
         }
+    }
+
+    /// The entry index whose `auto` chip is under the mouse, for hover
+    /// highlighting.
+    pub fn hovered_auto(mut self, index: Option<usize>) -> Self {
+        self.hovered_auto = index;
+        self
     }
 
     /// Display names for the workspace headers, one per window — a manual
@@ -338,9 +364,11 @@ impl Widget for Sidebar<'_> {
                     }
                 }
                 SidebarRow::EntryDetail(index) => {
-                    // The state word in its own color — the signal — then an
-                    // `auto` badge if roster auto-approves this pane, then the
-                    // reason dimmed after it.
+                    // The state word in its own color — the signal — the
+                    // reason dimmed after it, and the `auto` chip pinned at
+                    // the right edge: the per-pane auto-approve toggle,
+                    // muted until it's on so every card shows where to
+                    // click.
                     let entry = &self.entries[index];
                     let label = state_label(entry.state);
                     buf.set_stringn(
@@ -350,26 +378,16 @@ impl Widget for Sidebar<'_> {
                         width.saturating_sub(4),
                         Style::default().fg(state_color(entry.state)),
                     );
-                    let mut used = 4 + label.chars().count();
-                    // `auto` sits right after the state it modifies, in the
-                    // accent color, and gives way to the reason on a narrow
-                    // sidebar (guarded like the reason below).
-                    if entry.auto_approve {
-                        let badge = " · auto";
-                        let rest = width.saturating_sub(used + 1);
-                        if rest > badge.chars().count() {
-                            buf.set_stringn(
-                                area.x + used as u16,
-                                y,
-                                badge,
-                                rest,
-                                Style::default().fg(crate::style::ACCENT),
-                            );
-                            used += badge.chars().count();
-                        }
-                    }
+                    let used = 4 + label.chars().count();
+                    let chip = auto_chip_cols(entry.state, area.width);
                     if let Some(reason) = &entry.reason {
-                        let rest = width.saturating_sub(used + 1);
+                        // The reason yields to the chip: its budget ends a
+                        // gutter column short of it (or one column in from
+                        // the edge when no chip fits).
+                        let end = chip.as_ref().map_or(width.saturating_sub(1), |cols| {
+                            usize::from(cols.start).saturating_sub(1)
+                        });
+                        let rest = end.saturating_sub(used);
                         if rest > 4 {
                             buf.set_stringn(
                                 area.x + used as u16,
@@ -379,6 +397,17 @@ impl Widget for Sidebar<'_> {
                                 muted(),
                             );
                         }
+                    }
+                    if let Some(cols) = chip {
+                        let mut style = if entry.auto_approve {
+                            Style::default().fg(crate::style::ACCENT)
+                        } else {
+                            muted()
+                        };
+                        if self.hovered_auto == Some(index) {
+                            style = style.add_modifier(Modifier::REVERSED);
+                        }
+                        buf.set_string(area.x + cols.start, y, AUTO_CHIP, style);
                     }
                 }
                 SidebarRow::Blank => {}
@@ -599,21 +628,82 @@ mod tests {
     }
 
     #[test]
-    fn auto_approve_badge_renders_after_the_state_word() {
+    fn auto_chip_cols_right_align_and_guard_narrow_widths() {
+        // Right-aligned one column in from the edge, whatever the label.
+        assert_eq!(auto_chip_cols(AgentState::Blocked, 31), Some(26..30));
+        assert_eq!(auto_chip_cols(AgentState::Done, 14), Some(9..13));
+        // Too narrow to clear the state word: no chip, no click target.
+        assert_eq!(auto_chip_cols(AgentState::Blocked, 17), Some(12..16));
+        assert_eq!(auto_chip_cols(AgentState::Blocked, 16), None);
+        assert_eq!(auto_chip_cols(AgentState::Done, 13), None);
+    }
+
+    #[test]
+    fn auto_chip_sits_on_every_card_accent_on_muted_off() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
-        // Mark the first (blocked) card auto-approved; leave the rest off.
+        // Auto-approve the first (blocked) card; leave the rest off.
         entries[0].auto_approve = true;
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 40, 14), &mut buf);
-        // The badge sits on the detail row, after the state word.
+        // The chip ends every card's detail row — the toggle is always
+        // visible, not just when it's on.
         let detail = buffer_row(&buf, 3);
-        assert!(detail.contains("auto"), "auto badge missing: {detail}");
-        // The next card (not auto-approved) shows no badge.
+        assert!(detail.ends_with("auto"), "chip missing: {detail}");
         let other = buffer_row(&buf, 6);
-        assert!(!other.contains("auto"), "unexpected auto badge: {other}");
+        assert!(other.ends_with("auto"), "chip missing: {other}");
+        // Accent when on — the state it flips — muted when off.
+        let on = auto_chip_cols(entries[0].state, 40).unwrap();
+        assert_eq!(
+            buf.cell((on.start, 3)).unwrap().style().fg,
+            Some(crate::style::ACCENT)
+        );
+        let off = auto_chip_cols(entries[1].state, 40).unwrap();
+        assert_eq!(buf.cell((off.start, 6)).unwrap().style().fg, muted().fg);
+        // A gutter column separates the truncated reason from the chip.
+        assert_eq!(buf.cell((on.start - 1, 3)).unwrap().symbol(), " ");
+    }
+
+    #[test]
+    fn auto_chip_hover_inverts_the_chip() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .hovered_auto(Some(0))
+            .render(Rect::new(0, 0, 40, 14), &mut buf);
+        let cols = auto_chip_cols(entries[0].state, 40).unwrap();
+        assert!(buf
+            .cell((cols.start, 3))
+            .unwrap()
+            .style()
+            .add_modifier
+            .contains(Modifier::REVERSED));
+        // Hovering one chip leaves the others plain.
+        let other = auto_chip_cols(entries[1].state, 40).unwrap();
+        assert!(!buf
+            .cell((other.start, 6))
+            .unwrap()
+            .style()
+            .add_modifier
+            .contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn auto_chip_gives_way_on_a_narrow_sidebar() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 12, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 12, 14), &mut buf);
+        for y in 0..14 {
+            let row = buffer_row(&buf, y);
+            assert!(!row.contains("auto"), "chip on a narrow row: {row}");
+        }
     }
 
     #[test]

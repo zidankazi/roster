@@ -22,6 +22,7 @@ gets a title bar with its agent's live state; the focused pane is highlighted.
 
 **Use it like an app — no hotkeys to learn.** Every action is a visible click
 target: click a pane to focus it, a sidebar card to jump to that agent, the
+card's **`auto`** chip to auto-approve that agent's permission asks, the
 pinned **+ new agent** button to open the launcher, a title bar's **✕** to
 close that pane (closing a live agent asks first, in a real dialog — a stray
 click won't kill it). Drag the dividers to resize. An exited pane shows a
@@ -121,16 +122,18 @@ registering them costs nothing. Screen-based detection keeps running
 underneath and reconciles: if a clear ever goes missing (say, you interrupt
 at the prompt), the settled screen wins and the stale ask drops off.
 
-Because the hook is a two-way channel, roster can also *answer* an ask. Select
-an agent in the sidebar (`ctrl-b j`, then `a`) to toggle **auto-approve** on
-that pane: roster says yes to its permission asks for you, so it runs
-uninterrupted — but stays observable. Unlike launching with
-`--dangerously-skip-permissions` (which turns Claude's own gate off, so roster
-never sees the asks at all), auto-approve keeps roster in the loop: the card
-carries an `auto` badge, the pane isn't yanked to the top as 🔴 blocked, and
-you can flip it off mid-session without relaunching. It's per-pane and
-forward-looking — it approves the pane's *next* asks (including any its
-subagents make), not a prompt already waiting for you.
+Because the hook is a two-way channel, roster can also *answer* an ask. Every
+card carries an **`auto` chip** at the right edge of its detail row — muted
+while off, lit in the accent red while on. Click it (or select the agent with
+`ctrl-b j` and press `a`) to toggle **auto-approve** on that pane: roster says
+yes to its permission asks for you, so it runs uninterrupted — but stays
+observable. Unlike launching with `--dangerously-skip-permissions` (which
+turns Claude's own gate off, so roster never sees the asks at all),
+auto-approve keeps roster in the loop: the chip shows it's on, the pane isn't
+yanked to the top as 🔴 blocked, and you can flip it off mid-session without
+relaunching. It's per-pane and forward-looking — it approves the pane's
+*next* asks (including any its subagents make), not a prompt already waiting
+for you.
 
 This is the first slice of the Claude-native attention layer — reading hooks
 and statusline for exact state, context-left, and cost;

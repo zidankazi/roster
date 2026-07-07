@@ -22,7 +22,7 @@ pub struct HelloPane {
     /// The exit code, when the process has ended (the pane lingers).
     pub exited: Option<u32>,
     /// Whether the server auto-approves this pane's permission asks, so a
-    /// reattaching client seeds its local mirror (the `auto` badge and the
+    /// reattaching client seeds its local mirror (the lit `auto` chip and the
     /// blocked-pin suppression) instead of diverging from the server's set.
     pub auto_approve: bool,
 }

@@ -29,8 +29,8 @@ pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
 pub use rename::{draw_rename, rename_contains, rename_cursor, rename_rect};
 pub use sidebar::{
-    format_age, sidebar_entries, sidebar_rows, Message, Sidebar, SidebarEntry, SidebarRow,
-    SidebarState,
+    auto_chip_cols, format_age, sidebar_entries, sidebar_rows, Message, Sidebar, SidebarEntry,
+    SidebarRow, SidebarState,
 };
 pub use style::{cell_style, muted, state_color, state_glyph, state_label, ACCENT};
 pub use toast::{draw_toasts, toast_rects, ToastLevel};
@@ -424,6 +424,10 @@ pub fn render(frame: &mut Frame, view: &View) {
         Some(Hit::SidebarEntry(index)) => Some(index),
         _ => None,
     };
+    let hovered_auto = match view.hover {
+        Some(Hit::SidebarAuto(index)) => Some(index),
+        _ => None,
+    };
     let hovered_window = match view.hover {
         Some(Hit::SidebarWindow(window)) => Some(window),
         _ => None,
@@ -437,6 +441,7 @@ pub fn render(frame: &mut Frame, view: &View) {
             view.tick,
         )
         .active(view.session.active_window().unwrap_or(0))
+        .hovered_auto(hovered_auto)
         .hovered_window(hovered_window)
         .names(view.window_names),
         cards,

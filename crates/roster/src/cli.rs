@@ -89,16 +89,16 @@ KEYS (prefix: ctrl-b):
   prefix %   split side by side        prefix \"   split stacked
   prefix o   focus next pane           prefix n/p next/previous window
   prefix ,   rename workspace (empty input restores the automatic name)
-  prefix j   jump via sidebar (j/k move, enter jump, esc cancel)
+  prefix j   jump via sidebar (j/k move, enter jump, a auto-approve, esc cancel)
   prefix d   detach (persistent sessions)
   prefix q   quit
   prefix ctrl-b  send a literal ctrl-b
 
 MOUSE:
   click a pane or its title to focus it; click a sidebar card or workspace
-  header to jump; click launcher rows to launch; drag the divider between
-  panes to resize; wheel-scroll a pane's history; drag over text to select
-  and copy it.
+  header to jump; click a card's auto chip to toggle auto-approve; click
+  launcher rows to launch; drag the divider between panes to resize;
+  wheel-scroll a pane's history; drag over text to select and copy it.
 ";
 
 /// Parse arguments (excluding argv\[0\]).

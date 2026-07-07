@@ -251,7 +251,7 @@ pub struct App {
     /// hook-listener thread, which answers each ask from it; toggled from
     /// the sidebar. In remote mode the session server owns the authoritative
     /// set (told via `SetAutoApprove`) and this local copy only drives the
-    /// card's `auto` badge. Default empty — auto-approve is opt-in per pane.
+    /// card's `auto` chip. Default empty — auto-approve is opt-in per pane.
     auto_approve: Arc<Mutex<HashSet<u64>>>,
 }
 
@@ -482,10 +482,10 @@ impl App {
             // hook frames arrive relayed over the session connection.
             hook_sock: None,
             // Seed the auto-approve mirror from the server's `Hello` so a
-            // reattach doesn't false-pin (or drop the `auto` badge on) panes
+            // reattach doesn't false-pin (or unlight the `auto` chip on) panes
             // the server keeps silently approving. The server stays the
             // authoritative set (told via `SetAutoApprove`); this local copy
-            // drives the card badge and blocked-pin suppression.
+            // drives the card chip and blocked-pin suppression.
             auto_approve: Arc::new(Mutex::new(
                 panes
                     .iter()
@@ -657,8 +657,8 @@ impl App {
             self.sync_remote_layout();
 
             self.last_entries = sidebar_entries(&self.session, &self.detector, Instant::now());
-            // Light the `auto` badge from the shared set (a poisoned lock
-            // just leaves badges off). Different fields than last_entries, so
+            // Light the `auto` chip from the shared set (a poisoned lock
+            // just leaves chips unlit). Different fields than last_entries, so
             // the borrows are disjoint.
             if let Ok(set) = self.auto_approve.lock() {
                 for entry in &mut self.last_entries {
@@ -807,7 +807,7 @@ impl App {
         // must not pin 🔴 blocked: that would demand attention for something
         // already waved through, and — since no prompt ever paints — the
         // scrape has nothing to reconcile against, so the paint grace would
-        // hold a false blocked. The `auto` badge is the pane's sidebar
+        // hold a false blocked. The lit `auto` chip is the pane's sidebar
         // signal; the scrape keeps its real (working) state.
         if self.is_auto_approve(pane) {
             return;
@@ -859,7 +859,7 @@ impl App {
 
     /// Flip auto-approve for `pane`, returning the new state. In a session
     /// the server owns the authoritative set (told via `SetAutoApprove`); the
-    /// local set still drives the card badge. Recovers a poisoned lock rather
+    /// local set still drives the card chip. Recovers a poisoned lock rather
     /// than panicking — losing the whole hook path would be far worse than a
     /// stale toggle.
     fn toggle_auto_approve(&mut self, pane: u64) -> bool {
@@ -1474,6 +1474,18 @@ impl App {
                             self.session.focus(entry.pane);
                         }
                     }
+                    Hit::SidebarAuto(index) => {
+                        // The chip is a button on the card, not the card:
+                        // toggle without stealing focus from the pane the
+                        // user is watching.
+                        if let Some(pane) = self.last_entries.get(index).map(|e| e.pane.raw()) {
+                            let on = self.toggle_auto_approve(pane);
+                            self.toast(
+                                format!("auto-approve {}", if on { "on" } else { "off" }),
+                                ToastLevel::Info,
+                            );
+                        }
+                    }
                     Hit::SidebarWindow(window) => {
                         // Double-clicking a header renames the workspace;
                         // a single click jumps to it.
@@ -1644,6 +1656,7 @@ impl App {
                 | Hit::SidebarViewGrid
                 | Hit::SidebarViewSolo
                 | Hit::SidebarEntry(_)
+                | Hit::SidebarAuto(_)
                 | Hit::SidebarWindow(_)
                 | Hit::StatusWindows
         ) {
@@ -1916,7 +1929,7 @@ impl App {
             ),
             Mode::Jump => (
                 Some("JUMP"),
-                "j/k: move · enter: jump to pane · esc: cancel".to_string(),
+                "j/k: move · enter: jump to pane · a: auto-approve · esc: cancel".to_string(),
             ),
             Mode::Launch(_) => (
                 Some("LAUNCH"),
