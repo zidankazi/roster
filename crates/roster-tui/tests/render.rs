@@ -11,7 +11,7 @@ use ratatui::Terminal;
 use roster_core::{AgentState, Grid, Session, SplitDirection};
 use roster_detect::Detector;
 use roster_tui::{
-    launch_items, render, sidebar_entries, Hit, LauncherState, SidebarSide, View, ACCENT,
+    launch_items, muted, render, sidebar_entries, Hit, LauncherState, SidebarSide, View, ACCENT,
 };
 
 fn region_text(buf: &Buffer, x0: u16, x1: u16, y: u16) -> String {
@@ -137,14 +137,82 @@ fn panes_get_title_bars_and_content_shifts_down() {
     assert_eq!(region_text(&buf, 0, 31, 9).trim(), "grid · solo");
     assert_eq!(buf.cell((53, 0)).unwrap().symbol(), "✕");
     assert_eq!(buf.cell((78, 0)).unwrap().symbol(), "✕");
-    // Grid is the active layout: accent; solo is dim.
+    // Grid is the active layout (accent); the inactive solo word is muted —
+    // an explicit, legible foreground rather than the near-invisible DIM
+    // attribute this fix replaced.
     assert_eq!(buf.cell((1, 9)).unwrap().style().fg, Some(ACCENT));
-    assert!(buf
-        .cell((8, 9))
-        .unwrap()
-        .style()
-        .add_modifier
-        .contains(Modifier::DIM));
+    let solo = buf.cell((8, 9)).unwrap().style();
+    assert_eq!(solo.fg, muted().fg);
+    assert!(!solo.add_modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
+    // Regression guard for the low-contrast chrome bug: on a terminal's
+    // default palette, `Modifier::DIM` renders as a near-invisible faint
+    // gray. The elements the bug report called out — the sidebar "agents"
+    // subtitle, an agent's age and its state reason, and the bottom status
+    // hint — must now carry an explicit muted foreground and no `DIM`.
+    let now = Instant::now();
+    let (session, left, right) = two_agent_session(now);
+    let mut grids = HashMap::new();
+    grids.insert(left, Grid::from_text("left agent output"));
+    grids.insert(right, Grid::from_text("right agent output"));
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+    let exited = HashMap::new();
+    let scrolled = HashMap::new();
+    let view = View {
+        session: &session,
+        grids: &grids,
+        exited: &exited,
+        entries: &entries,
+        selected: None,
+        hover: None,
+        zoomed: false,
+        side: SidebarSide::Left,
+        launcher: None,
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
+        window_names: &[],
+        rename: None,
+        welcome: false,
+        mode_badge: None,
+        status: "click a pane to focus · ctrl-b for keys",
+        tick: 0,
+    };
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+    terminal.draw(|frame| render(frame, &view)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    // Every listed element resolves to the muted foreground, never `DIM`.
+    let muted_fg = muted().fg;
+    let assert_muted = |x: u16, y: u16, what: &str| {
+        let style = buf.cell((x, y)).unwrap().style();
+        assert_eq!(style.fg, muted_fg, "{what} at ({x},{y}) is not muted");
+        assert!(
+            !style.add_modifier.contains(Modifier::DIM),
+            "{what} at ({x},{y}) still leans on DIM"
+        );
+    };
+    // Sidebar "agents" subtitle (first glyph after the leading space).
+    assert_eq!(buf.cell((1, 0)).unwrap().symbol(), "a");
+    assert_muted(1, 0, "sidebar subtitle");
+    // The blocked card leads (12s old): its right-aligned age column…
+    assert_eq!(
+        region_text(&buf, 0, 31, 2),
+        "  ◉ claude-code            12s"
+    );
+    assert_muted(27, 2, "sidebar age");
+    // …and the state reason after the colored state word on the detail row.
+    assert!(region_text(&buf, 0, 31, 3).starts_with("    blocked · Approve"));
+    assert_muted(14, 3, "sidebar state reason");
+    // The bottom status hint line spans from the left edge.
+    assert_eq!(buf.cell((0, 11)).unwrap().symbol(), "c");
+    assert_muted(0, 11, "status hint");
 }
 
 #[test]
@@ -186,14 +254,15 @@ fn hover_lights_up_interactive_chrome() {
         terminal.backend().buffer().clone()
     };
 
-    // Hovering a ✕ turns it red and bold; unhovered it stays dim.
+    // Hovering a ✕ turns it red and bold; unhovered it stays muted.
     let buf = draw(Some(Hit::PaneClose(left)));
     let close = buf.cell((53, 0)).unwrap();
     assert_eq!(close.symbol(), "✕");
     assert_eq!(close.style().fg, Some(ratatui::style::Color::Red));
     assert!(close.style().add_modifier.contains(Modifier::BOLD));
     let other = buf.cell((78, 0)).unwrap();
-    assert!(other.style().add_modifier.contains(Modifier::DIM));
+    assert_eq!(other.style().fg, muted().fg);
+    assert!(!other.style().add_modifier.contains(Modifier::DIM));
 
     // Hovering the + new agent button inverts it.
     let buf = draw(Some(Hit::SidebarNewAgent));
@@ -204,20 +273,17 @@ fn hover_lights_up_interactive_chrome() {
         .add_modifier
         .contains(Modifier::REVERSED));
 
-    // Hovering a sidebar card shows a quiet marker.
+    // Hovering a sidebar card shows a quiet muted marker.
     let buf = draw(Some(Hit::SidebarEntry(0)));
     let marker = buf.cell((0, 2)).unwrap();
     assert_eq!(marker.symbol(), "❯");
-    assert!(marker.style().add_modifier.contains(Modifier::DIM));
+    assert_eq!(marker.style().fg, muted().fg);
 
-    // No hover, no chrome lit.
+    // No hover: the ✕ sits muted (not lit red), and no card marker shows.
     let buf = draw(None);
-    assert!(buf
-        .cell((53, 0))
-        .unwrap()
-        .style()
-        .add_modifier
-        .contains(Modifier::DIM));
+    let close = buf.cell((53, 0)).unwrap().style();
+    assert_eq!(close.fg, muted().fg);
+    assert_ne!(close.fg, Some(ratatui::style::Color::Red));
     assert_ne!(buf.cell((0, 2)).unwrap().symbol(), "❯");
 }
 

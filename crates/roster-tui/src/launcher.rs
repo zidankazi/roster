@@ -11,7 +11,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Widget;
 use roster_detect::Detector;
 
-use crate::style::ACCENT;
+use crate::style::{muted, ACCENT};
 
 /// One launchable item: a display name and the command it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -314,13 +314,7 @@ impl Widget for Launcher<'_> {
             y += WORDMARK.len() as u16 + 1;
             let tagline = "terminal multiplexer for Claude Code";
             let tag_x = modal.x + (modal.width.saturating_sub(tagline.chars().count() as u16)) / 2;
-            buf.set_stringn(
-                tag_x,
-                y,
-                tagline,
-                usize::from(modal.width),
-                Style::default().add_modifier(Modifier::DIM),
-            );
+            buf.set_stringn(tag_x, y, tagline, usize::from(modal.width), muted());
             y += 2;
         } else {
             frame(buf, modal, " new agent ");
@@ -351,13 +345,7 @@ impl Widget for Launcher<'_> {
             } else {
                 format!("↵ run: {typed}")
             };
-            buf.set_stringn(
-                inner_x,
-                y,
-                hint,
-                inner_w,
-                Style::default().add_modifier(Modifier::DIM),
-            );
+            buf.set_stringn(inner_x, y, hint, inner_w, muted());
         }
         // The modal keeps its bottom border row; the welcome block is
         // borderless.
@@ -389,21 +377,11 @@ impl Widget for Launcher<'_> {
             let avail = right_edge.saturating_sub(name_end + 2);
             let cmd_len = item.command.chars().count() as u16;
             if cmd_len <= avail {
-                buf.set_string(
-                    right_edge - cmd_len,
-                    y,
-                    &item.command,
-                    Style::default().add_modifier(Modifier::DIM),
-                );
+                buf.set_string(right_edge - cmd_len, y, &item.command, muted());
             } else if avail >= 8 {
                 let mut cut: String = item.command.chars().take(usize::from(avail) - 1).collect();
                 cut.push('…');
-                buf.set_string(
-                    right_edge - avail,
-                    y,
-                    &cut,
-                    Style::default().add_modifier(Modifier::DIM),
-                );
+                buf.set_string(right_edge - avail, y, &cut, muted());
             }
             if selected == Some(index) {
                 buf.set_style(
@@ -427,7 +405,7 @@ impl Widget for Launcher<'_> {
                     items_bottom + 1 + row as u16,
                     *hint,
                     inner_w,
-                    Style::default().add_modifier(Modifier::DIM),
+                    muted(),
                 );
             }
         }

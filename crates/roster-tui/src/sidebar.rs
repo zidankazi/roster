@@ -12,7 +12,7 @@ use ratatui::widgets::Widget;
 use roster_core::{AgentState, PaneId, Session};
 use roster_detect::Detector;
 
-use crate::style::{state_color, state_glyph, state_label};
+use crate::style::{muted, state_color, state_glyph, state_label};
 
 /// One sidebar row: an agent pane and everything shown about it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -247,13 +247,7 @@ impl Widget for Sidebar<'_> {
         // Quiet header: lowercase, dim; the blocked count appears on the
         // right only when someone actually needs you.
         let blocked = self.blocked_count();
-        buf.set_stringn(
-            area.x + 1,
-            y,
-            "agents",
-            width.saturating_sub(1),
-            Style::default().add_modifier(Modifier::DIM),
-        );
+        buf.set_stringn(area.x + 1, y, "agents", width.saturating_sub(1), muted());
         if blocked > 0 {
             let summary = format!("{blocked} blocked");
             let len = summary.chars().count() as u16;
@@ -283,7 +277,7 @@ impl Widget for Sidebar<'_> {
                             .fg(crate::style::ACCENT)
                             .add_modifier(Modifier::ITALIC)
                     } else {
-                        Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC)
+                        muted().add_modifier(Modifier::ITALIC)
                     };
                     if self.hovered_window == Some(window) {
                         style = style.add_modifier(Modifier::REVERSED);
@@ -295,13 +289,7 @@ impl Widget for Sidebar<'_> {
                     buf.set_stringn(area.x + 1, y, label, width.saturating_sub(1), style);
                 }
                 SidebarRow::Empty(_) => {
-                    buf.set_stringn(
-                        area.x + 4,
-                        y,
-                        "no agents",
-                        width.saturating_sub(4),
-                        Style::default().add_modifier(Modifier::DIM),
-                    );
+                    buf.set_stringn(area.x + 4, y, "no agents", width.saturating_sub(4), muted());
                 }
                 SidebarRow::EntryName(index) => {
                     let entry = &self.entries[index];
@@ -312,12 +300,7 @@ impl Widget for Sidebar<'_> {
                     } else if self.hovered == Some(index) {
                         // Hover affordance: a quiet marker where selection's
                         // ❯ goes.
-                        buf.set_string(
-                            area.x,
-                            y,
-                            "❯",
-                            Style::default().add_modifier(Modifier::DIM),
-                        );
+                        buf.set_string(area.x, y, "❯", muted());
                     }
 
                     // Glyph + agent name (bold; accented when selected), age
@@ -345,7 +328,7 @@ impl Widget for Sidebar<'_> {
                     );
                     if !age.is_empty() {
                         let x = area.x + area.width - 1 - age.len() as u16;
-                        buf.set_string(x, y, &age, Style::default().add_modifier(Modifier::DIM));
+                        buf.set_string(x, y, &age, muted());
                     }
                 }
                 SidebarRow::EntryDetail(index) => {
@@ -369,7 +352,7 @@ impl Widget for Sidebar<'_> {
                                 y,
                                 format!(" · {}", truncate(reason, rest.saturating_sub(3))),
                                 rest,
-                                Style::default().add_modifier(Modifier::DIM),
+                                muted(),
                             );
                         }
                     }

@@ -27,6 +27,29 @@ pub fn state_label(state: AgentState) -> &'static str {
 /// launcher frame, selection markers).
 pub const ACCENT: Color = Color::Cyan;
 
+/// The muted foreground for roster's own secondary "chrome" — status-line
+/// hints, header subtitles, sidebar ages and reasons, launcher hints,
+/// unfocused pane titles, and the thin rules between regions.
+///
+/// A fixed mid-gray from the 256-color grayscale ramp (index 243 ≈ `#767676`),
+/// deliberately *not* the `DIM`/faint attribute. Many terminals on their
+/// default palette render `DIM` as a barely-visible gray with almost no
+/// contrast against the background; 243 sits at the luminance balance point,
+/// clearing a legible contrast floor (~4.6:1) against both pure black and pure
+/// white. The grayscale ramp is fixed independently of the user's 16-color
+/// theme, so this holds on both default-dark and default-light terminals.
+///
+/// Change the gray here, in one place, to retune all muted chrome. This is for
+/// roster-drawn UI only — guest program output keeps its faithful `DIM`
+/// mapping in [`cell_style`].
+const MUTED: Color = Color::Indexed(243);
+
+/// A [`Style`] for roster's muted secondary chrome (see [`MUTED`]). Call sites
+/// layer their own modifiers (italic headers, reversed hover) on top.
+pub fn muted() -> Style {
+    Style::default().fg(MUTED)
+}
+
 /// Spinner frames for the working state, advanced by the frame tick.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -122,6 +145,20 @@ mod tests {
             state_glyph(AgentState::Working, 0),
             state_glyph(AgentState::Working, 10)
         );
+    }
+
+    #[test]
+    fn muted_chrome_is_an_explicit_color_not_the_dim_attribute() {
+        // The bug this guards: chrome styled with the raw `DIM` attribute and
+        // no explicit foreground renders as a near-invisible faint gray on a
+        // terminal's default palette. Muted chrome must instead carry an
+        // explicit foreground and must not lean on `DIM`.
+        let style = muted();
+        assert_eq!(style.fg, Some(MUTED));
+        assert!(!style.add_modifier.contains(Modifier::DIM));
+        // A fixed grayscale-ramp index, so it's independent of the user's
+        // 16-color theme (unlike ANSI "bright black").
+        assert!(matches!(MUTED, Color::Indexed(_)));
     }
 
     #[test]

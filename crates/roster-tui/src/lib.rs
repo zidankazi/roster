@@ -32,7 +32,7 @@ pub use sidebar::{
     format_age, sidebar_entries, sidebar_rows, Message, Sidebar, SidebarEntry, SidebarRow,
     SidebarState,
 };
-pub use style::{cell_style, state_color, state_glyph, state_label, ACCENT};
+pub use style::{cell_style, muted, state_color, state_glyph, state_label, ACCENT};
 pub use toast::{draw_toasts, toast_rects, ToastLevel};
 
 /// A text selection: the pane and its two `(col, row)` endpoints in
@@ -277,7 +277,7 @@ pub fn render(frame: &mut Frame, view: &View) {
             for y in panes.y + rect.y..panes.y + rect.y + rect.height {
                 if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
                     cell.set_char('│');
-                    cell.set_style(Style::default().add_modifier(Modifier::DIM));
+                    cell.set_style(style::muted());
                 }
             }
         }
@@ -364,7 +364,7 @@ pub fn render(frame: &mut Frame, view: &View) {
     for y in bar.y..bar.y + bar.height {
         if let Some(cell) = frame.buffer_mut().cell_mut((rule_x, y)) {
             cell.set_char('│');
-            cell.set_style(Style::default().add_modifier(Modifier::DIM));
+            cell.set_style(style::muted());
         }
     }
     let mut cards = bar_inner;
@@ -397,7 +397,7 @@ pub fn render(frame: &mut Frame, view: &View) {
                         .fg(style::ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().add_modifier(Modifier::DIM)
+                    style::muted()
                 };
                 if hovered {
                     style = style.add_modifier(Modifier::REVERSED);
@@ -411,12 +411,7 @@ pub fn render(frame: &mut Frame, view: &View) {
                 "grid",
                 word(!view.zoomed, view.hover == Some(Hit::SidebarViewGrid)),
             );
-            buf.set_string(
-                bar_inner.x + 6,
-                view_y,
-                "·",
-                Style::default().add_modifier(Modifier::DIM),
-            );
+            buf.set_string(bar_inner.x + 6, view_y, "·", style::muted());
             buf.set_string(
                 bar_inner.x + 8,
                 view_y,
@@ -506,7 +501,7 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
                 .unwrap_or_default();
             let name = command.split_whitespace().next().unwrap_or("").to_string();
             let name = name.rsplit('/').next().unwrap_or(&name).to_string();
-            ("○", Style::default().add_modifier(Modifier::DIM), name)
+            ("○", style::muted(), name)
         }
     };
 
@@ -530,7 +525,7 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
             .fg(style::ACCENT)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().add_modifier(Modifier::DIM)
+        style::muted()
     };
     // Leave room for the ✕ close button at the right edge when it fits.
     let close = span.width >= 12;
@@ -553,7 +548,7 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
                 .fg(ratatui::style::Color::Red)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().add_modifier(Modifier::DIM)
+            style::muted()
         };
         buf.set_string(span.x + span.width - 2, span.y, "✕", style);
     }
@@ -593,7 +588,7 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
             y,
             view.status,
             usize::from(right_edge - x),
-            Style::default().add_modifier(Modifier::DIM),
+            style::muted(),
         );
     }
     if let Some((rect, text)) = span {

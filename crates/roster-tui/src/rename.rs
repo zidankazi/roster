@@ -7,6 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 use crate::launcher::{fill, frame};
+use crate::style::muted;
 
 const WIDTH: u16 = 46;
 const HEIGHT: u16 = 5;
@@ -61,7 +62,7 @@ pub fn draw_rename(buf: &mut Buffer, area: Rect, window: usize, input: &str) {
         modal.y + modal.height.saturating_sub(2),
         "enter: save · empty input restores auto · esc: cancel",
         inner_w,
-        Style::default().add_modifier(Modifier::DIM),
+        muted(),
     );
 }
 
