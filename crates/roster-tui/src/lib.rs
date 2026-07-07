@@ -20,6 +20,7 @@ mod pane;
 mod rename;
 mod sidebar;
 mod style;
+mod telemetry;
 mod toast;
 
 pub use confirm::{confirm_button_at, confirm_contains, Confirm, ConfirmButton};
@@ -33,6 +34,7 @@ pub use sidebar::{
     SidebarRow, SidebarState,
 };
 pub use style::{cell_style, muted, state_color, state_glyph, state_label, ACCENT};
+pub use telemetry::telemetry_line;
 pub use toast::{draw_toasts, toast_rects, ToastLevel};
 
 /// A text selection: the pane and its two `(col, row)` endpoints in
