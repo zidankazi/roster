@@ -296,8 +296,11 @@ impl Widget for Launcher<'_> {
                     let mut glyph = ch;
                     let mut style = Style::default().fg(ACCENT);
                     if revealed >= mark_width && (0..6).contains(&(col as i32 - shine)) {
+                        // A soft rose — a lighter tint of the brand red — so the
+                        // sweep reads as light glancing off the wordmark rather
+                        // than a hard cold-white flash.
                         style = Style::default()
-                            .fg(ratatui::style::Color::White)
+                            .fg(ratatui::style::Color::Rgb(255, 150, 150))
                             .add_modifier(Modifier::BOLD);
                     }
                     if let Some(stand_in) = flicker(col, row, self.tick) {

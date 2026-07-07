@@ -23,9 +23,12 @@ pub fn state_label(state: AgentState) -> &'static str {
     }
 }
 
-/// The accent color for focus and interactive chrome (focused pane title,
-/// launcher frame, selection markers).
-pub const ACCENT: Color = Color::Cyan;
+/// roster's brand color — a dark red (rgb `223, 44, 44` / `#DF2C2C`) — used
+/// as the accent for the launch wordmark and all interactive chrome (focused
+/// pane title, launcher frame, selection markers). The four semantic state
+/// colors above stay distinct traffic-light hues: the accent is the brand,
+/// the dots are the signal.
+pub const ACCENT: Color = Color::Rgb(223, 44, 44);
 
 /// The muted foreground for roster's own secondary "chrome" — status-line
 /// hints, header subtitles, sidebar ages and reasons, launcher hints,
