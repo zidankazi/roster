@@ -8,10 +8,12 @@
 //! and keeping it in the agent-safe world lets those crates build and test
 //! without any emulator dependency.
 
+mod attention;
 mod grid;
 mod layout;
 mod session;
 
+pub use attention::{rank, AttentionItem};
 pub use grid::{Cell, CellStyle, Color, Cursor, Grid};
 pub use layout::{Rect, SplitDirection};
 pub use session::{AgentState, Pane, PaneId, Session};
