@@ -9,12 +9,14 @@
 //! without any emulator dependency.
 
 mod attention;
+mod context;
 mod grid;
 mod layout;
 mod session;
 mod telemetry;
 
 pub use attention::{rank, AttentionItem};
+pub use context::{context_alert, ContextAlert, CRITICAL_THRESHOLD_PCT, WARN_THRESHOLD_PCT};
 pub use grid::{Cell, CellStyle, Color, Cursor, Grid};
 pub use layout::{Rect, SplitDirection};
 pub use session::{AgentState, Pane, PaneId, Session};
