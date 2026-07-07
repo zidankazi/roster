@@ -8,7 +8,13 @@ pub fn state_color(state: AgentState) -> Color {
     match state {
         AgentState::Blocked => Color::Red,
         AgentState::Working => Color::Yellow,
-        AgentState::Done => Color::Blue,
+        // Blue is intrinsically low-luminance, so the themeable ANSI blue
+        // (index 4) renders as a near-invisible dark navy on a default-palette
+        // dark terminal. Pin done to a fixed azure from the 256-color cube
+        // (index 33, #0087ff) instead — legible on both dark (~5.9:1) and
+        // light (~3.6:1). Red/yellow/green carry enough luminance to stay
+        // readable as the adaptive named colors.
+        AgentState::Done => Color::Indexed(33),
         AgentState::Idle => Color::Green,
     }
 }
@@ -162,6 +168,16 @@ mod tests {
         // A fixed grayscale-ramp index, so it's independent of the user's
         // 16-color theme (unlike ANSI "bright black").
         assert!(matches!(MUTED, Color::Indexed(_)));
+    }
+
+    #[test]
+    fn done_uses_a_legible_explicit_blue_not_ansi_blue() {
+        // ANSI blue (index 4) is near-invisible on a default-palette dark
+        // terminal. Done must use an explicit cube color so it stays legible
+        // regardless of the user's 16-color theme.
+        let done = state_color(AgentState::Done);
+        assert_ne!(done, Color::Blue);
+        assert!(matches!(done, Color::Indexed(_)));
     }
 
     #[test]
