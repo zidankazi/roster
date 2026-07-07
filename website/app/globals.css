@@ -1,0 +1,165 @@
+:root {
+  color-scheme: light;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: #fbfaf7;
+  color: #df2c2c;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+main {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 14vh;
+  gap: 2.75rem;
+}
+
+.wordmark {
+  font-size: clamp(8px, 2.6vw, 18px);
+  line-height: 1.05;
+  user-select: none;
+}
+
+/* Tagline block between the wordmark and the install pill. */
+.tagline {
+  text-align: center;
+  line-height: 1.55;
+  padding: 0 1rem;
+}
+
+.tagline-lead {
+  color: #2b2b2b;
+  font-size: clamp(14px, 3.4vw, 18px);
+  font-weight: 700;
+}
+
+.tagline-sub {
+  margin-top: 6px;
+  color: #6f6a63;
+  font-size: clamp(13px, 3.1vw, 16px);
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.claude-mark {
+  display: inline-block;
+  width: 2.3em;
+  height: 1.55em;
+  margin: 0 0.12em;
+  vertical-align: middle;
+  /* The artwork is bottom-heavy in its frame (thin tail up top, body + legs
+     below), so centering the box still reads low. Nudge it up ~1/6 of its
+     height to sit the body level with the text. */
+  transform: translateY(-16%);
+}
+
+.wordmark-row {
+  white-space: pre;
+}
+
+/* Wordmark.tsx swaps a cell between these classes each animation frame; the
+   positions advance on a continuous clock so the motion stays smooth. */
+.c-off {
+  opacity: 0;
+}
+
+.c-base {
+  color: #df2c2c;
+}
+
+/* A deeper, richer red for the shine sweep. On the off-white background a
+   lighter tint would read as fading, so the glint goes darker to pop. */
+.c-shine {
+  color: #a01717;
+  font-weight: 700;
+}
+
+/* A faded red for a flickering cell — dimmed toward the light background,
+   like a loose-filament bulb. */
+.c-flicker {
+  color: #ecabab;
+}
+
+/* Copy-to-clipboard install pill. The whole thing is the button; its content is
+   rendered as two stacked layers (base + fill) so the text can invert cleanly
+   as the red sweeps under it. */
+.install {
+  position: relative;
+  display: inline-block;
+  max-width: 92vw;
+  overflow-x: auto;
+  border: 1px solid #e7e4dd;
+  border-radius: 10px;
+  background: #f2f0eb;
+  font-family: inherit;
+  font-size: clamp(12px, 3.2vw, 15px);
+  cursor: pointer;
+  transition: border-color 260ms ease;
+}
+
+.install:hover,
+.install:focus-visible {
+  border-color: #df2c2c;
+}
+
+.install:focus-visible {
+  outline: 2px solid #df2c2c;
+  outline-offset: 2px;
+}
+
+/* Both layers share identical layout so their glyphs align pixel-for-pixel. */
+.install-layer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  white-space: nowrap;
+}
+
+/* Resting layer: charcoal on the off-white pill. */
+.install-base {
+  color: #2b2b2b;
+}
+
+/* Fill layer: warm white on brand red, revealed left-to-right by a clip-path
+   that sweeps in lockstep with nothing else — it *is* the fill, so text and
+   background reveal together and every frame stays legible. */
+.install-fill {
+  position: absolute;
+  inset: 0;
+  color: #fff7f4;
+  background: #df2c2c;
+  clip-path: inset(0 100% 0 0);
+  transition: clip-path 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.install:hover .install-fill,
+.install:focus-visible .install-fill {
+  clip-path: inset(0 0 0 0);
+}
+
+.install-prompt {
+  font-weight: 700;
+}
+
+.install-icon {
+  display: inline-flex;
+  color: inherit;
+}
