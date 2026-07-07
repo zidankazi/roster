@@ -5,5 +5,9 @@ target/
 website/node_modules/
 website/.next/
 
+# Claude Code session state — never commit (live worktrees, personal settings)
+.claude/worktrees/
+.claude/settings.local.json
+
 # OS
 .DS_Store
