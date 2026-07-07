@@ -149,6 +149,11 @@ fn run_session(name: &str, args: &cli::Args, create: bool) -> Result<(), String>
 /// its socket to answer.
 fn spawn_server(name: &str) -> Result<(), String> {
     use std::os::unix::process::CommandExt;
+    // Vet the socket dir client-side too: the detached server's stderr goes
+    // to /dev/null, so its refusal of a hostile dir would otherwise surface
+    // only as "never came up".
+    let dir = server::sessions_dir().ok_or("no home directory")?;
+    server::ensure_private_dir(&dir)?;
     let exe = std::env::current_exe().map_err(|e| format!("finding roster binary: {e}"))?;
     let mut command = std::process::Command::new(exe);
     command

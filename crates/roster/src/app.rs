@@ -1922,8 +1922,10 @@ pub fn default_shell() -> String {
 /// sockets: `roster ls`/`kill`/`attach` probe every top-level `*.sock` as
 /// a session, and this listener speaks no session protocol.
 fn start_hook_listener(tx: Sender<Output>) -> Option<PathBuf> {
-    let dir = crate::server::sessions_dir()?.join("hook");
-    std::fs::create_dir_all(&dir).ok()?;
+    let base = crate::server::sessions_dir()?;
+    crate::server::ensure_private_dir(&base).ok()?;
+    let dir = base.join("hook");
+    crate::server::ensure_private_dir(&dir).ok()?;
     let path = dir.join(format!("{}.sock", std::process::id()));
     // A stale socket from a recycled pid would block the bind. Unlike the
     // session dir, nothing long-lived legitimately owns this name.

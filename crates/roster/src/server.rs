@@ -26,7 +26,8 @@ const SPAWN_ROWS: u16 = 24;
 
 /// Where session sockets live: `$ROSTER_SOCK_DIR`, or `/tmp/roster-<uid>`
 /// (the tmux convention). Unix socket paths must stay under ~104 bytes on
-/// macOS, which rules out deep per-user state directories.
+/// macOS, which rules out deep per-user state directories. Anything that
+/// creates this directory must go through [`ensure_private_dir`].
 pub fn sessions_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("ROSTER_SOCK_DIR") {
         return Some(PathBuf::from(dir));
@@ -38,6 +39,48 @@ pub fn sessions_dir() -> Option<PathBuf> {
 /// The socket path for a named session.
 pub fn socket_path(name: &str) -> Option<PathBuf> {
     Some(sessions_dir()?.join(format!("{name}.sock")))
+}
+
+/// Create `dir` private to the current user (mode 0700), or vet the one
+/// already there. The default sessions dir sits in world-writable `/tmp`
+/// under a predictable name, so another local user could pre-create it (or
+/// plant a symlink) and own every socket dropped inside — and the umask
+/// default would leave a fresh one world-readable. A pre-existing path must
+/// be a real directory (not a symlink) owned by the current uid; any mode
+/// that isn't exactly 0700 is reset (both loose group/world bits and an
+/// owner-restrictive mode a socket couldn't bind under), anything else is
+/// refused.
+pub fn ensure_private_dir(dir: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder
+        .create(dir)
+        .map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    // symlink_metadata: a planted symlink must be seen as itself, not
+    // followed to wherever it points.
+    let meta =
+        std::fs::symlink_metadata(dir).map_err(|e| format!("checking {}: {e}", dir.display()))?;
+    if !meta.is_dir() {
+        return Err(format!("{} is not a directory", dir.display()));
+    }
+    let uid = unsafe { libc::getuid() };
+    if meta.uid() != uid {
+        return Err(format!(
+            "{} is owned by uid {}, not uid {uid} — refusing to use it",
+            dir.display(),
+            meta.uid()
+        ));
+    }
+    // Force exactly 0700. Checking only the group/world bits would pass a
+    // dir left at 0600/0500 (or a fresh 0700 masked down by an unusual
+    // umask), which is private but can't hold a socket — bind would then
+    // fail EACCES with no hint why.
+    if meta.mode() & 0o7777 != 0o700 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("tightening permissions on {}: {e}", dir.display()))?;
+    }
+    Ok(())
 }
 
 /// Session names stay path- and shell-safe.
@@ -100,7 +143,7 @@ pub fn run(name: &str) -> Result<(), String> {
     }
 
     let dir = sessions_dir().ok_or("no home directory")?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    ensure_private_dir(&dir)?;
     let path = socket_path(name).expect("dir resolved");
     match UnixListener::bind(&path) {
         Ok(listener) => serve(name, listener, &path),
@@ -397,5 +440,67 @@ fn send_to_client(client: &mut Option<(u64, UnixStream)>, frame: &Frame) {
         if write_frame(stream, frame).is_err() {
             *client = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    /// A fresh path under the system temp dir, cleared of leftovers.
+    fn scratch(name: &str) -> PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("roster-dirtest-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn private_dir_is_created_without_group_world_access() {
+        let dir = scratch("fresh");
+        ensure_private_dir(&dir).expect("create");
+        let mode = std::fs::metadata(&dir).expect("stat").mode();
+        assert_eq!(mode & 0o077, 0, "mode {mode:o} leaks group/world access");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    #[test]
+    fn a_non_0700_existing_dir_is_reset_to_0700() {
+        // Both a looser mode (group/world bits) and an owner-restrictive one
+        // (private but too tight to bind a socket under) must land at 0700.
+        for pre in [0o755, 0o750, 0o600, 0o500] {
+            let dir = scratch(&format!("mode{pre:o}"));
+            std::fs::create_dir_all(&dir).expect("pre-create");
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(pre)).expect("chmod");
+            ensure_private_dir(&dir).expect("vet");
+            let mode = std::fs::metadata(&dir).expect("stat").mode();
+            assert_eq!(
+                mode & 0o777,
+                0o700,
+                "mode {pre:o} was not reset (got {mode:o})"
+            );
+            std::fs::remove_dir_all(&dir).expect("cleanup");
+        }
+    }
+
+    #[test]
+    fn a_plain_file_at_the_path_is_refused() {
+        let path = scratch("file");
+        std::fs::write(&path, b"not a dir").expect("write");
+        assert!(ensure_private_dir(&path).is_err());
+        std::fs::remove_file(&path).expect("cleanup");
+    }
+
+    #[test]
+    fn a_symlink_at_the_path_is_refused() {
+        let target = scratch("link-target");
+        std::fs::create_dir_all(&target).expect("target");
+        let link = scratch("link");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        assert!(ensure_private_dir(&link).is_err());
+        std::fs::remove_file(&link).expect("cleanup link");
+        std::fs::remove_dir_all(&target).expect("cleanup target");
     }
 }
