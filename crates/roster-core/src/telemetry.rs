@@ -1,7 +1,7 @@
 //! Agent telemetry snapshot shared by detection, ranking, and the sidebar.
 //!
-//! One bounded vocabulary for the statusline-fed numbers, so `roster-detect`
-//! and `roster-tui` agree on shape without depending on each other. All
+//! One bounded vocabulary for the statusline-fed numbers, owned by the
+//! zero-dep model crate so every consumer shares one shape. All
 //! fields are optional: a pane without the statusline feed simply carries
 //! `Telemetry::default()`. See `docs/05-claude-native-attention.md`.
 

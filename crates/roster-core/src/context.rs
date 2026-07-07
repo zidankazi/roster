@@ -20,8 +20,11 @@ pub const CRITICAL_THRESHOLD_PCT: f32 = 10.0;
 
 /// The alert level for a remaining-context percentage, or `None` when the
 /// reading is absent or healthy.
+///
+/// A non-finite reading (NaN, ±inf) is garbage, not a measurement, and is
+/// treated as absent rather than classified.
 pub fn context_alert(remaining_pct: Option<f32>) -> Option<ContextAlert> {
-    let pct = remaining_pct?;
+    let pct = remaining_pct.filter(|p| p.is_finite())?;
     if pct <= CRITICAL_THRESHOLD_PCT {
         Some(ContextAlert::Critical)
     } else if pct <= WARN_THRESHOLD_PCT {
@@ -61,6 +64,13 @@ mod tests {
     #[test]
     fn boundary_exactly_ten_is_critical() {
         assert_eq!(context_alert(Some(10.0)), Some(ContextAlert::Critical));
+    }
+
+    #[test]
+    fn non_finite_readings_are_treated_as_absent() {
+        assert_eq!(context_alert(Some(f32::NAN)), None);
+        assert_eq!(context_alert(Some(f32::INFINITY)), None);
+        assert_eq!(context_alert(Some(f32::NEG_INFINITY)), None);
     }
 
     #[test]
