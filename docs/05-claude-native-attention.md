@@ -1,30 +1,26 @@
 # 05 — the Claude-native attention layer
 
-*The strategic direction for roster after persistence. Read this to understand **what we are building next and why it is different from herdr**. Everything in docs 00–04 describes the multiplexer; this describes the bet that makes the multiplexer worth choosing. If you are an agent picking up work on roster, this is the north star — align changes to it.*
+*The strategic direction for roster after persistence. Read this to understand **what we are building next and why it is the differentiator**. Everything in docs 00–04 describes the multiplexer; this describes the bet that makes the multiplexer worth choosing. If you are an agent picking up work on roster, this is the north star — align changes to it.*
 
-## The problem this solves: we are not yet different from herdr
+## Why this is the differentiator: read Claude's state, don't scrape pixels
 
-Be honest about the competitive picture, because the plan only makes sense against it.
+roster is the cockpit for Claude Code fleets, and that focus *is* the moat. A generic multiplexer has to detect every agent the same way — **regex screen-scraping the terminal grid** (roster's own baseline is [`roster-detect`](../crates/roster-detect), see [02-state-detection.md](02-state-detection.md)). Scraping is a fine baseline, but it has a hard ceiling that a breadth-first, any-agent tool can never leave:
 
-[herdr](https://github.com/ogulcancelik/herdr) is the same product as roster, further along: a single Rust binary, an agent-state sidebar (🔴🟡🔵🟢 — the same four glyphs), persistent detach/reattach sessions, ssh attach, mouse-native with a `ctrl-b` prefix, 14+ agent integrations, a commercial license, and a large head start on adoption. Feature-for-feature we are near-identical, and **we will not win a parity race** on the generic multiplexer. That ground is taken.
-
-We are also tied on *technique*, and that is the opening. Both tools detect agent state the same way: **regex screen-scraping the terminal grid** (ours is [`roster-detect`](../crates/roster-detect), see [02-state-detection.md](02-state-detection.md); herdr calls it "process-name matching + terminal-output heuristics"). Scraping pixels has a hard ceiling:
-
-- It can only report **what is painted on screen**. Token burn, context-window remaining, cost, model, rate-limit status, *which* tool is being invoked with *what* arguments — none of that is reliably on the grid, so neither tool can show it.
+- It can only report **what is painted on screen**. Token burn, context-window remaining, cost, model, rate-limit status, *which* tool is being invoked with *what* arguments — none of that is reliably on the grid, so a scraper can't show it.
 - It is **fragile and laggy** — a Claude Code UI tweak breaks a regex; "blocked" surfaces two frames late; "done" is an 8-second recency guess.
 
-Herdr cannot leave that ceiling without abandoning its "works with any of 14 agents" pitch — generic scraping is the only thing that works across all of them. **We can leave it, for one agent.** That is the whole plan.
+Because roster commits to one agent, it can walk through a door a generic tool can't: read Claude Code's own structured state instead of the pixels. That is the whole plan — not a faster status dot, a categorically better signal.
 
 ## The bet, in one line
 
-> **herdr scrapes the pixels of any agent. roster reads Claude Code's actual state — and builds the entire UI around who needs you and why.**
+> **Generic tools scrape the pixels of any agent. roster reads Claude Code's actual state — and builds the entire UI around who needs you and why.**
 
 Two moves, fused into one product:
 
 1. **Claude-native depth** — for Claude Code panes, stop reading pixels. Read Claude Code's own structured state: its hooks (exact events + the permission-decision channel) and its statusline feed (telemetry). Get exact events and data the screen never shows.
 2. **The attention layer** — spend that richer signal on a UI organized around one question: *which agent needs me right now, and for what?* Not a grid of panes with status dots — an attention queue.
 
-Depth is the fuel; the attention layer is the engine. Neither is interesting alone. Together they are something herdr structurally cannot copy without ceasing to be herdr.
+Depth is the fuel; the attention layer is the engine. Neither is interesting alone. Together they are something a breadth-first, any-agent tool structurally cannot copy without abandoning the very generality that defines it.
 
 This is a **deliberate narrowing**: roster becomes "the cockpit for running Claude Code fleets" first, and a generic multiplexer second. That is the right trade at this stage. Own it in the README; do not hide it.
 
@@ -87,8 +83,8 @@ Add the integration as a new bounded piece, respecting the one-way dependency ru
 This is what the user actually sees. The organizing principle: **the sidebar is not a list of panes, it is a ranked list of demands on your attention.**
 
 - **Attention inbox** — one queue across every workspace: agents that need you, ranked (longest-blocked first, or destructive-action-pending first), each row the *verbatim* ask from `PreToolUse`/`Notification` ("approve `git push --force origin main`?"), not a scraped fragment. A key jumps to and answers the top item.
-- **Answer from the sidebar** — because the hook tells us it is a decision on a known tool, offer allow/deny inline without focusing the pane. The mechanism is confirmed: our `PermissionRequest`/`PreToolUse` hook returns `hookSpecificOutput.permissionDecision` (`allow`/`deny`/`ask`/`defer`) reflecting the user's sidebar answer. This is the single most herdr-can't-do feature in the plan — a screen-scraper can only send keystrokes to a pane; we can *answer the actual permission request*.
-- **Real push, not just reattach** — herdr's remote story is *reattach from your phone*; ours can *push the actual event* the moment it fires ("claude-code blocked: approve deleting `target/`?"). The hook is the trigger.
+- **Answer from the sidebar** — because the hook tells us it is a decision on a known tool, offer allow/deny inline without focusing the pane. The mechanism is confirmed: our `PermissionRequest`/`PreToolUse` hook returns `hookSpecificOutput.permissionDecision` (`allow`/`deny`/`ask`/`defer`) reflecting the user's sidebar answer. This is the single feature a screen-scraper structurally cannot do — it can only send keystrokes to a pane; we can *answer the actual permission request*.
+- **Real push, not just reattach** — the usual remote story for these tools is *reattach from your phone*; ours can *push the actual event* the moment it fires ("claude-code blocked: approve deleting `target/`?"). The hook is the trigger.
 - **Fleet telemetry** — per card: model, context-remaining %, $ spent, blocked-for duration. Session-wide: total spend, count-waiting, and a **context-exhaustion warning** (from statusline `context_window.remaining_percentage` / `exceeds_200k_tokens`, and the `PreCompact` hook) *before* an agent compacts mid-task and loses the thread.
 - **Precise done** — `Stop` retires an agent from the "working" set exactly, so 🔵 done means done, not "quiet for 8 seconds."
 
@@ -108,7 +104,7 @@ The ranked cross-workspace queue in `roster-tui`, verbatim reasons, jump-to-answ
 **Phase 4 — answer-from-sidebar, push, telemetry (keyboard).**
 The decision contract, notifications, per-card and session telemetry. Each is additive on the Phase 1–2 bridge.
 
-Phase 1 alone already makes roster visibly better than herdr on the one thing we claim as our wedge (showing *why*, exactly and instantly). Everything after stacks on that bridge.
+Phase 1 alone already makes roster visibly deliver the one thing we claim as our wedge (showing *why*, exactly and instantly), beyond anything a screen-scraper can reach. Everything after stacks on that bridge.
 
 ## Future ideas — not yet scheduled
 
@@ -123,14 +119,14 @@ Raw material for a later phase, surfaced while re-checking this doc against the 
 
 ## Non-goals and honesty
 
-- **Not an agent-orchestration API.** Herdr lets agents drive the multiplexer (spawn helpers, split panes) over a socket. That is *their* bet — agents watching agents. Ours is the opposite: a human watching agents. Do not drift into building their product. If we ever want an API, it is a separate, later decision.
+- **Not an agent-orchestration API.** Letting agents drive the multiplexer — spawn helpers, split panes — over a socket is a different product: agents watching agents. Ours is the opposite: a human watching agents. Do not drift into building that. If we ever want an API, it is a separate, later decision.
 - **Do not break the screen-based path.** Every change here is additive behind `Option`/fallback. A user who declines the hook install — or runs a non-Claude command in a pane — must see exactly today's screen-based behavior.
-- **The moat is only as deep as we go.** Herdr already ships an npm skill; "we have an integration too" is not a moat. The defensibility is specifically the **permission-decision loop + statusline telemetry wired into an attention UI** — answering the actual permission request and ranking a fleet by who needs you, not just mirroring a status dot. That is the Claude-specific depth herdr's breadth-first design will not chase. If we stop at a shallow status echo, we have differentiated nothing.
+- **The moat is only as deep as we go.** A shallow "we have a Claude integration too" is not a moat — anyone can ship one. The defensibility is specifically the **permission-decision loop + statusline telemetry wired into an attention UI** — answering the actual permission request and ranking a fleet by who needs you, not just mirroring a status dot. That is Claude-specific depth a breadth-first, any-agent design will not chase. If we stop at a shallow status echo, we have differentiated nothing.
 - **This narrows the story.** "The Claude Code cockpit" is a smaller target than "multiplex any agent." That is the intended trade. State it plainly in positioning rather than straddling.
 
 ## The bar
 
-A person running six Claude Code agents glances at roster and, without touching a pane, knows: who is blocked and on exactly what, who is about to do something they should stop, who is burning context, and who actually finished. Herdr can show them six status dots. That gap is the product.
+A person running six Claude Code agents glances at roster and, without touching a pane, knows: who is blocked and on exactly what, who is about to do something they should stop, who is burning context, and who actually finished. A plain status tool can show them six colored dots. That gap is the product.
 
 ## Open questions (resolve before/while building)
 
@@ -154,5 +150,3 @@ Integration surface confirmed against the official Claude Code 2.x docs:
 - Sessions / transcript storage + the "format is internal, don't parse" warning: <https://code.claude.com/docs/en/sessions.md>
 - Statusline JSON fields: <https://code.claude.com/docs/en/statusline.md>
 - Permission modes: <https://code.claude.com/docs/en/permission-modes.md>
-
-Competitive reference: [herdr](https://github.com/ogulcancelik/herdr) · <https://herdr.dev/>

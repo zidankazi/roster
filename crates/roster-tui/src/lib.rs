@@ -49,7 +49,7 @@ pub const STATUS_HEIGHT: u16 = 1;
 /// Which edge the sidebar occupies.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SidebarSide {
-    /// Sidebar on the left, panes to its right (the default, herdr-style).
+    /// Sidebar on the left, panes to its right (the default).
     #[default]
     Left,
     /// Sidebar on the right, panes to its left.

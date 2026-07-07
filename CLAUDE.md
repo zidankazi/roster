@@ -33,7 +33,7 @@ enforced. Follow it every session.
 6. **Delete dead code.** Don't leave commented-out blocks or unused items
    "in case." Git remembers; the working tree should only hold what's live.
 7. **Keep the wedge sharp.** roster's differentiator is state **+ reason**, and
-   the Claude-native attention layer (docs/05). Do not drift toward herdr's
+   the Claude-native attention layer (docs/05). Do not drift toward an
    agent-orchestration socket API — that is an explicit non-goal (docs/05).
 8. **Never make a gate pass by weakening it.** Do not delete, skip, or loosen
    tests, add `#[allow]` to silence clippy, or widen the deny/arch allowlists

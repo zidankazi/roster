@@ -36,7 +36,7 @@ For every agent pane, detection produces a `StateReading { state, reason }`:
 
 ## Debouncing — the trust feature
 
-**Never flip a committed state on a single frame.** This is the rule that makes people trust the sidebar. herdr shipped a real bug where a double state-flip repainted the dot mid-frame; false "blocked" flickers are exactly what make a status tool feel unreliable and get abandoned.
+**Never flip a committed state on a single frame.** This is the rule that makes people trust the sidebar. A double state-flip that repaints the dot mid-frame produces false "blocked" flickers — exactly what makes a status tool feel unreliable and get abandoned.
 
 - Require a candidate state to persist for K consecutive readings (start K=2–3) before committing it.
 - Exception: transitions *into* `blocked` may commit faster (1 reading), because a real "needs you" should surface quickly and a brief false-blocked is less costly than a missed one. Tune this.

@@ -26,7 +26,7 @@ website/
     Hero.tsx
     Demo.tsx             # the asciinema/gif embed — the centerpiece
     Install.tsx          # copy-paste install snippet
-    Comparison.tsx       # roster vs tmux vs herdr (the wedge, visualized)
+    Comparison.tsx       # roster vs tmux vs a status-only tool (the wedge, visualized)
   content/               # (later) .mdx docs pages
   public/
     demo.cast            # asciinema recording, or demo.gif
@@ -43,7 +43,7 @@ Keep it to a single focused screen. Order:
 1. **Hero:** the positioning line — *"Claude Code awareness for the terminal you already run."* One sentence under it: run your Claude Code agents in panes, see who's blocked / working / done at a glance, plus what each one needs.
 2. **The demo:** an asciinema recording (preferred over gif — crisp, small, copy-able) of six Claude Code agents running, the sidebar lighting up, you jumping straight to the blocked one. This is 80% of the page's job. Autoplay, loop, no controls needed.
 3. **Install:** the single line. `brew install zidankazi/roster/roster` (and a curl fallback). Copy button.
-4. **The wedge, shown not told:** a tight comparison — bare tmux (no awareness), herdr (a dot), roster (a dot + the reason). Three columns. This is where you make the differentiator legible to someone who's never seen the tool.
+4. **The wedge, shown not told:** a tight comparison — bare tmux (no awareness), a status-only tool (a dot), roster (a dot + the reason). Three columns. This is where you make the differentiator legible to someone who's never seen the tool.
 5. **Footer:** GitHub, license, a line of honesty ("v1, built in the open").
 
 Resist a features wall. The demo and the one-line install carry it. If someone watches the cast and reads the install line, they're converted; everything else is noise.

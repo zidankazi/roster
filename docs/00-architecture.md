@@ -8,7 +8,7 @@
 
 **Is:** a multiplexer for Claude Code — panes running Claude Code (or any command), a live explainable-state sidebar that shows the reason each agent is blocked, jump-to-pane, and persistent sessions you can detach from and re-attach to over ssh. Detection is screen-based today; reading Claude Code's own hooks and statusline is the committed direction ([`05-claude-native-attention.md`](05-claude-native-attention.md)).
 
-**Is not:** no git worktrees, no diff/review UI, and — deliberately — no agent-orchestration socket API for agents to drive the multiplexer. That last one is herdr's bet; keeping the human in the cockpit is ours (see docs/05). Not a security boundary: it spawns your already-logged-in agents as child processes, exactly as tmux would.
+**Is not:** no git worktrees, no diff/review UI, and — deliberately — no agent-orchestration socket API for agents to drive the multiplexer. That last one is a different product — agents watching agents; keeping the human in the cockpit is ours (see docs/05). Not a security boundary: it spawns your already-logged-in agents as child processes, exactly as tmux would.
 
 ## Repo layout
 
@@ -72,9 +72,9 @@ scraping. See [`05-claude-native-attention.md`](05-claude-native-attention.md).
 
 ## The wedge (keep this sharp)
 
-herdr shows a colored dot; `roster` shows the dot **plus the reason** — "blocked: *Allow edit to config.ts?*". State-with-explanation is the distinctive spine. The lane is real and contested (rmux is doing from-scratch-Rust-multiplexer-for-agents too), so v1's job is to nail that one differentiator and stay tight, not to out-feature anyone.
+A status-only tool shows a colored dot; `roster` shows the dot **plus the reason** — "blocked: *Allow edit to config.ts?*". State-with-explanation is the distinctive spine. The lane is real and contested, so v1's job is to nail that one differentiator and stay tight, not to out-feature anyone.
 
-**Where this is heading (post-persistence):** the reason spine widens into a Claude-native attention layer — read Claude Code's own hooks + statusline instead of scraping pixels, and organize the UI around who needs you and why. This is the committed strategic direction; **[05-claude-native-attention.md](05-claude-native-attention.md) is the north star** for what we build next and how it separates us from herdr. Read it before starting new feature work.
+**Where this is heading (post-persistence):** the reason spine widens into a Claude-native attention layer — read Claude Code's own hooks + statusline instead of scraping pixels, and organize the UI around who needs you and why. This is the committed strategic direction; **[05-claude-native-attention.md](05-claude-native-attention.md) is the north star** for what we build next and how it sets roster apart. Read it before starting new feature work.
 
 ## Where to go next
 
@@ -82,4 +82,4 @@ herdr shows a colored dot; `roster` shows the dot **plus the reason** — "block
 - `02-state-detection.md` — the heart: how state and reason are derived, debouncing, per-agent config.
 - `03-build-sequence.md` — the order to build in, and the agent-safe vs keyboard split per milestone.
 - `04-website.md` — the Next.js landing page and how it stays isolated.
-- `05-claude-native-attention.md` — **the strategic direction after persistence**: the Claude-native attention layer, how it differs from herdr, and the phased plan. Start here for new feature work.
+- `05-claude-native-attention.md` — **the strategic direction after persistence**: the Claude-native attention layer, what sets it apart, and the phased plan. Start here for new feature work.
