@@ -10,6 +10,9 @@ repository.workspace = true
 regex = "1.12.4"
 roster-core = { path = "../roster-core" }
 serde = { version = "1.0.228", features = ["derive"] }
+# Statusline telemetry arrives as JSON; serde_json is already the tree's
+# JSON parser (the roster binary uses it for hook payloads).
+serde_json = "1"
 toml = "1.1.2"
 
 [lints]

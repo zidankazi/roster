@@ -12,6 +12,10 @@
 
 mod config;
 mod detector;
+// Public as a module (not flat re-exported like the rest): the entry point
+// is deliberately named `statusline::parse`, which only reads correctly
+// behind its module path.
+pub mod statusline;
 mod track;
 
 pub use config::{AgentConfig, ConfigError, ReasonSource};

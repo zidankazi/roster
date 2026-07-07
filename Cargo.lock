@@ -1276,6 +1276,7 @@ dependencies = [
  "regex",
  "roster-core",
  "serde",
+ "serde_json",
  "toml",
 ]
 

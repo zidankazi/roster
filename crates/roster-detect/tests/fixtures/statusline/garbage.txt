@@ -1,0 +1,5 @@
+{"model": {"display_name": "Opus", "cost": {"total_cost_
+�PNG
+
+\x00\x1b[31mnot json at all\x1b[0m
+<<<<<<< HEAD
