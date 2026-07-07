@@ -1,58 +1,98 @@
 # 04 — website
 
-*The `/website` landing page. Next.js, its own pnpm project, fully isolated from Cargo. For a tool like this the landing page is not a side quest — it's the pitch. "The demo is the product" applies here more than anywhere.*
+*The `/website` landing page: Next.js, its own Bun project, fully isolated
+from Cargo. For a tool like this the landing page is not a side quest — it's
+the pitch. "The demo is the product" applies here more than anywhere.*
 
 ## Isolation rules (do not violate)
 
-`website/` is a self-contained pnpm project. It shares the git repo with the Rust crates and nothing else.
+`website/` is a self-contained **Bun** project. It shares the git repo with
+the Rust crates and nothing else.
 
-- Its own `package.json` and `pnpm-lock.yaml` live in `website/`, not at the repo root.
-- The root `Cargo.toml` does **not** reference it. Cargo never sees `node_modules`.
-- Root `.gitignore` must cover both worlds: `target/` (Rust) and `website/node_modules/`, `website/.next/` (JS).
-- The only allowed bridge: if the site needs data from the Rust side (e.g. a generated feature table or version), the Rust build emits a JSON file the site imports at build time. Never a shared package manager, never a runtime call from site to binary.
+- Its own `package.json` and `bun.lock` live in `website/`, never at the
+  repo root. The lockfile in the tree is the package-manager authority —
+  never introduce a second lockfile or a second manager.
+- The root `Cargo.toml` does **not** reference it. Cargo never sees
+  `node_modules`; Bun never sees `target/`.
+- Root `.gitignore` covers both worlds (`target/`, `website/node_modules/`,
+  `website/.next/`); `website/.gitignore` additionally covers the site's own
+  build output (`out/`, `next-env.d.ts`).
+- The only allowed bridge: if the site needs data from the Rust side (a
+  version, a feature table), the Rust build emits a JSON file the site
+  imports at build time. Never a shared package manager, never a runtime
+  call from site to binary.
 
-## Structure
+## What it is
+
+Next.js 15 (App Router) + React 19, TypeScript strict. Everything lives
+under `app/` — components sit next to the one route that uses them; there is
+no separate `components/` tree.
 
 ```
 website/
-  package.json
-  pnpm-lock.yaml
-  next.config.mjs        # MDX enabled here for later
+  package.json         # scripts are plain `next dev/build/start/lint`
+  bun.lock             # Bun's lockfile — the authority (see isolation rules)
+  vercel.json          # deploy config; skips builds when website/ didn't change
+  next.config.mjs      # default-empty today
+  tsconfig.json
   app/
-    page.tsx             # the landing page
-    layout.tsx
-    docs/[[...slug]]/     # (later) MDX-rendered docs, when you want them
-  components/
-    Hero.tsx
-    Demo.tsx             # the asciinema/gif embed — the centerpiece
-    Install.tsx          # copy-paste install snippet
-    Comparison.tsx       # roster vs tmux vs a status-only tool (the wedge, visualized)
-  content/               # (later) .mdx docs pages
-  public/
-    demo.cast            # asciinema recording, or demo.gif
+    layout.tsx         # metadata + Navbar wrapper
+    page.tsx           # the landing page: Wordmark → Tagline → InstallCommand
+    globals.css        # all styling — plain CSS, no framework
+    Navbar.tsx         # brand left; docs + GitHub links right
+    Wordmark.tsx       # the animated ASCII wordmark
+    Tagline.tsx        # the pitch lines, animated Claude mark inline
+    ClaudeMark.tsx     # Lottie-rendered Claude mark (asset: claude-lottie.json)
+    InstallCommand.tsx # the brew line, copy button, red sweep
 ```
 
-## Why Next.js + MDX (the call you made)
+Two deliberate brand bridges — keep them true:
 
-Plain HTML would ship the landing page faster, but you chose Next.js to leave room for **real MDX docs later** — Markdown pages with live React components (interactive install pickers, embedded demos). That's a legitimate reason and the one case where MDX earns its place: a *rendered docs site*, as opposed to the `/docs` folder, which stays plain `.md` because those are read by agents, not browsers. Enable MDX in `next.config.mjs` now so it's ready; don't build the docs section until v1 ships.
+- **The wordmark is the binary's wordmark.** `Wordmark.tsx` embeds
+  byte-for-byte the figlet Georgia11 art roster paints on launch
+  (`crates/roster-tui/src/launcher.rs`). If the TUI art ever changes, the
+  site copy changes in the same change.
+- **The tagline is the positioning.** "Terminal multiplexer for Claude Code
+  agents" — the same story as the README's first line and docs/05. Don't
+  let the site drift back into generic any-agent language the repo already
+  moved away from.
 
-## Landing page content (v1 — one screen, one pitch)
+## One screen, one pitch
 
-Keep it to a single focused screen. Order:
+Keep it to a single focused screen. What carries it:
 
-1. **Hero:** the positioning line — *"Claude Code awareness for the terminal you already run."* One sentence under it: run your Claude Code agents in panes, see who's blocked / working / done at a glance, plus what each one needs.
-2. **The demo:** an asciinema recording (preferred over gif — crisp, small, copy-able) of six Claude Code agents running, the sidebar lighting up, you jumping straight to the blocked one. This is 80% of the page's job. Autoplay, loop, no controls needed.
-3. **Install:** the single line. `brew install zidankazi/roster/roster` (and a curl fallback). Copy button.
-4. **The wedge, shown not told:** a tight comparison — bare tmux (no awareness), a status-only tool (a dot), roster (a dot + the reason). Three columns. This is where you make the differentiator legible to someone who's never seen the tool.
-5. **Footer:** GitHub, license, a line of honesty ("v1, built in the open").
+1. **Wordmark + tagline** — who this is for, in two lines.
+2. **Install** — `brew install zidankazi/roster/roster` with a copy button.
+   If someone reads the tagline and copies the line, the page did its job.
+3. **The demo cast — still the missing centerpiece.** An asciinema
+   recording of several Claude Code agents running, the sidebar lighting up
+   with reasons, and a jump straight to the blocked one. That recording is
+   the single highest-leverage asset in the whole project — record it the
+   moment the sidebar looks good. A great cast with a rough binary beats a
+   polished binary nobody can see working.
+4. If a comparison section ever lands, keep it generic — tmux / GUI
+   managers / status-only tools, matching the README table. Never name
+   specific competing products in the repo.
 
-Resist a features wall. The demo and the one-line install carry it. If someone watches the cast and reads the install line, they're converted; everything else is noise.
+Resist a features wall. The demo and the one-line install carry it;
+everything else is noise.
 
-## Build/deploy
+## Build, run, deploy
 
-- `pnpm dev` locally; static export or Vercel for deploy (Vercel is one click for Next.js and free for this).
-- The domain is part of the pitch — grab `roster` across npm/crates/GitHub and the matching domain together.
+```sh
+cd website
+bun install
+bun run dev      # local convention: --port 3002, clear of other dev servers
+bun run build    # the gate for any site change — run it before proposing one
+```
 
-## Sequence
+Deployment is Vercel, rooted at `website/`; `vercel.json`'s `ignoreCommand`
+skips deploys for commits that didn't touch the directory.
 
-The binary works; build the site when you're ready to launch — but record the demo cast the moment the sidebar looks good, because that recording is the single highest-leverage asset in the whole project. A great cast with a rough binary beats a polished binary nobody can see working.
+## Later, maybe
+
+**MDX docs.** Next.js was chosen over plain HTML to leave room for a
+rendered docs site (Markdown pages with live components) later. Nothing is
+configured for it today — `next.config.mjs` is empty — and `/docs` stays
+plain `.md` regardless: those files are read by agents, not browsers. Don't
+build a docs site before the demo cast exists.

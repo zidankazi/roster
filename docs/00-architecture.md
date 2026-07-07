@@ -26,7 +26,7 @@ roster/
     roster-tui/         # ratatui rendering: panes + the sidebar
     roster/             # the binary; wires everything, owns the event loop
   docs/                 # THIS folder — plain .md architecture docs
-  website/              # Next.js landing page — ISOLATED pnpm project
+  website/              # Next.js landing page — ISOLATED Bun project
 ```
 
 ## Two toolchains, one git repo
@@ -34,9 +34,9 @@ roster/
 This is a monorepo in the loosest sense: one git repo, two independent build systems that do not share a package manager.
 
 - **Cargo** owns everything under `crates/`. The workspace root `Cargo.toml` lists them as members.
-- **pnpm** owns `website/` only. It has its own `package.json` and lockfile and knows nothing about Rust.
+- **Bun** owns `website/` only. It has its own `package.json` and lockfile and knows nothing about Rust.
 
-Do **not** try to unify them. Cargo should never see `node_modules`; pnpm should never see `target/`. If the site ever needs data from the Rust side, the Rust build emits a JSON artifact the site reads at build time — that's the only bridge. Keep them isolated.
+Do **not** try to unify them. Cargo should never see `node_modules`; Bun should never see `target/`. If the site ever needs data from the Rust side, the Rust build emits a JSON artifact the site reads at build time — that's the only bridge. Keep them isolated.
 
 ## The crate split — why it exists
 

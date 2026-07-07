@@ -144,10 +144,10 @@ This repo holds two independent build systems that do not share a package manage
 
 - **Cargo** owns everything under [`crates/`](crates). The workspace root
   `Cargo.toml` lists the members.
-- **pnpm** owns [`website/`](website) only — the Next.js landing page, with its
+- **Bun** owns [`website/`](website) only — the Next.js landing page, with its
   own `package.json` and lockfile.
 
-They stay isolated. Cargo never sees `node_modules`; pnpm never sees `target/`.
+They stay isolated. Cargo never sees `node_modules`; Bun never sees `target/`.
 If the site ever needs data from the Rust side, the Rust build emits a JSON
 artifact the site reads at build time — that is the only bridge.
 

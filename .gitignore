@@ -1,7 +1,7 @@
 # Rust
 target/
 
-# Website (isolated pnpm project)
+# Website (isolated Bun project)
 website/node_modules/
 website/.next/
 
