@@ -103,13 +103,28 @@ roster attach user@devbox:work   # needs roster installed on devbox
 ## Built for Claude Code
 
 roster is built exclusively for Claude Code — it's the only agent it ships
-detection for. Today that detection reads the screen; the direction is to read
-Claude Code's own state instead — its hooks and statusline — for exact *blocked
-/ working / done* and the things the screen never shows: context left, cost, and
-the tool it's about to run. That Claude-native attention layer is the roadmap;
+detection for. And it doesn't just read Claude's screen: it can read Claude
+Code's own state. Register roster's hooks once:
+
+```sh
+roster --print-hooks   # merge the output into ~/.claude/settings.json
+```
+
+and every Claude Code pane reports its permission asks directly. The moment
+Claude wants to run a tool, the sidebar shows **the verbatim ask** —
+`blocked · Bash: cargo test` — instantly, from Claude Code's own
+`PermissionRequest` hook rather than a screen pattern; approving releases it
+just as exactly (the approved tool's `PreToolUse`, or `Stop` at end of turn).
+The hooks are silent no-ops for any claude running outside roster, so
+registering them costs nothing. Screen-based detection keeps running
+underneath and reconciles: if a clear ever goes missing (say, you interrupt
+at the prompt), the settled screen wins and the stale ask drops off.
+
+This is the first slice of the Claude-native attention layer — reading hooks
+and statusline for exact state, context-left, and cost;
 [`docs/05-claude-native-attention.md`](docs/05-claude-native-attention.md) is
-the spec. (Any command still runs in a pane — roster is a real terminal — but
-Claude Code is what it detects and is built for.)
+the spec and roadmap. (Any command still runs in a pane — roster is a real
+terminal — but Claude Code is what it detects and is built for.)
 
 ## Two toolchains, one repo
 

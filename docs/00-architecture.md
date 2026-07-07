@@ -62,6 +62,12 @@ agent process --bytes--> roster-pty --raw stream--> roster-term --screen grid-->
       roster-tui (repaint panes + sidebar)
 ```
 
+For Claude Code panes there is a second, authoritative signal path: Claude
+Code hooks (inheriting `ROSTER_PANE`/`ROSTER_HOOK_SOCK` from the pane's
+environment) invoke `roster _hook`, which sends `HookBlocked`/`HookClear`
+frames over a unix socket into the same loop — exact permission asks, no
+scraping. See [`05-claude-native-attention.md`](05-claude-native-attention.md).
+
 `roster-detect` reads the *parsed grid* from `roster-term`, not raw bytes — that's why it's agent-safe and testable: you can feed it fixture grids and assert the state, with no PTY in the loop.
 
 ## The wedge (keep this sharp)

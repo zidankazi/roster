@@ -61,6 +61,18 @@ impl Pty {
     /// Spawn `command` (a shell command line) in a fresh PTY of
     /// `cols` × `rows` cells, with `TERM=xterm-256color`.
     pub fn spawn(command: &str, cols: u16, rows: u16) -> Result<Pty, PtyError> {
+        Pty::spawn_with_env(command, cols, rows, &[])
+    }
+
+    /// Like [`Pty::spawn`], with extra environment variables set on the
+    /// child — how roster hands each agent pane its identity and the hook
+    /// socket path for the Claude Code hook bridge.
+    pub fn spawn_with_env(
+        command: &str,
+        cols: u16,
+        rows: u16,
+        env: &[(&str, &str)],
+    ) -> Result<Pty, PtyError> {
         let system = native_pty_system();
         let pair = system
             .openpty(PtySize {
@@ -75,6 +87,9 @@ impl Pty {
         builder.arg("-c");
         builder.arg(command);
         builder.env("TERM", TERM);
+        for (key, value) in env {
+            builder.env(key, value);
+        }
         // Without an explicit cwd, portable-pty falls back to $HOME; panes
         // must run where roster was launched.
         if let Ok(cwd) = std::env::current_dir() {

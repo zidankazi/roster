@@ -8,6 +8,8 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
+use std::os::unix::net::UnixListener;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -37,6 +39,15 @@ use crate::keys::encode_key;
 const INPUT_POLL: Duration = Duration::from_millis(50);
 /// How often detection re-reads each pane's screen.
 const DETECT_EVERY: Duration = Duration::from_millis(400);
+/// How long a hook-reported ask outranks a disagreeing scrape. The hook
+/// fires before the prompt paints, so the screen briefly lags it; past
+/// this grace, a committed non-blocked scrape means the prompt is gone and
+/// the pin is stale (a missed clear — e.g. an interrupt at the prompt).
+const HOOK_PIN_GRACE: Duration = Duration::from_secs(2);
+/// Reasons arriving over the hook socket are capped defensively — the
+/// `_hook` sender already truncates, but the socket accepts frames from
+/// any same-uid process.
+const HOOK_REASON_CAP: usize = 160;
 /// Size panes are spawned at before the first layout pass corrects them.
 const SPAWN_COLS: u16 = 80;
 const SPAWN_ROWS: u16 = 24;
@@ -47,6 +58,9 @@ const SPAWN_ROWS: u16 = 24;
 enum Output {
     Bytes(PaneId, u64, Vec<u8>),
     Eof(PaneId, u64),
+    /// A frame from the hook socket: a Claude Code hook reporting a pane's
+    /// exact state (see the `hook` module).
+    Hook(Frame),
 }
 
 /// Input interpretation state.
@@ -159,6 +173,16 @@ impl RemoteSession {
     }
 }
 
+/// A hook-reported permission ask pinning a pane to blocked.
+struct HookPin {
+    /// The tool the ask is about, for matching the eventual clear.
+    tool: String,
+    /// The verbatim ask, shown as the sidebar reason.
+    reason: String,
+    /// When the pin landed, for the reconciliation grace period.
+    at: Instant,
+}
+
 /// Everything one live pane owns besides its model entry.
 struct PaneRuntime {
     io: PaneIo,
@@ -169,6 +193,12 @@ struct PaneRuntime {
     generation: u64,
     /// Exit code, once the child has ended; the pane stays visible.
     exited: Option<u32>,
+    /// A hook-reported permission ask. While set, the pane reads blocked
+    /// with this exact reason. Cleared by the hook's `PreToolUse`/`Stop`
+    /// events — or by the scrape itself, when a settled screen no longer
+    /// shows any prompt (see [`HOOK_PIN_GRACE`]): the hook wins on
+    /// freshness and richness, the screen wins on reality.
+    hook_blocked: Option<HookPin>,
 }
 
 /// The running multiplexer.
@@ -213,6 +243,10 @@ pub struct App {
     quit: bool,
     output_tx: Sender<Output>,
     output_rx: Receiver<Output>,
+    /// The hook socket local panes are told about via `ROSTER_HOOK_SOCK`.
+    /// `None` in remote mode (the session server owns the hook socket) or
+    /// when the listener could not start (scraping still works).
+    hook_sock: Option<PathBuf>,
 }
 
 impl App {
@@ -227,6 +261,7 @@ impl App {
         open_launcher: bool,
     ) -> Result<App, String> {
         let (output_tx, output_rx) = mpsc::channel();
+        let hook_sock = start_hook_listener(output_tx.clone());
         let launchables = launch_items(&detector, &default_shell());
         let mut app = App {
             session: Session::new(),
@@ -257,6 +292,7 @@ impl App {
             quit: false,
             output_tx,
             output_rx,
+            hook_sock,
         };
 
         let first = app.session.focused().expect("new session has a pane");
@@ -434,6 +470,9 @@ impl App {
             quit: false,
             output_tx,
             output_rx,
+            // The session server owns the panes and their hook socket;
+            // hook frames arrive relayed over the session connection.
+            hook_sock: None,
         };
         for pane in &panes {
             app.attach_remote_pane(PaneId::from_raw(pane.pane), pane.pane, &pane.command);
@@ -482,7 +521,22 @@ impl App {
         if self.selection.map(|s| s.0) == Some(id) {
             self.selection = None;
         }
-        let pty = Pty::spawn(command, SPAWN_COLS, SPAWN_ROWS).map_err(|e| e.to_string())?;
+        // Every pane learns its identity and the hook socket, so a claude
+        // running in it can report exact state back through its hooks.
+        // (Reports render only for identified claude panes — see
+        // apply_hook_blocked — but injecting everywhere is harmless and
+        // keeps the spawn path uniform.)
+        let pane_var = id.raw().to_string();
+        let sock_var = self
+            .hook_sock
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned());
+        let mut env: Vec<(&str, &str)> = vec![(crate::hook::PANE_ENV, pane_var.as_str())];
+        if let Some(sock) = &sock_var {
+            env.push((crate::hook::SOCK_ENV, sock.as_str()));
+        }
+        let pty = Pty::spawn_with_env(command, SPAWN_COLS, SPAWN_ROWS, &env)
+            .map_err(|e| e.to_string())?;
         let mut reader = pty.reader().map_err(|e| e.to_string())?;
         let generation = self.next_generation;
         self.next_generation += 1;
@@ -516,6 +570,7 @@ impl App {
                 kind: self.detector.identify(command),
                 generation,
                 exited: None,
+                hook_blocked: None,
             },
         );
         if let Some(pane) = self.session.pane_mut(id) {
@@ -546,6 +601,7 @@ impl App {
                 screen: Screen::new(SPAWN_COLS, SPAWN_ROWS),
                 tracker: PaneTracker::new(),
                 kind: self.detector.identify(command),
+                hook_blocked: None,
                 generation: 0,
                 exited: None,
             },
@@ -703,6 +759,54 @@ impl App {
                         self.mark_exited(id);
                     }
                 }
+                Output::Hook(Frame::HookBlocked { pane, tool, reason }) => {
+                    self.apply_hook_blocked(pane, tool, reason);
+                }
+                Output::Hook(Frame::HookClear { pane, tool }) => {
+                    self.apply_hook_clear(pane, &tool);
+                }
+                Output::Hook(_) => {}
+            }
+        }
+    }
+
+    /// A hook reported a permission ask: pin the pane to blocked with the
+    /// verbatim reason, immediately — no scrape, no debounce. Only panes
+    /// running an identified agent take pins: nothing renders state for
+    /// other panes, so a pin there would just be stale model state.
+    fn apply_hook_blocked(&mut self, pane: u64, tool: String, reason: String) {
+        let id = PaneId::from_raw(pane);
+        let Some(rt) = self.runtimes.get_mut(&id) else {
+            return;
+        };
+        if rt.kind.is_none() || rt.exited.is_some() {
+            return;
+        }
+        let mut reason = reason;
+        if reason.chars().count() > HOOK_REASON_CAP {
+            reason = reason.chars().take(HOOK_REASON_CAP).collect();
+        }
+        rt.hook_blocked = Some(HookPin {
+            tool,
+            reason: reason.clone(),
+            at: Instant::now(),
+        });
+        self.session
+            .set_reading(id, AgentState::Blocked, Some(reason), Instant::now());
+    }
+
+    /// A clear event: `tool` names the ask it answers (an approved tool's
+    /// `PreToolUse`), or is empty to clear any ask (end of turn). A clear
+    /// for a different tool is someone else's business — a parallel
+    /// auto-approved tool must not erase a still-pending ask.
+    fn apply_hook_clear(&mut self, pane: u64, tool: &str) {
+        if let Some(rt) = self.runtimes.get_mut(&PaneId::from_raw(pane)) {
+            let matches = rt
+                .hook_blocked
+                .as_ref()
+                .is_some_and(|pin| tool.is_empty() || pin.tool == tool);
+            if matches {
+                rt.hook_blocked = None;
             }
         }
     }
@@ -726,6 +830,10 @@ impl App {
                     self.mark_exited_with_code(PaneId::from_raw(pane), code);
                 }
                 Frame::PaneOpened { pane, command } => self.place_opened_pane(pane, &command),
+                Frame::HookBlocked { pane, tool, reason } => {
+                    self.apply_hook_blocked(pane, tool, reason)
+                }
+                Frame::HookClear { pane, tool } => self.apply_hook_clear(pane, &tool),
                 Frame::SpawnFailed { error } => {
                     if let Some(remote) = &mut self.remote {
                         remote.pending.pop_front();
@@ -904,8 +1012,30 @@ impl App {
             let Some(kind) = rt.kind else {
                 continue;
             };
+            // The scrape always runs — it is the reconciliation signal and
+            // the fallback, never suspended.
             let grid = rt.screen.grid();
             let reading = rt.tracker.update(&self.detector, kind, &grid, now);
+            // A hook-reported ask outranks a fresh scrape (richer reason,
+            // zero latency; the prompt may not even have painted yet). But
+            // once past the paint grace, a committed non-blocked scrape
+            // means the prompt is gone and the clear was missed — an
+            // interrupt at the prompt fires no hook — so the screen wins.
+            if let Some(pin) = &rt.hook_blocked {
+                let settled = now.duration_since(pin.at) >= HOOK_PIN_GRACE;
+                if !settled || reading.state == AgentState::Blocked {
+                    // set_reading only bumps last_change on a state change,
+                    // so re-pinning keeps the blocked-for age honest.
+                    self.session.set_reading(
+                        *id,
+                        AgentState::Blocked,
+                        Some(pin.reason.clone()),
+                        now,
+                    );
+                    continue;
+                }
+                rt.hook_blocked = None;
+            }
             self.session
                 .set_reading(*id, reading.state, reading.reason, now);
         }
@@ -1781,6 +1911,63 @@ fn set_pointer(current: &mut Pointer, shape: Pointer) {
 /// The user's shell, for panes roster opens itself.
 pub fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+}
+
+/// Listen for `roster _hook` reports on a per-process unix socket, feeding
+/// frames into the app loop. Returns the path to advertise via
+/// `ROSTER_HOOK_SOCK`, or `None` when the socket can't be created — hook
+/// state is an upgrade over scraping, never a requirement.
+///
+/// The socket lives in a `hook/` subdirectory, NOT next to the session
+/// sockets: `roster ls`/`kill`/`attach` probe every top-level `*.sock` as
+/// a session, and this listener speaks no session protocol.
+fn start_hook_listener(tx: Sender<Output>) -> Option<PathBuf> {
+    let dir = crate::server::sessions_dir()?.join("hook");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("{}.sock", std::process::id()));
+    // A stale socket from a recycled pid would block the bind. Unlike the
+    // session dir, nothing long-lived legitimately owns this name.
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).ok()?;
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                // Persistent accept errors (fd exhaustion) must degrade,
+                // not busy-spin a core.
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            };
+            let tx = tx.clone();
+            // One bounded thread per hook invocation: a real `_hook` sends
+            // one frame and disconnects. The read timeout and frame cap
+            // keep a stray or hostile peer from parking threads forever.
+            std::thread::spawn(move || {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                for _ in 0..16 {
+                    match read_frame(&mut stream) {
+                        Ok(Some(frame @ (Frame::HookBlocked { .. } | Frame::HookClear { .. }))) => {
+                            if tx.send(Output::Hook(frame)).is_err() {
+                                return;
+                            }
+                        }
+                        // Anything else — other frame types, timeouts,
+                        // corruption, EOF — ends the connection: this
+                        // socket speaks hook frames only.
+                        _ => return,
+                    }
+                }
+            });
+        }
+    });
+    Some(path)
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        if let Some(path) = &self.hook_sock {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 #[cfg(test)]

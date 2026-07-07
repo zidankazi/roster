@@ -24,7 +24,8 @@ pub struct HelloPane {
 }
 
 /// Every message either side can send. Tags 1–63 flow client → server,
-/// 64+ server → client.
+/// 64+ server → client — except the hook frames (tags 10/11), which enter
+/// from `roster _hook` and are also relayed server → client verbatim.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Frame {
     // Client → server.
@@ -70,6 +71,31 @@ pub enum Frame {
     /// Liveness probe; the server replies `Pong` without disturbing an
     /// attached client.
     Ping,
+
+    // Hook → server (or the in-process app). Sent by `roster _hook` when a
+    // Claude Code hook fires; a session server relays these two frames
+    // verbatim to the attached client, where detection applies them — the
+    // one exception to the tag-range convention below.
+    /// A pane's agent is blocked on a permission request; `reason` is the
+    /// verbatim ask (tool + input), extracted from the hook payload.
+    HookBlocked {
+        /// The pane whose agent is blocked (`ROSTER_PANE` in its env).
+        pane: u64,
+        /// The tool being asked about (e.g. `Bash`), so a later clear can
+        /// be matched to this ask. Empty when the payload named none.
+        tool: String,
+        /// What the agent is asking to do, e.g. `Bash: cargo test`.
+        reason: String,
+    },
+    /// A hook event that answers a permission ask: the approved tool
+    /// started (`PreToolUse`), or the turn ended (`Stop`).
+    HookClear {
+        /// The pane to release back to screen-based detection.
+        pane: u64,
+        /// The tool whose ask this clears; an empty string clears any ask
+        /// (end of turn — nothing can still be pending).
+        tool: String,
+    },
 
     // Server → client.
     /// The session state at attach: every pane plus the stored layout blob.
@@ -134,6 +160,8 @@ impl Frame {
             Frame::Detach => 7,
             Frame::Kill => 8,
             Frame::Ping => 9,
+            Frame::HookBlocked { .. } => 10,
+            Frame::HookClear { .. } => 11,
             Frame::Hello { .. } => 64,
             Frame::Replay { .. } => 65,
             Frame::Output { .. } => 66,
@@ -164,6 +192,15 @@ pub fn write_frame(w: &mut impl Write, frame: &Frame) -> io::Result<()> {
         }
         Frame::Spawn { command } => put_bytes(&mut payload, command.as_bytes()),
         Frame::Close { pane } => put_u64(&mut payload, *pane),
+        Frame::HookBlocked { pane, tool, reason } => {
+            put_u64(&mut payload, *pane);
+            put_bytes(&mut payload, tool.as_bytes());
+            put_bytes(&mut payload, reason.as_bytes());
+        }
+        Frame::HookClear { pane, tool } => {
+            put_u64(&mut payload, *pane);
+            put_bytes(&mut payload, tool.as_bytes());
+        }
         Frame::SetLayout { blob } => put_bytes(&mut payload, blob),
         Frame::Hello { panes, layout } => {
             put_u64(&mut payload, panes.len() as u64);
@@ -236,6 +273,15 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Frame>> {
         7 => Frame::Detach,
         8 => Frame::Kill,
         9 => Frame::Ping,
+        10 => Frame::HookBlocked {
+            pane: p.u64()?,
+            tool: p.string()?,
+            reason: p.string()?,
+        },
+        11 => Frame::HookClear {
+            pane: p.u64()?,
+            tool: p.string()?,
+        },
         64 => {
             let count = p.u64()?;
             if count > 4096 {
@@ -382,6 +428,24 @@ mod tests {
         round_trip(Frame::Detach);
         round_trip(Frame::Kill);
         round_trip(Frame::Ping);
+        round_trip(Frame::HookBlocked {
+            pane: 3,
+            tool: "Bash".into(),
+            reason: "Bash: rm -rf target/".into(),
+        });
+        round_trip(Frame::HookBlocked {
+            pane: 3,
+            tool: String::new(),
+            reason: String::new(),
+        });
+        round_trip(Frame::HookClear {
+            pane: 3,
+            tool: "Bash".into(),
+        });
+        round_trip(Frame::HookClear {
+            pane: 3,
+            tool: String::new(),
+        });
         round_trip(Frame::Hello {
             panes: vec![
                 HelloPane {

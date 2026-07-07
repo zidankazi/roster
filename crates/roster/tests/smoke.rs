@@ -1030,3 +1030,85 @@ fn full_pipeline_shows_blocked_agent_and_quits() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn hook_bridge_pins_blocked_and_clears_end_to_end() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A fake claude that drives the hook bridge exactly like the real one:
+    // it inherits ROSTER_PANE / ROSTER_HOOK_SOCK from its pane's env and
+    // reports a permission ask via `roster _hook`, then answers it two
+    // seconds later. Its screen never shows a blocked pattern, so the
+    // sidebar reason below can only have come through the hook socket.
+    let dir = std::env::temp_dir().join(format!("roster-hook-smoke-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create fake agent dir");
+    let script = dir.join("claude");
+    let ask = r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/x"}}"#;
+    let stop = r#"{"hook_event_name":"Stop"}"#;
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nprintf 'thinking hard...\\n'\n\
+             printf '%s' '{ask}' | '{roster}' _hook\n\
+             sleep 2\n\
+             printf '%s' '{stop}' | '{roster}' _hook\n\
+             sleep 30\n",
+            roster = bin(),
+        ),
+    )
+    .expect("write fake agent");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod fake agent");
+
+    // The pane command is the script's absolute path: the basename still
+    // identifies as claude-code, and no PATH mutation can race other tests.
+    let (cols, rows) = (120u16, 30u16);
+    let pty = Pty::spawn(&format!("'{}' '{}'", bin(), script.display()), cols, rows)
+        .expect("spawn roster");
+    let mut reader = pty.reader().expect("reader");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut screen = Screen::new(cols, rows);
+    let drain_while =
+        |screen: &mut Screen, needle: &str, want: bool, rx: &mpsc::Receiver<Vec<u8>>| -> bool {
+            let start = Instant::now();
+            while start.elapsed() < DEADLINE {
+                let present = screen.grid().lines().iter().any(|l| l.contains(needle));
+                if present == want {
+                    return true;
+                }
+                match rx.recv_timeout(Duration::from_millis(200)) {
+                    Ok(chunk) => screen.advance(&chunk),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+                }
+            }
+            false
+        };
+
+    // The hook-delivered ask, verbatim, in the sidebar — while the pane
+    // itself only ever printed "thinking hard...".
+    assert!(
+        drain_while(&mut screen, "blocked · Bash: rm", true, &rx),
+        "hook-reported ask never reached the sidebar:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // The Stop hook releases the pane back to screen-based detection, and
+    // the pinned reason leaves the sidebar.
+    assert!(
+        drain_while(&mut screen, "blocked · Bash: rm", false, &rx),
+        "hook block never cleared:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

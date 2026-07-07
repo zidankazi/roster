@@ -18,6 +18,7 @@ use roster_tui::SidebarSide;
 
 mod app;
 mod cli;
+mod hook;
 mod keys;
 mod server;
 
@@ -45,6 +46,10 @@ fn run() -> Result<(), String> {
         print!("{}", Detector::builtin_toml());
         return Ok(());
     }
+    if args.print_hooks {
+        print!("{}", hook::settings_snippet());
+        return Ok(());
+    }
 
     match &args.action {
         Some(cli::Action::Server(name)) => {
@@ -55,6 +60,7 @@ fn run() -> Result<(), String> {
             return result;
         }
         Some(cli::Action::Proxy(name)) => return proxy(name),
+        Some(cli::Action::Hook) => return hook::run(),
         Some(cli::Action::List) => return list_sessions(),
         Some(cli::Action::Kill(name)) => return kill_session(name),
         Some(cli::Action::Attach(target)) => return attach(target, &args),

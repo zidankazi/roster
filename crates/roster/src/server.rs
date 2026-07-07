@@ -144,6 +144,9 @@ fn serve(name: &str, listener: UnixListener, path: &std::path::Path) -> Result<(
 fn event_loop(name: &str, tx: &Sender<Ev>, rx: &Receiver<Ev>) -> Result<(), String> {
     let mut panes: HashMap<u64, ServerPane> = HashMap::new();
     let mut next_pane: u64 = 1;
+    // Agents report hook events to the session socket itself; the frames
+    // are relayed to the attached client, which owns detection.
+    let hook_sock = socket_path(name).map(|path| path.to_string_lossy().into_owned());
     let mut layout: Vec<u8> = Vec::new();
     // The attached client: connection id + write handle.
     let mut client: Option<(u64, UnixStream)> = None;
@@ -259,38 +262,52 @@ fn event_loop(name: &str, tx: &Sender<Ev>, rx: &Receiver<Ev>) -> Result<(), Stri
                         let _ = p.pty.resize(cols, rows);
                     }
                 }
-                Frame::Spawn { command } => match Pty::spawn(&command, SPAWN_COLS, SPAWN_ROWS) {
-                    Ok(pty) => {
-                        let pane_id = next_pane;
-                        next_pane += 1;
-                        ever_spawned = true;
-                        start_pane_pump(&pty, pane_id, tx.clone());
-                        panes.insert(
-                            pane_id,
-                            ServerPane {
-                                pty,
-                                command: command.clone(),
-                                replay: Vec::new(),
-                                exited: None,
-                            },
-                        );
-                        send_to_client(
-                            &mut client,
-                            &Frame::PaneOpened {
-                                pane: pane_id,
-                                command,
-                            },
-                        );
+                Frame::Spawn { command } => {
+                    let pane_var = next_pane.to_string();
+                    let mut env: Vec<(&str, &str)> =
+                        vec![(crate::hook::PANE_ENV, pane_var.as_str())];
+                    if let Some(sock) = &hook_sock {
+                        env.push((crate::hook::SOCK_ENV, sock.as_str()));
                     }
-                    Err(error) => {
-                        send_to_client(
-                            &mut client,
-                            &Frame::SpawnFailed {
-                                error: error.to_string(),
-                            },
-                        );
+                    match Pty::spawn_with_env(&command, SPAWN_COLS, SPAWN_ROWS, &env) {
+                        Ok(pty) => {
+                            let pane_id = next_pane;
+                            next_pane += 1;
+                            ever_spawned = true;
+                            start_pane_pump(&pty, pane_id, tx.clone());
+                            panes.insert(
+                                pane_id,
+                                ServerPane {
+                                    pty,
+                                    command: command.clone(),
+                                    replay: Vec::new(),
+                                    exited: None,
+                                },
+                            );
+                            send_to_client(
+                                &mut client,
+                                &Frame::PaneOpened {
+                                    pane: pane_id,
+                                    command,
+                                },
+                            );
+                        }
+                        Err(error) => {
+                            send_to_client(
+                                &mut client,
+                                &Frame::SpawnFailed {
+                                    error: error.to_string(),
+                                },
+                            );
+                        }
                     }
-                },
+                }
+                frame @ (Frame::HookBlocked { .. } | Frame::HookClear { .. }) => {
+                    // Hook reports relay verbatim to the attached client,
+                    // where detection applies them. No client, no harm: the
+                    // scrape re-detects the prompt on reattach.
+                    send_to_client(&mut client, &frame);
+                }
                 Frame::Close { pane } => {
                     // Dropping the runtime kills and reaps the child.
                     panes.remove(&pane);

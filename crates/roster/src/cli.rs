@@ -17,6 +17,9 @@ pub struct Args {
     pub version: bool,
     /// Print the built-in agents.toml and exit.
     pub print_config: bool,
+    /// Print the Claude Code hooks snippet for `~/.claude/settings.json`
+    /// and exit.
+    pub print_hooks: bool,
     /// Run inside the named persistent session (create it if needed).
     pub session: Option<String>,
     /// A subcommand, when the first positional was one.
@@ -38,6 +41,10 @@ pub enum Action {
     /// Hidden: bridge stdio to a local session socket (the remote half of
     /// ssh attach).
     Proxy(String),
+    /// Hidden: forward a Claude Code hook payload (stdin JSON) to the pane's
+    /// roster instance. Registered via `--print-hooks`; a no-op outside a
+    /// roster pane.
+    Hook,
 }
 
 /// The sidebar edge requested on the command line.
@@ -72,6 +79,8 @@ OPTIONS:
       --sidebar <SIDE> Place the sidebar on the left (default) or right
       --print-config   Print the built-in agents.toml (pipe it to
                        ~/.config/roster/agents.toml to customize)
+      --print-hooks    Print the Claude Code hooks that report exact agent
+                       state to roster (merge into ~/.claude/settings.json)
   -h, --help           Print this help
   -V, --version        Print the version
 
@@ -106,6 +115,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
             "-h" | "--help" => parsed.help = true,
             "-V" | "--version" => parsed.version = true,
             "--print-config" => parsed.print_config = true,
+            "--print-hooks" => parsed.print_hooks = true,
             "-c" | "--config" => {
                 let value = iter
                     .next()
@@ -149,6 +159,9 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
             "_proxy" if parsed.commands.is_empty() && parsed.action.is_none() => {
                 let name = iter.next().ok_or("_proxy requires a session name")?;
                 parsed.action = Some(Action::Proxy(name));
+            }
+            "_hook" if parsed.commands.is_empty() && parsed.action.is_none() => {
+                parsed.action = Some(Action::Hook);
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}"));
@@ -223,6 +236,11 @@ mod tests {
             parse(strings(&["_server", "work"])).unwrap().action,
             Some(Action::Server("work".into()))
         );
+        assert_eq!(
+            parse(strings(&["_hook"])).unwrap().action,
+            Some(Action::Hook)
+        );
+        assert!(parse(strings(&["--print-hooks"])).unwrap().print_hooks);
         assert!(parse(strings(&["attach"])).is_err());
 
         // Subcommands only claim the first positional; later words are
