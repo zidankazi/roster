@@ -12,8 +12,10 @@ mod attention;
 mod grid;
 mod layout;
 mod session;
+mod telemetry;
 
 pub use attention::{rank, AttentionItem};
 pub use grid::{Cell, CellStyle, Color, Cursor, Grid};
 pub use layout::{Rect, SplitDirection};
 pub use session::{AgentState, Pane, PaneId, Session};
+pub use telemetry::{RateLimit, Telemetry};
