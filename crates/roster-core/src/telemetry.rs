@@ -21,9 +21,20 @@ pub struct Telemetry {
     pub rate_limit: Option<RateLimit>,
 }
 
-/// Rate-limit status reported by the agent.
+/// Rate-limit status reported by the agent: one reading per window the
+/// statusline feed documents. At least one window is present — an empty
+/// report is `Telemetry::rate_limit == None`, never an all-`None` struct.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RateLimit {
+    /// The five-hour window, when reported.
+    pub five_hour: Option<RateLimitWindow>,
+    /// The seven-day window, when reported.
+    pub seven_day: Option<RateLimitWindow>,
+}
+
+/// One rate-limit window's reading.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RateLimitWindow {
     /// Percentage of the rate limit already used (0–100).
     pub used_pct: f32,
     /// Time until the limit resets, when the agent reports one.
@@ -51,15 +62,25 @@ mod tests {
             context_pct: Some(62.5),
             cost_usd: Some(1.23),
             rate_limit: Some(RateLimit {
-                used_pct: 40.0,
-                resets_in: Some(Duration::from_secs(1800)),
+                five_hour: Some(RateLimitWindow {
+                    used_pct: 40.0,
+                    resets_in: Some(Duration::from_secs(1800)),
+                }),
+                seven_day: Some(RateLimitWindow {
+                    used_pct: 75.5,
+                    resets_in: Some(Duration::from_secs(86_400)),
+                }),
             }),
         };
         assert_eq!(t.model.as_deref(), Some("claude-opus-4-8"));
         assert_eq!(t.context_pct, Some(62.5));
         assert_eq!(t.cost_usd, Some(1.23));
         let rl = t.rate_limit.expect("rate limit was set");
-        assert_eq!(rl.used_pct, 40.0);
-        assert_eq!(rl.resets_in, Some(Duration::from_secs(1800)));
+        let five = rl.five_hour.expect("five-hour window was set");
+        assert_eq!(five.used_pct, 40.0);
+        assert_eq!(five.resets_in, Some(Duration::from_secs(1800)));
+        let seven = rl.seven_day.expect("seven-day window was set");
+        assert_eq!(seven.used_pct, 75.5);
+        assert_eq!(seven.resets_in, Some(Duration::from_secs(86_400)));
     }
 }

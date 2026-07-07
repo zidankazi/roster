@@ -22,12 +22,16 @@ fn full_payload_yields_every_telemetry_field() {
     assert_eq!(t.model.as_deref(), Some("Opus"));
     assert_eq!(t.context_pct, Some(92.0));
     assert_eq!(t.cost_usd, Some(0.01234));
-    let rl = t.rate_limit.expect("five-hour window reported");
-    assert_eq!(rl.used_pct, 23.5);
-    // The fixture's `resets_at` is a fixed epoch instant; the remaining
-    // duration depends on the wall clock, so only its presence is asserted
-    // here — the epoch arithmetic is unit-tested with an injected clock.
-    assert!(rl.resets_in.is_some());
+    let rl = t.rate_limit.expect("rate-limit windows reported");
+    let five = rl.five_hour.expect("five-hour window reported");
+    assert_eq!(five.used_pct, 23.5);
+    let seven = rl.seven_day.expect("seven-day window reported");
+    assert_eq!(seven.used_pct, 41.2);
+    // The fixture's `resets_at` values are fixed epoch instants; the
+    // remaining durations depend on the wall clock, so only presence is
+    // asserted — the epoch arithmetic is unit-tested with an injected clock.
+    assert!(five.resets_in.is_some());
+    assert!(seven.resets_in.is_some());
 }
 
 #[test]

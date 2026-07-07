@@ -32,9 +32,20 @@ pub fn telemetry_line(telemetry: &Telemetry) -> Line<'static> {
     if let Some(cost) = telemetry.cost_usd {
         badges.push(Span::styled(format!("${cost:.2}"), muted()));
     }
-    if let Some(rate) = &telemetry.rate_limit {
-        let used = rate.used_pct;
-        let text = match rate.resets_in {
+    // Of the reported windows, badge the most-used one — a nearly spent
+    // seven-day limit must not hide behind a fresh five-hour window.
+    if let Some(window) =
+        telemetry
+            .rate_limit
+            .as_ref()
+            .and_then(|rate| match (&rate.five_hour, &rate.seven_day) {
+                (Some(five), Some(seven)) if seven.used_pct > five.used_pct => Some(seven),
+                (Some(five), _) => Some(five),
+                (None, seven) => seven.as_ref(),
+            })
+    {
+        let used = window.used_pct;
+        let text = match window.resets_in {
             Some(resets) => format!("limit {used:.0}% resets {}", format_age(resets)),
             None => format!("limit {used:.0}%"),
         };
@@ -73,7 +84,7 @@ mod tests {
 
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
-    use roster_core::RateLimit;
+    use roster_core::{RateLimit, RateLimitWindow};
 
     /// A telemetry with every field reported.
     fn full_telemetry() -> Telemetry {
@@ -82,8 +93,14 @@ mod tests {
             context_pct: Some(62.0),
             cost_usd: Some(1.23),
             rate_limit: Some(RateLimit {
-                used_pct: 40.0,
-                resets_in: Some(Duration::from_secs(1800)),
+                five_hour: Some(RateLimitWindow {
+                    used_pct: 40.0,
+                    resets_in: Some(Duration::from_secs(1800)),
+                }),
+                seven_day: Some(RateLimitWindow {
+                    used_pct: 12.0,
+                    resets_in: Some(Duration::from_secs(86_400)),
+                }),
             }),
         }
     }
@@ -186,12 +203,47 @@ mod tests {
         // A rate limit without a reset time renders only the used share.
         let rate_only = Telemetry {
             rate_limit: Some(RateLimit {
-                used_pct: 40.0,
-                resets_in: None,
+                five_hour: Some(RateLimitWindow {
+                    used_pct: 40.0,
+                    resets_in: None,
+                }),
+                seven_day: None,
             }),
             ..Telemetry::default()
         };
         assert_eq!(row_text(&draw(&rate_only, 40)), "limit 40%");
+    }
+
+    #[test]
+    fn most_used_window_wins_the_rate_limit_badge() {
+        // Seven-day nearly spent, five-hour fresh: the badge must show the
+        // seven-day reading.
+        let telemetry = Telemetry {
+            rate_limit: Some(RateLimit {
+                five_hour: Some(RateLimitWindow {
+                    used_pct: 10.0,
+                    resets_in: None,
+                }),
+                seven_day: Some(RateLimitWindow {
+                    used_pct: 95.0,
+                    resets_in: None,
+                }),
+            }),
+            ..Telemetry::default()
+        };
+        assert_eq!(row_text(&draw(&telemetry, 40)), "limit 95%");
+        // A seven-day-only report still gets a badge.
+        let seven_only = Telemetry {
+            rate_limit: Some(RateLimit {
+                five_hour: None,
+                seven_day: Some(RateLimitWindow {
+                    used_pct: 60.0,
+                    resets_in: None,
+                }),
+            }),
+            ..Telemetry::default()
+        };
+        assert_eq!(row_text(&draw(&seven_only, 40)), "limit 60%");
     }
 
     #[test]
