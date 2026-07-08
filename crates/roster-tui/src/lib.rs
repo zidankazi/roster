@@ -434,6 +434,12 @@ pub fn render(frame: &mut Frame, view: &View) {
         Some(Hit::SidebarWindow(window)) => Some(window),
         _ => None,
     };
+    // Which workspaces carry a user-set name: a lone agent in an unnamed one
+    // hides its header (it would echo the card). `hit_test` derives the same
+    // flags from the session, so headers land where they were drawn.
+    let window_named: Vec<bool> = (0..view.session.window_count())
+        .map(|w| view.session.window_name(w).is_some())
+        .collect();
     frame.render_widget(
         Sidebar::new(
             view.entries,
@@ -446,7 +452,8 @@ pub fn render(frame: &mut Frame, view: &View) {
         .hovered_auto(hovered_auto)
         .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
         .hovered_window(hovered_window)
-        .names(view.window_names),
+        .names(view.window_names)
+        .named(&window_named),
         cards,
     );
 

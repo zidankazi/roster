@@ -178,7 +178,12 @@ pub fn hit_test(
         if y < first {
             return Hit::Sidebar;
         }
-        let rows = sidebar_rows(entries, session.window_count());
+        // Same manual-name signal the render pass uses, so header rows land
+        // where they were drawn — a lone auto-named agent has none.
+        let named: Vec<bool> = (0..session.window_count())
+            .map(|w| session.window_name(w).is_some())
+            .collect();
+        let rows = sidebar_rows(entries, session.window_count(), &named);
         return match rows.get(usize::from(y - first)) {
             Some(SidebarRow::Header(window)) | Some(SidebarRow::Empty(window)) => {
                 Hit::SidebarWindow(*window)
@@ -536,7 +541,8 @@ mod tests {
     fn workspace_headers_and_empty_windows_resolve_to_window_hits() {
         let now = Instant::now();
         let mut session = Session::new();
-        // Window 0: a plain shell, no agents. Window 1: an agent.
+        // Window 0: a plain shell, no agents. Window 1: a single agent —
+        // it gets no header, so its card is the only mouse target there.
         let shell = session.focused().unwrap();
         session.pane_mut(shell).unwrap().command = Some("zsh".into());
         let agent = session.new_window();
@@ -545,8 +551,8 @@ mod tests {
         let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);
 
         let area = Rect::new(0, 0, 120, 30);
-        // Rows: y2 header w0, y3 "no agents" placeholder, y4 blank,
-        // y5 header w1, y6-7 the agent card.
+        // Rows: y2 header w0, y3 "no agents" placeholder, y4 blank, then w1's
+        // headerless card at y5-6 (no leading header row for the single agent).
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 2),
             Hit::SidebarWindow(0)
@@ -561,7 +567,7 @@ mod tests {
         );
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 5),
-            Hit::SidebarWindow(1)
+            Hit::SidebarEntry(0)
         );
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 6),

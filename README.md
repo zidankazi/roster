@@ -51,15 +51,18 @@ detection; anything else just runs.
 
 Each agent launched from the **+ new agent** button opens in its own
 workspace window rather than splitting the current pane. The sidebar groups
-cards by workspace — click a workspace header to jump there (shell-only
-windows included), click the `⧉ 2/3` indicator in the status bar or press
-`ctrl-b n`/`p` to cycle.
+cards by workspace: a workspace running several agents — or a shell-only
+window with none — gets a header you can click to jump there. A workspace
+with a single agent skips the header; its card already names the agent, so a
+header would only repeat it. Click the `⧉ 2/3` indicator in the status bar
+or press `ctrl-b n`/`p` to cycle.
 
-**Workspaces name themselves after the task.** Headers pick up the terminal
+**Workspaces name themselves after the task.** A card picks up the terminal
 title the agent broadcasts — Claude Code sets it to what it's working on —
-so the sidebar reads `1 · fix auth bug`, not `workspace 1`. Double-click a
-header (or `ctrl-b ,`) to set your own name; an empty rename goes back to
-automatic. Manual names persist across detach/reattach.
+so the sidebar reads `fix auth bug`, not `claude-code`. Press `ctrl-b ,`
+(or double-click a workspace header, where one is shown) to set your own
+name; a named workspace always keeps its header, and an empty rename goes
+back to automatic. Manual names persist across detach/reattach.
 
 Keyboard equivalents exist for everything (`ctrl-b` is the prefix — `c` new
 agent, `n`/`p` windows, `z` solo, `j` jump, `o` focus, `x` close, `d`

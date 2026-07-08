@@ -191,10 +191,21 @@ pub enum SidebarRow {
 }
 
 /// The sidebar's card-region rows for `entries` across `workspaces`
-/// windows. With a single window there are no headers — just the cards.
-/// With several, every workspace gets a header even when no agent runs in
-/// it, so plain-shell windows stay reachable by mouse.
-pub fn sidebar_rows(entries: &[SidebarEntry], workspaces: usize) -> Vec<SidebarRow> {
+/// windows. `named[w]` is whether window `w` carries a user-set name.
+///
+/// With a single window there are no headers — just the cards. With
+/// several, a workspace holding exactly one *auto-named* agent also skips
+/// its header: the header there would only echo the card's own name row
+/// (both fall back to the agent's terminal title). Headers stay for empty
+/// workspaces (a plain-shell window's only mouse target), multi-agent
+/// workspaces (to group and separate their cards), and any manually named
+/// workspace (the name is real information, not an echo, and its header is
+/// the rename gesture's target).
+pub fn sidebar_rows(
+    entries: &[SidebarEntry],
+    workspaces: usize,
+    named: &[bool],
+) -> Vec<SidebarRow> {
     fn push_card(rows: &mut Vec<SidebarRow>, index: usize, entry: &SidebarEntry) {
         rows.push(SidebarRow::EntryName(index));
         rows.push(SidebarRow::EntryDetail(index));
@@ -211,17 +222,24 @@ pub fn sidebar_rows(entries: &[SidebarEntry], workspaces: usize) -> Vec<SidebarR
         return rows;
     }
     for window in 0..workspaces {
-        rows.push(SidebarRow::Header(window));
-        let mut any = false;
-        for (index, entry) in entries.iter().enumerate() {
-            if entry.window == window {
-                any = true;
-                push_card(&mut rows, index, entry);
-            }
+        let cards: Vec<(usize, &SidebarEntry)> = entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.window == window)
+            .collect();
+        // A lone auto-named agent needs no header — it would echo the card.
+        // Everything else keeps one; see this function's doc comment.
+        let echoes_card = cards.len() == 1 && !named.get(window).copied().unwrap_or(false);
+        if !echoes_card {
+            rows.push(SidebarRow::Header(window));
         }
-        if !any {
+        if cards.is_empty() {
             rows.push(SidebarRow::Empty(window));
             rows.push(SidebarRow::Blank);
+        } else {
+            for (index, entry) in cards {
+                push_card(&mut rows, index, entry);
+            }
         }
     }
     rows
@@ -301,6 +319,7 @@ pub struct Sidebar<'a> {
     workspaces: usize,
     active: usize,
     names: &'a [String],
+    named: &'a [bool],
     tick: u64,
 }
 
@@ -327,6 +346,7 @@ impl<'a> Sidebar<'a> {
             workspaces,
             active: 0,
             names: &[],
+            named: &[],
             tick,
         }
     }
@@ -349,6 +369,14 @@ impl<'a> Sidebar<'a> {
     /// Windows past the slice's end fall back to `workspace N`.
     pub fn names(mut self, names: &'a [String]) -> Self {
         self.names = names;
+        self
+    }
+
+    /// Which workspaces carry a user-set name, one flag per window. A lone
+    /// agent in an unnamed workspace hides its header (it would echo the
+    /// card); a named one keeps it. Windows past the slice's end are unnamed.
+    pub fn named(mut self, named: &'a [bool]) -> Self {
+        self.named = named;
         self
     }
 
@@ -421,7 +449,7 @@ impl Widget for Sidebar<'_> {
         }
         y += 2;
 
-        for row in sidebar_rows(self.entries, self.workspaces) {
+        for row in sidebar_rows(self.entries, self.workspaces, self.named) {
             if y >= bottom {
                 break;
             }
@@ -1106,7 +1134,7 @@ mod tests {
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
 
         // The row plan grows the telemetry row for that card alone.
-        let rows = sidebar_rows(&entries, 1);
+        let rows = sidebar_rows(&entries, 1, &[]);
         assert_eq!(
             rows,
             vec![
@@ -1248,7 +1276,43 @@ mod tests {
     }
 
     #[test]
-    fn workspace_headers_appear_with_multiple_windows() {
+    fn multi_agent_workspaces_get_a_header_single_agent_ones_do_not() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        // Window 0: a single agent — its header would only echo the card.
+        let a = session.focused().unwrap();
+        session.pane_mut(a).unwrap().command = Some("claude".into());
+        session.set_reading(a, AgentState::Idle, None, now);
+        // Window 1: two agents — the header groups them.
+        let b = session.new_window();
+        session.pane_mut(b).unwrap().command = Some("claude".into());
+        session.set_reading(b, AgentState::Working, Some("go".into()), now);
+        let c = session.split(b, SplitDirection::Horizontal).unwrap();
+        session.pane_mut(c).unwrap().command = Some("claude".into());
+        session.set_reading(c, AgentState::Idle, None, now);
+
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 20));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 20), &mut buf);
+
+        let rows: Vec<String> = (0..20).map(|y| buffer_row(&buf, y)).collect();
+        assert!(
+            !rows.iter().any(|r| r.trim() == "workspace 1"),
+            "single-agent window 0 should have no header, rows: {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.trim() == "workspace 2"),
+            "two-agent window 1 should keep its header, rows: {rows:#?}"
+        );
+    }
+
+    #[test]
+    fn a_manually_named_single_agent_workspace_keeps_its_header() {
+        // Two windows, one agent each. Window 0 is auto-named — its header
+        // would echo the card, so it drops. Window 1 was renamed by the
+        // user: the name is real information and its header is the rename
+        // gesture's mouse target, so it stays.
         let now = Instant::now();
         let mut session = Session::new();
         let a = session.focused().unwrap();
@@ -1256,22 +1320,16 @@ mod tests {
         session.set_reading(a, AgentState::Idle, None, now);
         let b = session.new_window();
         session.pane_mut(b).unwrap().command = Some("claude".into());
-        session.set_reading(b, AgentState::Working, Some("go".into()), now);
+        session.set_reading(b, AgentState::Idle, None, now);
 
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 16));
-        Sidebar::new(&entries, None, None, session.window_count(), 0)
-            .render(Rect::new(0, 0, 32, 16), &mut buf);
+        let rows = sidebar_rows(&entries, 2, &[false, true]);
 
-        let rows: Vec<String> = (0..16).map(|y| buffer_row(&buf, y)).collect();
-        assert!(
-            rows.iter().any(|r| r.trim() == "workspace 1"),
-            "rows: {rows:#?}"
-        );
-        assert!(
-            rows.iter().any(|r| r.trim() == "workspace 2"),
-            "rows: {rows:#?}"
-        );
+        assert!(!rows.contains(&SidebarRow::Header(0)), "rows: {rows:?}");
+        assert!(rows.contains(&SidebarRow::Header(1)), "rows: {rows:?}");
+        // Both cards still render regardless of the header decision.
+        assert!(rows.contains(&SidebarRow::EntryName(0)), "rows: {rows:?}");
+        assert!(rows.contains(&SidebarRow::EntryName(1)), "rows: {rows:?}");
     }
 
     #[test]
