@@ -198,8 +198,10 @@ pub fn sidebar_rows(entries: &[SidebarEntry], workspaces: usize) -> Vec<SidebarR
     rows
 }
 
-/// The `auto` chip's text — the per-card auto-approve toggle.
-const AUTO_CHIP: &str = "auto";
+/// The `auto` chip's text — the per-card auto-approve toggle. The brackets
+/// are the affordance: they read as a pressable control even in terminals
+/// that ignore the pointer-shape protocol and show no hand cursor.
+const AUTO_CHIP: &str = "[auto]";
 
 /// The minimum reason budget the chip must leave on its row. The reason is
 /// the signal and outranks chrome: a sidebar too cramped for both drops
@@ -754,13 +756,13 @@ mod tests {
     #[test]
     fn auto_chip_cols_right_align_and_guard_narrow_widths() {
         // Right-aligned one column in from the edge.
-        assert_eq!(auto_chip_cols(31), Some(26..30));
-        assert_eq!(auto_chip_cols(40), Some(35..39));
+        assert_eq!(auto_chip_cols(31), Some(24..30));
+        assert_eq!(auto_chip_cols(40), Some(33..39));
         // One width-only threshold — sized to the longest state word plus
         // a reason reserve — so the chip never flickers as a card's state
         // changes and never starves the reason of its sliver.
-        assert_eq!(auto_chip_cols(26), Some(21..25));
-        assert_eq!(auto_chip_cols(25), None);
+        assert_eq!(auto_chip_cols(28), Some(21..27));
+        assert_eq!(auto_chip_cols(27), None);
         assert_eq!(auto_chip_cols(0), None);
     }
 
@@ -777,9 +779,9 @@ mod tests {
         // The chip ends every card's detail row — the toggle is always
         // visible, not just when it's on.
         let detail = buffer_row(&buf, 3);
-        assert!(detail.ends_with("auto"), "chip missing: {detail}");
+        assert!(detail.ends_with("[auto]"), "chip missing: {detail}");
         let other = buffer_row(&buf, 6);
-        assert!(other.ends_with("auto"), "chip missing: {other}");
+        assert!(other.ends_with("[auto]"), "chip missing: {other}");
         // Accent + bold when on — mirroring the layout switcher's active
         // word, and legible without color — plain muted when off.
         let cols = auto_chip_cols(40).unwrap();

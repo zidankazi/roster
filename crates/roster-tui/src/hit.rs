@@ -292,10 +292,10 @@ mod tests {
     fn auto_chip_cols_resolve_to_auto_hits_on_detail_rows_only() {
         let (session, entries) = setup();
         let area = Rect::new(0, 0, 120, 30);
-        // Sidebar inner is 31 wide, so every card's chip spans cols 26..30
+        // Sidebar inner is 31 wide, so every card's chip spans cols 24..30
         // of its detail row — rows 3 and 6.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, 26, 3),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 24, 3),
             Hit::SidebarAuto(0)
         );
         assert_eq!(
@@ -309,7 +309,7 @@ mod tests {
         // Off the chip — before it, past it, or the name row above — the
         // click is the card.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, 25, 3),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 23, 3),
             Hit::SidebarEntry(0)
         );
         assert_eq!(
