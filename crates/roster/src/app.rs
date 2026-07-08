@@ -1976,14 +1976,14 @@ impl App {
                     (
                         Some("SOLO"),
                         format!(
-                            "{focused}   click agents on the left to switch · grid tiles them again · ctrl-b for keys"
+                            "{focused}   click a card to switch · ctrl-b: keys · then z: grid · j: jump · q: quit"
                         ),
                     )
                 } else {
                     (
                         None,
                         format!(
-                            "{focused}   click a pane to focus · ✕ closes · drag borders to resize · ctrl-b for keys"
+                            "{focused}   ctrl-b: keys · then c: new agent · j: jump · z: solo · x: close · d: detach · q: quit"
                         ),
                     )
                 }

@@ -590,13 +590,7 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
         .map(|(rect, _)| rect.x)
         .unwrap_or(area.x + area.width);
     if x < right_edge {
-        buf.set_stringn(
-            x,
-            y,
-            view.status,
-            usize::from(right_edge - x),
-            style::muted(),
-        );
+        draw_hotkeys(buf, x, y, right_edge - x, view.status);
     }
     if let Some((rect, text)) = span {
         let style = if view.hover == Some(Hit::StatusWindows) {
@@ -612,9 +606,91 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
     }
 }
 
+/// Draw a status hint as a hotkey bar: within each ` · `-separated segment,
+/// a `key: label` pair renders the key accented and the label muted, so the
+/// keys read at a glance; a segment without the colon is plain muted text.
+/// This is how every mode's hint string gets its keys highlighted without
+/// the modes agreeing on anything beyond the `key: label` grammar.
+fn draw_hotkeys(buf: &mut Buffer, x: u16, y: u16, budget: u16, status: &str) {
+    let mut remaining = usize::from(budget);
+    let mut x = x;
+    let mut put = |x: &mut u16, text: &str, style: Style| {
+        if remaining == 0 {
+            return;
+        }
+        buf.set_stringn(*x, y, text, remaining, style);
+        let used = text.chars().count().min(remaining);
+        remaining -= used;
+        *x += used as u16;
+    };
+    let key_style = Style::default()
+        .fg(style::ACCENT)
+        .add_modifier(Modifier::BOLD);
+    for (i, segment) in status.split(" · ").enumerate() {
+        if i > 0 {
+            put(&mut x, " · ", style::muted());
+        }
+        match segment.split_once(": ") {
+            Some((key, label)) => {
+                put(&mut x, key, key_style);
+                put(&mut x, " ", style::muted());
+                put(&mut x, label, style::muted());
+            }
+            None => put(&mut x, segment, style::muted()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hotkey_bar_accents_keys_and_mutes_labels_and_prose() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 1));
+        draw_hotkeys(
+            &mut buf,
+            0,
+            0,
+            60,
+            "plain prose · ctrl-b: keys · then c: new agent",
+        );
+        let row: String = (0..60)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        // The colon in `key: label` renders as a space — keys read like the
+        // chips on a hotkey bar, not like prose.
+        assert_eq!(row, "plain prose · ctrl-b keys · then c new agent");
+
+        let accent = Style::default()
+            .fg(style::ACCENT)
+            .add_modifier(Modifier::BOLD);
+        let style_at = |x: u16| buf.cell((x, 0)).unwrap().style();
+        // Prose segment: muted, never accented.
+        assert_eq!(style_at(0).fg, style::muted().fg);
+        // "ctrl-b" (cols 14..20) is the key — accent + bold.
+        assert_eq!(style_at(14).fg, accent.fg);
+        assert!(style_at(14).add_modifier.contains(Modifier::BOLD));
+        // Its label "keys" (from col 21) is muted.
+        assert_eq!(style_at(21).fg, style::muted().fg);
+        // "then c" is a compound key — accented too.
+        assert_eq!(style_at(28).fg, accent.fg);
+    }
+
+    #[test]
+    fn hotkey_bar_respects_its_budget() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        // A budget shorter than the text must clip, never wrap or panic.
+        draw_hotkeys(&mut buf, 0, 0, 10, "c: new agent · q: quit");
+        let row: String = (0..20)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        assert_eq!(row.chars().count(), 10, "clipped to budget: {row:?}");
+    }
 
     #[test]
     fn content_rect_reserves_title_row_and_interior_separator() {
