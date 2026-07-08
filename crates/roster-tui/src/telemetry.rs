@@ -18,10 +18,18 @@ use crate::style::{muted, state_color};
 /// Absent readings render nothing — an unreported [`Telemetry`] yields an
 /// empty line. The context badge carries the severity color (see
 /// [`context_style`]); every other badge is quiet chrome.
+///
+/// The model's parenthetical variant suffix is dropped — Claude Code reports
+/// display names like `Opus 4.8 (1M context)`, and on a ~30-column card the
+/// suffix starves the numbers the badge exists to show.
 pub fn telemetry_line(telemetry: &Telemetry) -> Line<'static> {
     let mut badges: Vec<Span<'static>> = Vec::new();
     if let Some(model) = &telemetry.model {
-        badges.push(Span::styled(model.clone(), muted()));
+        let name = match model.find(" (") {
+            Some(paren) => &model[..paren],
+            None => model.as_str(),
+        };
+        badges.push(Span::styled(name.to_string(), muted()));
     }
     if let Some(pct) = telemetry.context_pct {
         badges.push(Span::styled(
@@ -152,6 +160,20 @@ mod tests {
             let style = style_at(&terminal, col_of(&terminal, needle));
             assert_eq!(style.fg, muted().fg, "badge {needle:?} is not muted");
         }
+    }
+
+    #[test]
+    fn model_parenthetical_suffix_is_dropped_from_the_badge() {
+        // Live Claude Code reports "Opus 4.8 (1M context)" — on a ~30-column
+        // card the suffix would starve the numbers.
+        let telemetry = Telemetry {
+            model: Some("Opus 4.8 (1M context)".to_string()),
+            context_pct: Some(96.0),
+            cost_usd: Some(0.02),
+            ..Telemetry::default()
+        };
+        let terminal = draw(&telemetry, 40);
+        assert_eq!(row_text(&terminal), "Opus 4.8 · 96% context · $0.02");
     }
 
     #[test]
