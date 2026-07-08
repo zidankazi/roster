@@ -20,6 +20,9 @@ pub struct Args {
     /// Print the Claude Code hooks snippet for `~/.claude/settings.json`
     /// and exit.
     pub print_hooks: bool,
+    /// Print the Claude Code statusLine snippet for
+    /// `~/.claude/settings.json` and exit.
+    pub print_statusline: bool,
     /// Run inside the named persistent session (create it if needed).
     pub session: Option<String>,
     /// A subcommand, when the first positional was one.
@@ -45,6 +48,10 @@ pub enum Action {
     /// roster instance. Registered via `--print-hooks`; a no-op outside a
     /// roster pane.
     Hook,
+    /// Hidden: forward a Claude Code statusline payload (stdin JSON) to the
+    /// pane's roster instance. Registered via `--print-statusline`; a no-op
+    /// outside a roster pane.
+    Statusline,
 }
 
 /// The sidebar edge requested on the command line.
@@ -81,6 +88,10 @@ OPTIONS:
                        ~/.config/roster/agents.toml to customize)
       --print-hooks    Print the Claude Code hooks that report exact agent
                        state to roster (merge into ~/.claude/settings.json)
+      --print-statusline  Print the Claude Code statusLine command that feeds
+                       telemetry (model, context, cost, rate limits) to
+                       roster (merge into ~/.claude/settings.json; statusLine
+                       is a single slot — merging replaces an existing one)
   -h, --help           Print this help
   -V, --version        Print the version
 
@@ -116,6 +127,7 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
             "-V" | "--version" => parsed.version = true,
             "--print-config" => parsed.print_config = true,
             "--print-hooks" => parsed.print_hooks = true,
+            "--print-statusline" => parsed.print_statusline = true,
             "-c" | "--config" => {
                 let value = iter
                     .next()
@@ -162,6 +174,9 @@ pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Args, String> {
             }
             "_hook" if parsed.commands.is_empty() && parsed.action.is_none() => {
                 parsed.action = Some(Action::Hook);
+            }
+            "_statusline" if parsed.commands.is_empty() && parsed.action.is_none() => {
+                parsed.action = Some(Action::Statusline);
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}"));
@@ -240,7 +255,16 @@ mod tests {
             parse(strings(&["_hook"])).unwrap().action,
             Some(Action::Hook)
         );
+        assert_eq!(
+            parse(strings(&["_statusline"])).unwrap().action,
+            Some(Action::Statusline)
+        );
         assert!(parse(strings(&["--print-hooks"])).unwrap().print_hooks);
+        assert!(
+            parse(strings(&["--print-statusline"]))
+                .unwrap()
+                .print_statusline
+        );
         assert!(parse(strings(&["attach"])).is_err());
 
         // Subcommands only claim the first positional; later words are

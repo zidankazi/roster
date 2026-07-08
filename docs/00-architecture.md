@@ -66,7 +66,11 @@ For Claude Code panes there is a second, authoritative signal path: Claude
 Code hooks (inheriting `ROSTER_PANE`/`ROSTER_HOOK_SOCK` from the pane's
 environment) invoke `roster _hook`, which sends `HookBlocked`/`HookClear`
 frames over a unix socket into the same loop — exact permission asks, no
-scraping. See [`05-claude-native-attention.md`](05-claude-native-attention.md).
+scraping. The statusline feed rides the same socket: Claude Code pipes its
+session JSON to `roster _statusline`, which forwards it verbatim as a
+`Statusline` frame; the client parses it into telemetry (model, context %,
+cost, rate limits). See
+[`05-claude-native-attention.md`](05-claude-native-attention.md).
 
 `roster-detect` reads the *parsed grid* from `roster-term`, not raw bytes — that's why it's agent-safe and testable: you can feed it fixture grids and assert the state, with no PTY in the loop.
 

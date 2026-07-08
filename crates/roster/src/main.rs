@@ -50,6 +50,19 @@ fn run() -> Result<(), String> {
         print!("{}", hook::settings_snippet());
         return Ok(());
     }
+    if args.print_statusline {
+        print!("{}", hook::statusline_snippet());
+        // statusLine is a single slot; merging the snippet over an existing
+        // one silently replaces it — say so where a `> settings` redirect
+        // can't swallow it.
+        if hook::statusline_already_configured() {
+            eprintln!(
+                "warning: ~/.claude/settings.json already sets statusLine — \
+                 merging this snippet replaces it"
+            );
+        }
+        return Ok(());
+    }
 
     match &args.action {
         Some(cli::Action::Server(name)) => {
@@ -61,6 +74,7 @@ fn run() -> Result<(), String> {
         }
         Some(cli::Action::Proxy(name)) => return proxy(name),
         Some(cli::Action::Hook) => return hook::run(),
+        Some(cli::Action::Statusline) => return hook::run_statusline(),
         Some(cli::Action::List) => return list_sessions(),
         Some(cli::Action::Kill(name)) => return kill_session(name),
         Some(cli::Action::Attach(target)) => return attach(target, &args),

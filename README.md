@@ -106,10 +106,14 @@ roster attach user@devbox:work   # needs roster installed on devbox
 
 roster is built exclusively for Claude Code — it's the only agent it ships
 detection for. And it doesn't just read Claude's screen: it can read Claude
-Code's own state. Register roster's hooks once:
+Code's own state. Register roster's hooks (and, optionally, its telemetry
+feed) once:
 
 ```sh
-roster --print-hooks   # merge the output into ~/.claude/settings.json
+roster --print-hooks        # merge the output into ~/.claude/settings.json
+roster --print-statusline   # same file; feeds model/context/cost/rate-limit
+                            # telemetry (statusLine is a single slot — this
+                            # replaces an existing custom statusline)
 ```
 
 and every Claude Code pane reports its permission asks directly. The moment

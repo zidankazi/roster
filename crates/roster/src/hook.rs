@@ -17,6 +17,11 @@
 //! session it runs inside: it always exits 0, silently, whether or not
 //! roster is listening — a claude launched outside roster simply has no
 //! [`PANE_ENV`], and the hook does nothing.
+//!
+//! The same env pair carries the telemetry half of docs/05 Phase 2:
+//! `roster _statusline`, registered as the `statusLine` command (see
+//! [`statusline_snippet`]), forwards Claude Code's statusline session JSON
+//! verbatim as a [`Frame::Statusline`] under the identical safety contract.
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -30,9 +35,11 @@ pub const PANE_ENV: &str = "ROSTER_PANE";
 /// The environment variable carrying the hook socket path.
 pub const SOCK_ENV: &str = "ROSTER_HOOK_SOCK";
 
-/// Hook payloads beyond this size are ignored rather than buffered — real
-/// payloads are a few KB; anything larger is not for us.
-const MAX_PAYLOAD: u64 = 1024 * 1024;
+/// Payloads beyond this size are ignored rather than buffered — real hook
+/// and statusline payloads are a few KB; anything larger is not for us.
+/// Shared with the receiving side (`apply_statusline`) as its drop
+/// threshold, so sender and receiver cannot drift apart.
+pub(crate) const MAX_PAYLOAD: u64 = 1024 * 1024;
 
 /// Reasons are sidebar copy: one line, not a document.
 const MAX_REASON: usize = 120;
@@ -53,14 +60,23 @@ const STDIN_DEADLINE: Duration = Duration::from_secs(2);
 /// means "no auto-approve", identical to the behavior before this channel.
 const REPLY_DEADLINE: Duration = Duration::from_secs(1);
 
+/// The shell command Claude Code should run for a bridge subcommand: this
+/// binary's absolute path so it doesn't depend on (or trust) whatever
+/// `roster` a future `PATH` resolves. The one home of that rule for both
+/// printed snippets. Double-quoted because Claude Code hands the string to
+/// `sh -c`: a binary path with spaces must stay one word, exactly as the
+/// Claude Code docs quote paths in their own examples.
+fn bridge_command(subcommand: &str) -> String {
+    match std::env::current_exe() {
+        Ok(path) => format!("\"{}\" {subcommand}", path.display()),
+        Err(_) => format!("roster {subcommand}"),
+    }
+}
+
 /// The hooks to merge into `~/.claude/settings.json`, printed by
-/// `roster --print-hooks`. Uses this binary's absolute path so the hook
-/// doesn't depend on (or trust) whatever `roster` a future `PATH` resolves.
+/// `roster --print-hooks`.
 pub fn settings_snippet() -> String {
-    let command = match std::env::current_exe() {
-        Ok(path) => format!("{} _hook", path.display()),
-        Err(_) => "roster _hook".to_string(),
-    };
+    let command = bridge_command("_hook");
     let entry = serde_json::json!([
         { "matcher": "", "hooks": [{ "type": "command", "command": command, "timeout": 5 }] }
     ]);
@@ -76,20 +92,19 @@ pub fn settings_snippet() -> String {
     text
 }
 
-/// The `roster _hook` entrypoint: read the hook payload from stdin, and
-/// when this claude runs inside a roster pane, report the event over the
-/// hook socket. Silent and infallible by design — a hook that could fail
-/// would break the user's Claude session, which is worse than a missed
-/// state update (screen-scraping still runs underneath).
-pub fn run() -> Result<(), String> {
+/// The pane id and hook socket path from the environment, or `None` when
+/// this process is not running inside a roster pane.
+fn bridge_env() -> Option<(u64, String)> {
     let (Ok(pane_var), Ok(sock)) = (std::env::var(PANE_ENV), std::env::var(SOCK_ENV)) else {
-        return Ok(()); // Not a roster pane: no-op.
+        return None;
     };
-    let Ok(pane) = pane_var.parse::<u64>() else {
-        return Ok(());
-    };
-    // Read stdin on a helper thread so an unclosed stdin can't hang the
-    // Claude session; the thread dies with the process.
+    Some((pane_var.parse().ok()?, sock))
+}
+
+/// The stdin payload, read on a helper thread so an unclosed stdin (or a
+/// human at a tty) can't hang the Claude session behind it; the thread dies
+/// with the process. `None` when nothing arrives within [`STDIN_DEADLINE`].
+fn read_stdin_deadlined() -> Option<String> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut payload = String::new();
@@ -101,23 +116,43 @@ pub fn run() -> Result<(), String> {
             let _ = tx.send(payload);
         }
     });
-    let Ok(payload) = rx.recv_timeout(STDIN_DEADLINE) else {
+    rx.recv_timeout(STDIN_DEADLINE).ok()
+}
+
+/// Connect to the hook socket and send one frame, or `None` when either
+/// step fails — roster being gone must never disturb the agent. The single
+/// home of the wedged-listener protection: a 1-second write timeout so a
+/// stuck owner can't stall the Claude session behind it.
+fn send_frame(sock: &str, frame: &Frame) -> Option<UnixStream> {
+    let Ok(mut stream) = UnixStream::connect(sock) else {
+        return None; // roster is gone; the agent lives on.
+    };
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    write_frame(&mut stream, frame).ok()?;
+    Some(stream)
+}
+
+/// The `roster _hook` entrypoint: read the hook payload from stdin, and
+/// when this claude runs inside a roster pane, report the event over the
+/// hook socket. Silent and infallible by design — a hook that could fail
+/// would break the user's Claude session, which is worse than a missed
+/// state update (screen-scraping still runs underneath).
+pub fn run() -> Result<(), String> {
+    let Some((pane, sock)) = bridge_env() else {
+        return Ok(()); // Not a roster pane: no-op.
+    };
+    let Some(payload) = read_stdin_deadlined() else {
         return Ok(());
     };
     let Some(frame) = frame_from_payload(pane, &payload) else {
         return Ok(());
     };
-    let Ok(mut stream) = UnixStream::connect(&sock) else {
-        return Ok(()); // roster is gone; the agent lives on.
-    };
-    // A wedged listener must not stall the Claude session behind it.
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
     // Only a permission ask (`HookBlocked`) can be auto-approved; clears are
     // fire-and-forget and get no reply.
     let is_ask = matches!(frame, Frame::HookBlocked { .. });
-    if write_frame(&mut stream, &frame).is_err() {
+    let Some(mut stream) = send_frame(&sock, &frame) else {
         return Ok(());
-    }
+    };
     if is_ask {
         // Wait, deadlined, for the owner's decision. Approve only on an
         // explicit allow; a timeout, EOF, or any other reply leaves stdout
@@ -130,6 +165,68 @@ pub fn run() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The `roster _statusline` entrypoint: read Claude Code's statusline
+/// session JSON from stdin and, inside a roster pane, forward it verbatim
+/// as a [`Frame::Statusline`] — no parsing here; the pinned contract point
+/// stays `roster-detect`'s statusline parser, applied by the receiving
+/// client. Prints nothing, deliberately: stdout would become the pane's
+/// visible statusline, and roster's sidebar is the display surface. Same
+/// safety contract as [`run`]: silent no-op outside roster, always exit 0,
+/// deadlined stdin read — the feed must never disturb the Claude session
+/// it reports on.
+pub fn run_statusline() -> Result<(), String> {
+    let Some((pane, sock)) = bridge_env() else {
+        return Ok(()); // Not a roster pane: no-op.
+    };
+    let Some(json) = read_stdin_deadlined() else {
+        return Ok(());
+    };
+    if json.trim().is_empty() {
+        return Ok(());
+    }
+    // Fire-and-forget: telemetry never gets a reply.
+    let _ = send_frame(&sock, &Frame::Statusline { pane, json });
+    Ok(())
+}
+
+/// The statusLine entry to merge into `~/.claude/settings.json`, printed by
+/// `roster --print-statusline`. Same absolute-path rule as
+/// [`settings_snippet`]. Unlike hooks, `statusLine` is a single slot, not a
+/// list: merging this replaces any existing statusline command, so main
+/// warns when [`statusline_already_configured`] says one is set.
+pub fn statusline_snippet() -> String {
+    let command = bridge_command("_statusline");
+    let snippet = serde_json::json!({
+        "statusLine": { "type": "command", "command": command }
+    });
+    let mut text = serde_json::to_string_pretty(&snippet).expect("static json serializes");
+    text.push('\n');
+    text
+}
+
+/// Whether `~/.claude/settings.json` already configures a `statusLine`.
+/// Gates an advisory clobber warning only, so best-effort by design: an
+/// unreadable or unparsable settings file reads as "none configured".
+/// Deliberately user-settings-scope: a project's `.claude/settings.json` /
+/// `settings.local.json` can also set (and outrank) the slot, but those are
+/// per-cwd and this command can run from anywhere — checking the current
+/// directory would be as often misleading as helpful.
+pub fn statusline_already_configured() -> bool {
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    let path = std::path::PathBuf::from(home)
+        .join(".claude")
+        .join("settings.json");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    json.get("statusLine").is_some_and(|v| !v.is_null())
 }
 
 /// The stdout a `PermissionRequest` hook prints to auto-approve its ask.
@@ -411,6 +508,18 @@ mod tests {
     }
 
     #[test]
+    fn statusline_snippet_registers_the_forwarder_in_the_single_slot() {
+        let text = statusline_snippet();
+        let json: serde_json::Value = serde_json::from_str(&text).expect("snippet parses");
+        assert_eq!(json["statusLine"]["type"], "command");
+        let command = json["statusLine"]["command"].as_str().unwrap_or_default();
+        assert!(command.ends_with(" _statusline"), "{command}");
+        // Absolute path to this binary — quoted for the shell, not a PATH
+        // lookup.
+        assert!(command.starts_with("\"/"), "{command}");
+    }
+
+    #[test]
     fn settings_snippet_is_valid_json_registering_all_three_events() {
         let text = settings_snippet();
         let json: serde_json::Value = serde_json::from_str(&text).expect("snippet parses");
@@ -419,8 +528,9 @@ mod tests {
                 .as_str()
                 .unwrap_or_default();
             assert!(command.ends_with(" _hook"), "event {event}: {command}");
-            // Absolute path to this binary, not a PATH lookup.
-            assert!(command.starts_with('/'), "event {event}: {command}");
+            // Absolute path to this binary — quoted for the shell, not a
+            // PATH lookup.
+            assert!(command.starts_with("\"/"), "event {event}: {command}");
         }
     }
 }

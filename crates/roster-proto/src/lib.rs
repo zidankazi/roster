@@ -28,8 +28,9 @@ pub struct HelloPane {
 }
 
 /// Every message either side can send. Tags 1–63 flow client → server,
-/// 64+ server → client — except the hook frames (tags 10/11), which enter
-/// from `roster _hook` and are also relayed server → client verbatim, and
+/// 64+ server → client — except the hook frames (tags 10/11) and the
+/// statusline frame (tag 14), which enter from `roster _hook` /
+/// `roster _statusline` and are also relayed server → client verbatim, and
 /// the hook reply (tag 12, [`Frame::HookDecision`]), written back to
 /// `roster _hook` on its own connection — never relayed to a client, never
 /// valid client → server.
@@ -115,6 +116,20 @@ pub enum Frame {
         tool: String,
     },
 
+    /// A pane's statusline telemetry payload, verbatim. Sent by
+    /// `roster _statusline` when Claude Code feeds its statusline command;
+    /// like the hook frames it enters from outside the client/server pair
+    /// and a session server relays it verbatim to the attached client,
+    /// where the pinned parser (`roster-detect`) turns it into telemetry.
+    /// Fire-and-forget: unlike `HookBlocked`, it never gets a reply.
+    Statusline {
+        /// The pane whose agent reported telemetry (`ROSTER_PANE` in its
+        /// env).
+        pane: u64,
+        /// The statusline session JSON exactly as Claude Code piped it.
+        json: String,
+    },
+
     // Hook reply (owner → `roster _hook`). Written back on the hook
     // connection after a `HookBlocked`, never relayed to a client.
     /// The socket owner's answer to a pane's permission ask: auto-approve it
@@ -193,6 +208,7 @@ impl Frame {
             Frame::HookClear { .. } => 11,
             Frame::HookDecision { .. } => 12,
             Frame::SetAutoApprove { .. } => 13,
+            Frame::Statusline { .. } => 14,
             Frame::Hello { .. } => 64,
             Frame::Replay { .. } => 65,
             Frame::Output { .. } => 66,
@@ -231,6 +247,10 @@ pub fn write_frame(w: &mut impl Write, frame: &Frame) -> io::Result<()> {
         Frame::HookClear { pane, tool } => {
             put_u64(&mut payload, *pane);
             put_bytes(&mut payload, tool.as_bytes());
+        }
+        Frame::Statusline { pane, json } => {
+            put_u64(&mut payload, *pane);
+            put_bytes(&mut payload, json.as_bytes());
         }
         Frame::HookDecision { allow } => payload.push(*allow as u8),
         Frame::SetAutoApprove { pane, on } => {
@@ -325,6 +345,10 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Frame>> {
         13 => Frame::SetAutoApprove {
             pane: p.u64()?,
             on: p.u8()? != 0,
+        },
+        14 => Frame::Statusline {
+            pane: p.u64()?,
+            json: p.string()?,
         },
         64 => {
             let count = p.u64()?;
@@ -492,6 +516,18 @@ mod tests {
             pane: 3,
             tool: String::new(),
         });
+        round_trip(Frame::Statusline {
+            pane: 3,
+            json: r#"{"model":{"display_name":"Opus"},"context_window":{"remaining_percentage":62.5}}"#.into(),
+        });
+        round_trip(Frame::Statusline {
+            pane: 3,
+            json: String::new(),
+        });
+        round_trip(Frame::Statusline {
+            pane: u64::MAX,
+            json: "non-json 🦀 payloads still round-trip".into(),
+        });
         round_trip(Frame::HookDecision { allow: true });
         round_trip(Frame::HookDecision { allow: false });
         round_trip(Frame::SetAutoApprove { pane: 5, on: true });
@@ -599,6 +635,29 @@ mod tests {
         let mut buf = Vec::new();
         buf.extend_from_slice(&(payload.len() as u32 + 1).to_le_bytes());
         buf.push(4); // Spawn
+        buf.extend_from_slice(&payload);
+        let mut r = buf.as_slice();
+        assert!(read_frame(&mut r).is_err());
+
+        // Invalid utf-8 in a Statusline json field.
+        let mut payload = Vec::new();
+        put_u64(&mut payload, 3);
+        put_bytes(&mut payload, &[0xff, 0xfe]);
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(payload.len() as u32 + 1).to_le_bytes());
+        buf.push(14); // Statusline
+        buf.extend_from_slice(&payload);
+        let mut r = buf.as_slice();
+        assert!(read_frame(&mut r).is_err());
+
+        // A Statusline frame truncated inside its json length.
+        let mut payload = Vec::new();
+        put_u64(&mut payload, 3);
+        payload.extend_from_slice(&8u32.to_le_bytes()); // claims 8 bytes
+        payload.extend_from_slice(b"abc"); // has 3
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(payload.len() as u32 + 1).to_le_bytes());
+        buf.push(14);
         buf.extend_from_slice(&payload);
         let mut r = buf.as_slice();
         assert!(read_frame(&mut r).is_err());

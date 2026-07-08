@@ -951,3 +951,80 @@ fn hook_bridge_pins_blocked_and_clears_end_to_end() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn statusline_forwarder_sends_the_payload_verbatim_and_prints_nothing() {
+    use std::io::Write as _;
+    use std::os::unix::net::UnixListener;
+
+    // The real binary, driven exactly as Claude Code drives its statusLine
+    // command: session JSON on stdin, ROSTER_PANE / ROSTER_HOOK_SOCK in the
+    // env (set on the child only — no process-global mutation).
+    let dir = PathBuf::from(format!("/tmp/roster-sl{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("sock dir");
+    let sock = dir.join("s.sock");
+    let _ = std::fs::remove_file(&sock);
+    let listener = UnixListener::bind(&sock).expect("bind hook socket");
+    listener.set_nonblocking(true).expect("nonblocking accept");
+
+    let payload =
+        r#"{"model":{"display_name":"Opus"},"context_window":{"remaining_percentage":41.5}}"#;
+    let mut child = Command::new(bin())
+        .arg("_statusline")
+        .env("ROSTER_PANE", "7")
+        .env("ROSTER_HOOK_SOCK", &sock)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn _statusline");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.as_bytes())
+        .expect("write payload");
+
+    let start = Instant::now();
+    let mut conn = loop {
+        match listener.accept() {
+            Ok((conn, _)) => break conn,
+            Err(_) if start.elapsed() < DEADLINE => std::thread::sleep(Duration::from_millis(20)),
+            Err(e) => panic!("_statusline never connected: {e}"),
+        }
+    };
+    // macOS accepted sockets inherit the listener's nonblocking flag.
+    conn.set_nonblocking(false).expect("blocking reads");
+    // Best-effort: macOS refuses SO_RCVTIMEO (EINVAL) once the peer has
+    // disconnected — and `_statusline` often writes and exits before this
+    // line runs. In exactly that case the read can't block anyway: the
+    // frame is buffered and EOF follows.
+    let _ = conn.set_read_timeout(Some(DEADLINE));
+    let frame = roster_proto::read_frame(&mut conn)
+        .expect("read frame")
+        .expect("one frame");
+    assert_eq!(
+        frame,
+        roster_proto::Frame::Statusline {
+            pane: 7,
+            json: payload.into(),
+        },
+        "the payload must cross the socket verbatim"
+    );
+
+    let output = child.wait_with_output().expect("wait");
+    assert!(output.status.success(), "must always exit 0");
+    assert!(
+        output.stdout.is_empty(),
+        "stdout becomes the pane's visible statusline; it must stay empty"
+    );
+
+    // Outside a roster pane (no env) it is a silent, successful no-op.
+    let output = Command::new(bin())
+        .arg("_statusline")
+        .output()
+        .expect("run _statusline without env");
+    assert!(output.status.success(), "no-op must still exit 0");
+    assert!(output.stdout.is_empty(), "no-op must print nothing");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

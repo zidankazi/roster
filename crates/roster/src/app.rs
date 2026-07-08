@@ -68,7 +68,8 @@ enum Output {
     Bytes(PaneId, u64, Vec<u8>),
     Eof(PaneId, u64),
     /// A frame from the hook socket: a Claude Code hook reporting a pane's
-    /// exact state (see the `hook` module).
+    /// exact state, or its statusline feed reporting telemetry (see the
+    /// `hook` module).
     Hook(Frame),
 }
 
@@ -802,6 +803,9 @@ impl App {
                 Output::Hook(Frame::HookClear { pane, tool }) => {
                     self.apply_hook_clear(pane, &tool);
                 }
+                Output::Hook(Frame::Statusline { pane, json }) => {
+                    self.apply_statusline(pane, &json);
+                }
                 Output::Hook(_) => {}
             }
         }
@@ -839,6 +843,33 @@ impl App {
         });
         self.session
             .set_reading(id, AgentState::Blocked, Some(reason), Instant::now());
+    }
+
+    /// A statusline payload arrived for a pane: parse it with the pinned
+    /// contract in `roster-detect` and hand the telemetry to the pane's
+    /// tracker, which owns freshness and staleness (docs/05 Phase 2). The
+    /// socket accepts frames from any local process, so payloads are
+    /// advisory until they parse — junk yields `None` and is dropped. Same
+    /// gate as hook pins: only identified, live agent panes take telemetry;
+    /// nothing renders it for other panes.
+    fn apply_statusline(&mut self, pane: u64, json: &str) {
+        // Cheap gates before the parse: a payload for a dead, unidentified,
+        // or unknown pane must not pay a JSON parse on the loop thread. The
+        // size cap is the sender's own stdin cap, shared so the two can't
+        // drift apart.
+        let Some(rt) = self.runtimes.get_mut(&PaneId::from_raw(pane)) else {
+            return;
+        };
+        if rt.kind.is_none() || rt.exited.is_some() {
+            return;
+        }
+        if json.len() as u64 > crate::hook::MAX_PAYLOAD {
+            return;
+        }
+        let Some(telemetry) = roster_detect::statusline::parse(json) else {
+            return;
+        };
+        rt.tracker.set_telemetry(telemetry, Instant::now());
     }
 
     /// A clear event: `tool` names the ask it answers (an approved tool's
@@ -930,6 +961,7 @@ impl App {
                     self.apply_hook_blocked(pane, tool, reason)
                 }
                 Frame::HookClear { pane, tool } => self.apply_hook_clear(pane, &tool),
+                Frame::Statusline { pane, json } => self.apply_statusline(pane, &json),
                 Frame::SpawnFailed { error } => {
                     if let Some(remote) = &mut self.remote {
                         remote.pending.pop_front();
@@ -2024,10 +2056,11 @@ pub fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
 }
 
-/// Listen for `roster _hook` reports on a per-process unix socket, feeding
-/// frames into the app loop. Returns the path to advertise via
-/// `ROSTER_HOOK_SOCK`, or `None` when the socket can't be created — hook
-/// state is an upgrade over scraping, never a requirement.
+/// Listen for `roster _hook` and `roster _statusline` reports on a
+/// per-process unix socket, feeding frames into the app loop. Returns the
+/// path to advertise via `ROSTER_HOOK_SOCK`, or `None` when the socket
+/// can't be created — hook state and telemetry are an upgrade over
+/// scraping, never a requirement.
 ///
 /// The socket lives in a `hook/` subdirectory, NOT next to the session
 /// sockets: `roster ls`/`kill`/`attach` probe every top-level `*.sock` as
@@ -2084,7 +2117,7 @@ fn start_hook_listener(
                                 return;
                             }
                         }
-                        Ok(Some(frame @ Frame::HookClear { .. })) => {
+                        Ok(Some(frame @ (Frame::HookClear { .. } | Frame::Statusline { .. }))) => {
                             if tx.send(Output::Hook(frame)).is_err() {
                                 return;
                             }
@@ -2151,10 +2184,18 @@ mod tests {
         assert!(hook_pin_wins(HOOK_PIN_GRACE, AgentState::Blocked));
     }
 
+    /// `start_hook_listener` binds a pid-keyed socket path and the test
+    /// binary is one pid: two listener tests on parallel threads would
+    /// unlink and steal each other's socket. Serialize them.
+    static LISTENER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn hook_listener_answers_asks_from_the_auto_approve_set() {
         use std::os::unix::net::UnixStream;
 
+        let _serial = LISTENER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (tx, rx) = mpsc::channel::<Output>();
         let auto: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
         auto.lock().unwrap().insert(7);
@@ -2208,6 +2249,49 @@ mod tests {
             Some(Frame::HookDecision { allow: false }),
             "a non-auto pane must not be auto-approved"
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn hook_listener_forwards_statusline_frames_without_a_reply() {
+        use std::os::unix::net::UnixStream;
+
+        let _serial = LISTENER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (tx, rx) = mpsc::channel::<Output>();
+        let auto: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
+        let Some(path) = start_hook_listener(tx, auto) else {
+            // No sessions dir available (locked-down sandbox): nothing to do.
+            return;
+        };
+
+        let mut s = UnixStream::connect(&path).expect("connect hook socket");
+        s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let json = r#"{"model":{"display_name":"Opus"}}"#.to_string();
+        write_frame(
+            &mut s,
+            &Frame::Statusline {
+                pane: 4,
+                json: json.clone(),
+            },
+        )
+        .unwrap();
+        let Ok(Output::Hook(Frame::Statusline { pane, json: seen })) =
+            rx.recv_timeout(Duration::from_secs(2))
+        else {
+            panic!("the statusline frame never reached the app loop");
+        };
+        assert_eq!(pane, 4);
+        assert_eq!(seen, json, "the payload must arrive verbatim");
+        // Telemetry is fire-and-forget: nothing comes back — the read either
+        // times out (the listener kept the connection for more frames) or
+        // sees a clean close, never a reply frame.
+        match read_frame(&mut s) {
+            Ok(None) | Err(_) => {}
+            Ok(Some(frame)) => panic!("unexpected reply to a statusline report: {frame:?}"),
+        }
 
         let _ = std::fs::remove_file(&path);
     }

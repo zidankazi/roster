@@ -398,10 +398,11 @@ fn event_loop(
                     }
                     send_to_client(&mut client, &frame);
                 }
-                Frame::HookClear { .. } => {
-                    // Clears relay verbatim to the attached client, where
-                    // detection applies them. No client, no harm: the scrape
-                    // re-detects the prompt on reattach.
+                Frame::HookClear { .. } | Frame::Statusline { .. } => {
+                    // Externally-injected frames relay verbatim to the
+                    // attached client, where detection applies them. No
+                    // client, no harm: the scrape re-detects a prompt on
+                    // reattach, and a live agent's statusline feed re-sends.
                     send_to_client(&mut client, &frame);
                 }
                 Frame::SetAutoApprove { pane, on } => {
