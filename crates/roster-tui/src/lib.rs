@@ -31,7 +31,7 @@ pub use pane::PaneView;
 pub use rename::{draw_rename, rename_contains, rename_cursor, rename_rect};
 pub use sidebar::{
     auto_all_cols, auto_chip_cols, format_age, sidebar_entries, sidebar_rows, Message, Sidebar,
-    SidebarEntry, SidebarRow, SidebarState,
+    SidebarEntry, SidebarRow, SidebarState, SidebarView,
 };
 pub use style::{cell_style, muted, state_color, state_glyph, state_label, ACCENT};
 pub use telemetry::telemetry_line;
@@ -80,6 +80,9 @@ pub struct View<'a> {
     pub zoomed: bool,
     /// Which edge the sidebar occupies.
     pub side: SidebarSide,
+    /// How the sidebar orders its cards: grouped by workspace, or one flat
+    /// attention ranking across all workspaces.
+    pub sidebar_view: SidebarView,
     /// The agent launcher, when open: its items and input state.
     pub launcher: Option<(&'a [LaunchItem], &'a LauncherState)>,
     /// The close-confirmation dialog, when open: the threatened agent's
@@ -187,6 +190,30 @@ pub fn sidebar_view_row(frame_area: Rect, side: SidebarSide) -> Option<u16> {
 pub fn view_toggle_cols() -> (std::ops::Range<u16>, std::ops::Range<u16>) {
     // " grid · solo" — generous targets around each word.
     (0..6, 7..13)
+}
+
+/// The sidebar row hosting the `by space · by need` triage switcher, which
+/// flips the sidebar between per-workspace grouping and one global attention
+/// ranking. It sits one row above the `grid · solo` layout switcher, or —
+/// when that switcher is hidden (`has_view_row` false) — in the row the
+/// layout switcher would occupy. `None` on sidebars too short or narrow to
+/// host it; the caller further gates it on there being more than one
+/// workspace, since with one the two orderings are identical and the control
+/// would be noise. `render` draws it and `hit_test` targets it.
+pub fn sidebar_triage_row(frame_area: Rect, side: SidebarSide, has_view_row: bool) -> Option<u16> {
+    let bar = sidebar_inner(frame_area, side);
+    // Above the pinned button (which reserves the bottom row and a breathing
+    // row) and, when present, the layout switcher on the row above that.
+    let offset = 2 + u16::from(has_view_row);
+    (bar.height >= 8 + u16::from(has_view_row) && bar.width >= 20)
+        .then(|| bar.y + bar.height - offset)
+}
+
+/// The triage switcher's click targets on its row, in sidebar-inner
+/// columns: `(by space, by need)` word spans.
+pub fn triage_toggle_cols() -> (std::ops::Range<u16>, std::ops::Range<u16>) {
+    // " by space · by need" — generous targets around each label.
+    (0..10, 11..20)
 }
 
 /// The status row's right-aligned workspace indicator — `⧉ 2/3`, clickable
@@ -387,25 +414,28 @@ pub fn render(frame: &mut Frame, view: &View) {
             button_style,
         );
     }
+    // A switcher word: accent+bold when it names the active mode, muted
+    // otherwise, inverted under the pointer — shared by both switchers.
+    let word = |active: bool, hovered: bool| -> Style {
+        let mut style = if active {
+            Style::default()
+                .fg(style::ACCENT)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            style::muted()
+        };
+        if hovered {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        style
+    };
     // The grid · solo switcher, above the button, when there is anything
     // to switch between.
     let multi_pane = view.session.layout(panes.width, panes.height).len() > 1;
+    let has_view_row = multi_pane && sidebar_view_row(area, view.side).is_some();
     if multi_pane {
         if let Some(view_y) = sidebar_view_row(area, view.side) {
             cards.height = cards.height.saturating_sub(1);
-            let word = |active: bool, hovered: bool| -> Style {
-                let mut style = if active {
-                    Style::default()
-                        .fg(style::ACCENT)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    style::muted()
-                };
-                if hovered {
-                    style = style.add_modifier(Modifier::REVERSED);
-                }
-                style
-            };
             let buf = frame.buffer_mut();
             buf.set_string(
                 bar_inner.x + 1,
@@ -419,6 +449,28 @@ pub fn render(frame: &mut Frame, view: &View) {
                 view_y,
                 "solo",
                 word(view.zoomed, view.hover == Some(Hit::SidebarViewSolo)),
+            );
+        }
+    }
+    // The by space · by need triage switcher, above the layout switcher.
+    // Only with more than one workspace — with one, both orderings match.
+    if view.session.window_count() > 1 {
+        if let Some(triage_y) = sidebar_triage_row(area, view.side, has_view_row) {
+            cards.height = cards.height.saturating_sub(1);
+            let by_space = view.sidebar_view == SidebarView::BySpace;
+            let buf = frame.buffer_mut();
+            buf.set_string(
+                bar_inner.x + 1,
+                triage_y,
+                "by space",
+                word(by_space, view.hover == Some(Hit::SidebarViewBySpace)),
+            );
+            buf.set_string(bar_inner.x + 10, triage_y, "·", style::muted());
+            buf.set_string(
+                bar_inner.x + 12,
+                triage_y,
+                "by need",
+                word(!by_space, view.hover == Some(Hit::SidebarViewByNeed)),
             );
         }
     }
@@ -453,7 +505,8 @@ pub fn render(frame: &mut Frame, view: &View) {
         .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
         .hovered_window(hovered_window)
         .names(view.window_names)
-        .named(&window_named),
+        .named(&window_named)
+        .view(view.sidebar_view),
         cards,
     );
 

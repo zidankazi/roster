@@ -30,7 +30,7 @@ use roster_tui::{
     confirm_button_at, confirm_contains, content_rect, exited_buttons, hit_test, launch_items,
     local_panes, panes_area, pointer_for, rename_contains, render, sidebar_entries, toast_rects,
     ConfirmButton, Hit, LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry,
-    SidebarSide, SidebarState, ToastLevel, View,
+    SidebarSide, SidebarState, SidebarView, ToastLevel, View,
 };
 
 use crate::keys::encode_key;
@@ -231,6 +231,9 @@ pub struct App {
     detector: Detector,
     sidebar: SidebarState,
     side: SidebarSide,
+    /// How the sidebar orders its cards: grouped by workspace (the default)
+    /// or one flat attention ranking across all workspaces.
+    sidebar_view: SidebarView,
     mode: Mode,
     launchables: Vec<LaunchItem>,
     last_entries: Vec<SidebarEntry>,
@@ -299,6 +302,7 @@ impl App {
             detector,
             sidebar: SidebarState::new(),
             side,
+            sidebar_view: SidebarView::default(),
             mode: if open_launcher {
                 Mode::Launch(LauncherState::new())
             } else {
@@ -470,6 +474,7 @@ impl App {
             detector,
             sidebar: SidebarState::new(),
             side,
+            sidebar_view: SidebarView::default(),
             mode: if placeholder.is_some() {
                 Mode::Launch(LauncherState::new())
             } else {
@@ -681,7 +686,12 @@ impl App {
             self.toasts.retain(|toast| toast.born.elapsed() < TOAST_TTL);
             self.sync_remote_layout();
 
-            self.last_entries = sidebar_entries(&self.session, &self.detector, Instant::now());
+            self.last_entries = sidebar_entries(
+                &self.session,
+                &self.detector,
+                Instant::now(),
+                self.sidebar_view,
+            );
             // Light the `auto` chip from the shared set (a poisoned lock
             // just leaves chips unlit). Different fields than last_entries, so
             // the borrows are disjoint.
@@ -752,6 +762,7 @@ impl App {
                 hover,
                 zoomed: self.zoomed,
                 side: self.side,
+                sidebar_view: self.sidebar_view,
                 launcher,
                 confirm: confirm
                     .as_ref()
@@ -1338,9 +1349,9 @@ impl App {
             &self.session,
             self.side,
             &self.last_entries,
+            self.sidebar_view,
             self.zoomed_pane(),
-            x,
-            y,
+            (x, y),
         );
         let Hit::Pane(id) = hit else {
             return hit;
@@ -1434,6 +1445,15 @@ impl App {
                     KeyCode::Char('n') => self.session.next_window(),
                     KeyCode::Char('p') => self.session.prev_window(),
                     KeyCode::Char('z') => self.zoomed = !self.zoomed,
+                    // Flip the sidebar between per-workspace grouping and one
+                    // global attention ranking. Harmless with a single
+                    // workspace (both orderings coincide), so it needn't gate.
+                    KeyCode::Char('t') => {
+                        self.sidebar_view = match self.sidebar_view {
+                            SidebarView::BySpace => SidebarView::ByNeed,
+                            SidebarView::ByNeed => SidebarView::BySpace,
+                        };
+                    }
                     KeyCode::Char('x') => {
                         if let Some(id) = self.session.focused() {
                             self.request_close(id);
@@ -1657,6 +1677,8 @@ impl App {
                     }
                     Hit::SidebarViewGrid => self.zoomed = false,
                     Hit::SidebarViewSolo => self.zoomed = true,
+                    Hit::SidebarViewBySpace => self.sidebar_view = SidebarView::BySpace,
+                    Hit::SidebarViewByNeed => self.sidebar_view = SidebarView::ByNeed,
                     Hit::StatusWindows => self.session.next_window(),
                     Hit::PaneClose(id) => self.request_close(id),
                     Hit::PaneRestart(id) => self.restart_pane(id),
@@ -1817,6 +1839,8 @@ impl App {
                 | Hit::SidebarNewAgent
                 | Hit::SidebarViewGrid
                 | Hit::SidebarViewSolo
+                | Hit::SidebarViewBySpace
+                | Hit::SidebarViewByNeed
                 | Hit::SidebarEntry(_)
                 | Hit::SidebarAuto(_)
                 | Hit::SidebarAutoAll
@@ -2083,14 +2107,14 @@ impl App {
                     (
                         None,
                         format!(
-                            "{focused}ctrl-b: keys · then c: new agent · j: jump · z: solo · x: close agent · d: detach · q: quit roster"
+                            "{focused}ctrl-b: keys · then c: new agent · j: jump · z: solo · t: triage · x: close agent · d: detach · q: quit roster"
                         ),
                     )
                 }
             }
             Mode::Prefix => (
                 Some("PREFIX"),
-                "c: new agent · n/p: windows · ,: rename · z: solo · %/\": split · o: focus · j: jump · x: close agent · d: detach · q: quit roster"
+                "c: new agent · n/p: windows · ,: rename · z: solo · t: triage · %/\": split · o: focus · j: jump · x: close agent · d: detach · q: quit roster"
                     .to_string(),
             ),
             Mode::Jump => (

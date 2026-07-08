@@ -57,6 +57,14 @@ with a single agent skips the header; its card already names the agent, so a
 header would only repeat it. Click the `⧉ 2/3` indicator in the status bar
 or press `ctrl-b n`/`p` to cycle.
 
+**Group by workspace, or rank by who needs you.** With more than one
+workspace the sidebar carries a `by space · by need` switcher (or `ctrl-b
+t`). *By space* is the default above — cards grouped under their workspace
+headers. *By need* drops the grouping and ranks every agent in one flat
+list across all workspaces, most-blocked first, each card tagged `⧉N` with
+its home workspace — so the one agent waiting on you rises to the top no
+matter which workspace it's in.
+
 **Workspaces name themselves after the task.** A card picks up the terminal
 title the agent broadcasts — Claude Code sets it to what it's working on —
 so the sidebar reads `fix auth bug`, not `claude-code`. Press `ctrl-b ,`
@@ -65,9 +73,10 @@ name; a named workspace always keeps its header, and an empty rename goes
 back to automatic. Manual names persist across detach/reattach.
 
 Keyboard equivalents exist for everything (`ctrl-b` is the prefix — `c` new
-agent, `n`/`p` windows, `z` solo, `j` jump, `o` focus, `x` close, `d`
-detach, `q` quit); in jump mode, `a` toggles auto-approve on the selected
-agent. The status bar keeps the hints on screen.
+agent, `n`/`p` windows, `z` solo, `t` triage (by space / by need), `j` jump,
+`o` focus, `x` close, `d` detach, `q` quit); in jump mode, `a` toggles
+auto-approve on the selected agent. The status bar keeps the hints on
+screen.
 
 ## Persistent sessions
 
