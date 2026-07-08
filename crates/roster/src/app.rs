@@ -57,6 +57,15 @@ const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 fn hook_pin_wins(pin_age: Duration, scraped: AgentState) -> bool {
     pin_age < HOOK_PIN_GRACE || scraped == AgentState::Blocked
 }
+/// Whether the sidebar header's `[auto-yes]` fleet toggle reads armed for
+/// these agent cards' auto-approve flags: every card auto-approved, and at
+/// least one card. Mirrors the exact condition the header uses to light the
+/// toggle (`sidebar.rs`) so an agent spawned while it is lit inherits
+/// auto-approve. An empty fleet is never armed — the first agent, spawned
+/// into a lit-less header, does not inherit.
+fn fleet_auto_armed(card_auto: &[bool]) -> bool {
+    !card_auto.is_empty() && card_auto.iter().all(|&on| on)
+}
 /// Reasons arriving over the hook socket are capped defensively — the
 /// `_hook` sender already truncates, but the socket accepts frames from
 /// any same-uid process.
@@ -610,6 +619,7 @@ impl App {
         if let Some(pane) = self.session.pane_mut(id) {
             pane.command = Some(command.to_string());
         }
+        self.inherit_fleet_auto_approve(id, command);
         Ok(())
     }
 
@@ -643,6 +653,7 @@ impl App {
         if let Some(pane) = self.session.pane_mut(id) {
             pane.command = Some(command.to_string());
         }
+        self.inherit_fleet_auto_approve(id, command);
     }
 
     /// Drive the loop until quit or every pane is gone.
@@ -889,6 +900,39 @@ impl App {
             if matches {
                 rt.hook_blocked = None;
             }
+        }
+    }
+
+    /// Arm a freshly spawned agent pane when the fleet `[auto-yes]` toggle is
+    /// on, so creating an agent while it is lit doesn't silently un-light it —
+    /// the newcomer joins auto-approved. Only identified agents inherit: a
+    /// plain shell has no asks and never carries the chip. Reads `last_entries`
+    /// (the previous frame's cards), so the just-spawned pane is excluded from
+    /// the armed check and reattach — where `last_entries` is still empty —
+    /// never triggers it. Mirrors `toggle_auto_approve`'s server sync so the
+    /// agent is auto-approved from its first ask.
+    fn inherit_fleet_auto_approve(&mut self, id: PaneId, command: &str) {
+        if self.detector.identify(command).is_none() {
+            return;
+        }
+        let card_auto: Vec<bool> = self.last_entries.iter().map(|e| e.auto_approve).collect();
+        if !fleet_auto_armed(&card_auto) {
+            return;
+        }
+        let raw = id.raw();
+        let inserted = self
+            .auto_approve
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(raw);
+        // In a session the server owns the authoritative set; standalone, the
+        // local hook listener reads this same shared set, so the insert alone
+        // suffices and `remote_send` is a no-op.
+        if inserted {
+            self.remote_send(&Frame::SetAutoApprove {
+                pane: raw,
+                on: true,
+            });
         }
     }
 
@@ -2334,6 +2378,21 @@ mod tests {
         ));
         // A live forwarding guest with no resolvable pointer does nothing.
         assert!(wheel_action(true, true, true, true, true, None).is_none());
+    }
+
+    #[test]
+    fn a_new_agent_inherits_auto_yes_only_when_the_whole_fleet_is_armed() {
+        // No cards: the header toggle isn't lit, so the first agent spawned
+        // into an empty fleet never inherits (reattach also hits this — it
+        // attaches panes before last_entries is ever computed).
+        assert!(!fleet_auto_armed(&[]));
+        // One un-armed agent leaves the toggle off; a newcomer stays opt-in.
+        assert!(!fleet_auto_armed(&[false]));
+        assert!(!fleet_auto_armed(&[true, false, true]));
+        // Every existing agent armed lights the toggle — the newcomer joins
+        // armed so creating it doesn't silently un-light the fleet.
+        assert!(fleet_auto_armed(&[true]));
+        assert!(fleet_auto_armed(&[true, true, true]));
     }
 
     #[test]
