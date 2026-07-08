@@ -139,6 +139,12 @@ relaunching. It's per-pane and forward-looking — it approves the pane's
 *next* asks (including any its subagents make), not a prompt already waiting
 for you.
 
+For a whole trusted run, the sidebar header carries an **`auto-yes`** fleet
+toggle: one click arms auto-approve for every agent at once, and — when the
+whole fleet is already armed — one click disarms them all. The per-card
+chips still work underneath it, so one sensitive agent can stay manual while
+the rest run free.
+
 With the statusline feed registered, each Claude card also carries a quiet
 telemetry line — model, **context remaining** (colored like the state dots as
 it runs low: yellow at warn, bold red when the agent is about to compact and

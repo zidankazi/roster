@@ -938,6 +938,46 @@ impl App {
         );
     }
 
+    /// The fleet toggle behind the sidebar header's `auto-yes` button: arm
+    /// auto-approve for every agent pane, or — when the whole fleet is
+    /// already armed — disarm all. Every pane is told the target state
+    /// (idempotent on the server), and one toast summarizes the sweep.
+    fn toggle_auto_all(&mut self) {
+        let panes: Vec<u64> = self.last_entries.iter().map(|e| e.pane.raw()).collect();
+        if panes.is_empty() {
+            return;
+        }
+        let arm = !panes.iter().all(|pane| self.is_auto_approve(*pane));
+        {
+            let mut set = self
+                .auto_approve
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for pane in &panes {
+                if arm {
+                    set.insert(*pane);
+                } else {
+                    set.remove(pane);
+                }
+            }
+        }
+        for pane in &panes {
+            self.remote_send(&Frame::SetAutoApprove {
+                pane: *pane,
+                on: arm,
+            });
+        }
+        self.toast(
+            format!(
+                "auto-approve {} for all {} agent{}",
+                if arm { "on" } else { "off" },
+                panes.len(),
+                if panes.len() == 1 { "" } else { "s" }
+            ),
+            ToastLevel::Info,
+        );
+    }
+
     /// Apply frames from the session server: output repaints screens,
     /// exits linger, opened panes land per their queued placement, and a
     /// shutdown ends the client (the panes live on).
@@ -1552,6 +1592,7 @@ impl App {
                             self.toggle_auto_approve(pane);
                         }
                     }
+                    Hit::SidebarAutoAll => self.toggle_auto_all(),
                     Hit::SidebarWindow(window) => {
                         // Double-clicking a header renames the workspace;
                         // a single click jumps to it.
@@ -1723,6 +1764,7 @@ impl App {
                 | Hit::SidebarViewSolo
                 | Hit::SidebarEntry(_)
                 | Hit::SidebarAuto(_)
+                | Hit::SidebarAutoAll
                 | Hit::SidebarWindow(_)
                 | Hit::StatusWindows
         ) {

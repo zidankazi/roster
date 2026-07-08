@@ -233,12 +233,29 @@ pub fn auto_chip_cols(width: u16) -> Option<std::ops::Range<u16>> {
     (width > taken + chip).then(|| width - 1 - chip..width - 1)
 }
 
+/// The fleet toggle's text — arms auto-approve for every agent at once.
+const AUTO_ALL: &str = "auto-yes";
+
+/// The columns of the sidebar header's `auto-yes` fleet toggle, in
+/// sidebar-inner columns: right after the `agents` label. `None` on
+/// sidebars too narrow to keep it clear of the blocked count at the right
+/// edge. Render draws it and `hit_test` targets it, so the button can't
+/// drift off its click target.
+pub fn auto_all_cols(width: u16) -> Option<std::ops::Range<u16>> {
+    let button = AUTO_ALL.chars().count() as u16;
+    // " agents" + a gap, then the button; the blocked count ("N blocked")
+    // needs its own right-aligned span with a gutter between them.
+    let start = 1 + 6 + 2;
+    (width >= start + button + 11).then(|| start..start + button)
+}
+
 /// The agent-state sidebar widget.
 pub struct Sidebar<'a> {
     entries: &'a [SidebarEntry],
     selected: Option<usize>,
     hovered: Option<usize>,
     hovered_auto: Option<usize>,
+    hovered_auto_all: bool,
     hovered_window: Option<usize>,
     workspaces: usize,
     active: usize,
@@ -264,6 +281,7 @@ impl<'a> Sidebar<'a> {
             selected,
             hovered,
             hovered_auto: None,
+            hovered_auto_all: false,
             hovered_window: None,
             workspaces,
             active: 0,
@@ -276,6 +294,12 @@ impl<'a> Sidebar<'a> {
     /// highlighting.
     pub fn hovered_auto(mut self, index: Option<usize>) -> Self {
         self.hovered_auto = index;
+        self
+    }
+
+    /// Whether the header's `auto-yes` fleet toggle is under the mouse.
+    pub fn hovered_auto_all(mut self, hovered: bool) -> Self {
+        self.hovered_auto_all = hovered;
         self
     }
 
@@ -321,6 +345,23 @@ impl Widget for Sidebar<'_> {
         // right only when someone actually needs you.
         let blocked = self.blocked_count();
         buf.set_stringn(area.x + 1, y, "agents", width.saturating_sub(1), muted());
+        // The fleet toggle: arm auto-approve for every agent, or disarm
+        // all when everything is already on. Accent when the whole fleet
+        // is armed, muted otherwise — same vocabulary as the per-card chip.
+        if let Some(cols) = auto_all_cols(area.width) {
+            let all_on = !self.entries.is_empty() && self.entries.iter().all(|e| e.auto_approve);
+            let mut style = if all_on {
+                Style::default()
+                    .fg(crate::style::ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                muted()
+            };
+            if self.hovered_auto_all {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            buf.set_string(area.x + cols.start, y, AUTO_ALL, style);
+        }
         if blocked > 0 {
             let summary = format!("{blocked} blocked");
             let len = summary.chars().count() as u16;
@@ -751,6 +792,45 @@ mod tests {
             "fallback row: {}",
             buffer_row(&buf, 5)
         );
+    }
+
+    #[test]
+    fn auto_all_button_sits_in_the_header_accent_when_fleet_armed() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 31, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 31, 14), &mut buf);
+
+        // The button shares the header row with the blocked count.
+        let header = buffer_row(&buf, 0);
+        assert!(header.starts_with(" agents  auto-yes"), "header: {header}");
+        assert!(header.ends_with("1 blocked"), "header: {header}");
+        // Mixed fleet (none armed here): the button is quiet chrome.
+        let cols = auto_all_cols(31).unwrap();
+        let off = buf.cell((cols.start, 0)).unwrap().style();
+        assert_eq!(off.fg, muted().fg);
+
+        // Arm the whole fleet: the button takes the accent, like a chip.
+        for entry in &mut entries {
+            entry.auto_approve = true;
+        }
+        let mut buf = Buffer::empty(Rect::new(0, 0, 31, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 31, 14), &mut buf);
+        let on = buf.cell((cols.start, 0)).unwrap().style();
+        assert_eq!(on.fg, Some(crate::style::ACCENT));
+        assert!(on.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn auto_all_cols_guard_narrow_widths() {
+        // " agents" + gap, 8 wide, clear of the blocked count.
+        assert_eq!(auto_all_cols(31), Some(9..17));
+        assert_eq!(auto_all_cols(28), Some(9..17));
+        assert_eq!(auto_all_cols(27), None);
+        assert_eq!(auto_all_cols(0), None);
     }
 
     #[test]

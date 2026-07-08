@@ -30,8 +30,8 @@ pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
 pub use rename::{draw_rename, rename_contains, rename_cursor, rename_rect};
 pub use sidebar::{
-    auto_chip_cols, format_age, sidebar_entries, sidebar_rows, Message, Sidebar, SidebarEntry,
-    SidebarRow, SidebarState,
+    auto_all_cols, auto_chip_cols, format_age, sidebar_entries, sidebar_rows, Message, Sidebar,
+    SidebarEntry, SidebarRow, SidebarState,
 };
 pub use style::{cell_style, muted, state_color, state_glyph, state_label, ACCENT};
 pub use telemetry::telemetry_line;
@@ -444,6 +444,7 @@ pub fn render(frame: &mut Frame, view: &View) {
         )
         .active(view.session.active_window().unwrap_or(0))
         .hovered_auto(hovered_auto)
+        .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
         .hovered_window(hovered_window)
         .names(view.window_names),
         cards,

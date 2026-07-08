@@ -7,7 +7,7 @@
 use ratatui::layout::Rect;
 use roster_core::{PaneId, Session};
 
-use crate::sidebar::{auto_chip_cols, sidebar_rows, SidebarEntry, SidebarRow};
+use crate::sidebar::{auto_all_cols, auto_chip_cols, sidebar_rows, SidebarEntry, SidebarRow};
 use crate::{
     close_button_cols, local_panes, panes_area, sidebar_button_row, sidebar_inner,
     sidebar_view_row, status_windows_span, view_toggle_cols, SidebarSide, STATUS_HEIGHT,
@@ -21,6 +21,10 @@ pub enum Hit {
     /// An agent card's `auto` chip on its detail row — click toggles
     /// auto-approve for that pane.
     SidebarAuto(usize),
+    /// The sidebar header's `auto-yes` fleet toggle — click arms
+    /// auto-approve for every agent, or disarms all when everything is
+    /// already on.
+    SidebarAutoAll,
     /// A sidebar workspace header (window index) — or an agent-less
     /// workspace's placeholder row. Clicking jumps to that window.
     SidebarWindow(usize),
@@ -83,6 +87,7 @@ pub fn pointer_for(hit: Hit) -> Pointer {
     match hit {
         Hit::SidebarEntry(_)
         | Hit::SidebarAuto(_)
+        | Hit::SidebarAutoAll
         | Hit::SidebarWindow(_)
         | Hit::SidebarNewAgent
         | Hit::SidebarViewGrid
@@ -158,7 +163,15 @@ pub fn hit_test(
             return Hit::Sidebar;
         }
         // Mirror the sidebar's row plan: cards start two rows below the
-        // sidebar's own header.
+        // sidebar's own header, and the header row hosts the `auto-yes`
+        // fleet toggle.
+        if y == bar.y {
+            let on_button =
+                auto_all_cols(bar.width).is_some_and(|cols| cols.contains(&(x - bar.x)));
+            if on_button {
+                return Hit::SidebarAutoAll;
+            }
+        }
         let first = cards.y + 2;
         if y < first {
             return Hit::Sidebar;
@@ -292,6 +305,25 @@ mod tests {
     fn auto_chip_cols_resolve_to_auto_hits_on_detail_rows_only() {
         let (session, entries) = setup();
         let area = Rect::new(0, 0, 120, 30);
+        // The header row hosts the auto-yes fleet toggle at cols 9..17;
+        // the rest of the header is inert sidebar.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 9, 0),
+            Hit::SidebarAutoAll
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 16, 0),
+            Hit::SidebarAutoAll
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 17, 0),
+            Hit::Sidebar
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 8, 0),
+            Hit::Sidebar
+        );
+
         // Sidebar inner is 31 wide, so every card's chip spans cols 24..30
         // of its detail row — rows 3 and 6.
         assert_eq!(
