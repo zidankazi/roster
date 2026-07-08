@@ -43,7 +43,7 @@ website/
     Wordmark.tsx       # the animated ASCII wordmark
     Tagline.tsx        # the pitch lines, animated Claude mark inline
     ClaudeMark.tsx     # Lottie-rendered Claude mark (asset: claude-lottie.json)
-    InstallCommand.tsx # the brew line, copy button, red sweep
+    InstallCommand.tsx # Homebrew/Script toggle, copy button, red sweep
 ```
 
 Two deliberate brand bridges — keep them true:
@@ -62,8 +62,12 @@ Two deliberate brand bridges — keep them true:
 Keep it to a single focused screen. What carries it:
 
 1. **Wordmark + tagline** — who this is for, in two lines.
-2. **Install** — `brew install zidankazi/roster/roster` with a copy button.
-   If someone reads the tagline and copies the line, the page did its job.
+2. **Install** — `brew install zidankazi/roster/roster` with a copy button,
+   the default of a two-segment toggle (Homebrew / Script). Homebrew leads
+   because it's the clean, trusted line; the script (`curl … | sh`) is the
+   fallback for machines without brew. Keep it to these two — the toggle
+   swaps one line in place, it is not a doorway to a methods wall. If someone
+   reads the tagline and copies the line, the page did its job.
 3. **The demo cast — still the missing centerpiece.** An asciinema
    recording of several Claude Code agents running, the sidebar lighting up
    with reasons, and a jump straight to the blocked one. That recording is

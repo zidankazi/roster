@@ -168,6 +168,103 @@ main {
   color: #ecabab;
 }
 
+/* Toggle + pill share one block so main's 2.75rem gap sits around the pair,
+   not between the method switch and the line it controls. */
+.install-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+/* Segmented control choosing the install method — built as a switch. The two
+   segments are equal width, and a single thumb rides between them: a neutral
+   pad under Homebrew (no red at rest), springing across and lighting up brand
+   red under Script. Equal widths let the thumb travel a flat translateX(100%),
+   so its position is pure CSS with nothing to measure. */
+.install-methods {
+  position: relative;
+  display: grid;
+  /* Two fixed, equal columns so both labels sit dead-center over the thumb.
+     `1fr 1fr` can't be used here: the control shrink-wraps its content, and in
+     an auto-width grid fr tracks collapse to content size (Homebrew wider than
+     Script), throwing the labels toward opposite edges. A fixed track wide
+     enough for the longer label keeps the two halves identical. */
+  grid-template-columns: repeat(2, 6.5rem);
+  padding: 4px;
+  border: 1px solid #e7e4dd;
+  border-radius: 10px;
+  background: #f2f0eb;
+}
+
+/* The travelling indicator. It sits behind the labels (pointer-events off so
+   clicks reach the buttons) and overshoots slightly on arrival — the back-eased
+   curve is what gives the switch its spring. */
+.install-thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 8px) / 2);
+  border-radius: 7px;
+  background: #fdfcfa;
+  box-shadow: 0 1px 2px rgba(43, 43, 43, 0.08);
+  pointer-events: none;
+  transition: transform 420ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    background-color 240ms ease, box-shadow 240ms ease;
+}
+
+.install-methods[data-active="script"] .install-thumb {
+  transform: translateX(100%);
+  background: #df2c2c;
+  box-shadow: 0 3px 12px rgba(223, 44, 44, 0.4);
+}
+
+.install-method {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  border: none;
+  border-radius: 7px;
+  padding: 6px 20px;
+  font-family: inherit;
+  font-size: clamp(12px, 3vw, 14px);
+  color: #6f6a63;
+  background: transparent;
+  cursor: pointer;
+  transition: color 200ms ease;
+}
+
+.install-method:hover {
+  color: #2b2b2b;
+}
+
+/* Homebrew active: dark label on the neutral pad. */
+.install-method.is-active {
+  color: #2b2b2b;
+}
+
+/* Script active: white label on red — but delayed, so the text flips only once
+   the red thumb has travelled under it, never flashing white on the light pill.
+   Leaving reverts to the rule above (no delay), so red clears before white does
+   on the way back. */
+.install-methods[data-active="script"] .install-method.is-active {
+  color: #fff7f4;
+  transition: color 140ms ease 170ms;
+}
+
+.install-method:focus-visible {
+  outline: 2px solid #df2c2c;
+  outline-offset: 2px;
+}
+
+/* Respect reduced-motion: keep the color/red change, drop the travel spring. */
+@media (prefers-reduced-motion: reduce) {
+  .install-thumb {
+    transition: background-color 240ms ease, box-shadow 240ms ease;
+  }
+}
+
 /* Copy-to-clipboard install pill. The whole thing is the button; its content is
    rendered as two stacked layers (base + fill) so the text can invert cleanly
    as the red sweeps under it. */

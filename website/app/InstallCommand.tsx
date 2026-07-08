@@ -2,15 +2,44 @@
 
 import { useState } from "react";
 
-// roster's install line — the Homebrew tap formula (see docs/04-website.md).
-const COMMAND = "brew install zidankazi/roster/roster";
+// roster's two install paths (see docs/04-website.md). Homebrew is the default
+// — the clean, trusted line; the script is the fallback for machines without
+// brew. The raw-GitHub URL is a placeholder until the domain lands, at which
+// point only this constant and install.sh's header change (see the
+// domain-install-endpoint plan).
+const METHODS = [
+  {
+    id: "brew",
+    label: "Homebrew",
+    command: "brew install zidankazi/roster/roster",
+  },
+  {
+    id: "script",
+    label: "Script",
+    command:
+      "curl -fsSL https://raw.githubusercontent.com/zidankazi/roster/main/install.sh | sh",
+  },
+] as const;
+
+type MethodId = (typeof METHODS)[number]["id"];
 
 export function InstallCommand() {
+  const [methodId, setMethodId] = useState<MethodId>("brew");
   const [copied, setCopied] = useState(false);
+
+  const command =
+    METHODS.find((m) => m.id === methodId)?.command ?? METHODS[0].command;
+
+  // Switching method invalidates the previous copy — reset the icon so the
+  // check never lingers over a line the user hasn't actually copied.
+  const select = (id: MethodId) => {
+    setMethodId(id);
+    setCopied(false);
+  };
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(COMMAND);
+      await navigator.clipboard.writeText(command);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -25,7 +54,7 @@ export function InstallCommand() {
   const inner = (
     <>
       <span className="install-prompt">$</span>
-      <code className="install-cmd">{COMMAND}</code>
+      <code className="install-cmd">{command}</code>
       <span className="install-icon">
         {copied ? <CheckIcon /> : <CopyIcon />}
       </span>
@@ -33,17 +62,42 @@ export function InstallCommand() {
   );
 
   return (
-    <button
-      type="button"
-      className="install"
-      onClick={copy}
-      aria-label={copied ? "Copied install command" : "Copy install command"}
-    >
-      <span className="install-layer install-base">{inner}</span>
-      <span className="install-layer install-fill" aria-hidden="true">
-        {inner}
-      </span>
-    </button>
+    <div className="install-block">
+      <div
+        className="install-methods"
+        role="group"
+        aria-label="Install method"
+        data-active={methodId}
+      >
+        {/* The moving indicator — a neutral pad under Homebrew that springs
+            across and turns red under Script. Position is pure CSS (equal-width
+            segments), so it needs no measurement and renders right on the
+            server. */}
+        <span className="install-thumb" aria-hidden="true" />
+        {METHODS.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            className={`install-method${m.id === methodId ? " is-active" : ""}`}
+            aria-pressed={m.id === methodId}
+            onClick={() => select(m.id)}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="install"
+        onClick={copy}
+        aria-label={copied ? "Copied install command" : "Copy install command"}
+      >
+        <span className="install-layer install-base">{inner}</span>
+        <span className="install-layer install-fill" aria-hidden="true">
+          {inner}
+        </span>
+      </button>
+    </div>
   );
 }
 
