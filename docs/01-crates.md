@@ -68,8 +68,8 @@ Renders everything with `ratatui`: the pane contents and the sidebar.
 
 The wire protocol between a roster client and a persistent session server: length-prefixed binary frames over any `Read`/`Write` pair (a unix socket locally, an ssh subprocess's stdio remotely).
 
-- Hand-rolled encoding, zero dependencies; the message set is small (attach, input, resize, spawn, close, layout blob, detach, kill / hello, replay, output, exited, pane-opened, shutdown).
-- Public surface: `Frame`, `read_frame`, `write_frame`, `MAX_FRAME`.
+- Hand-rolled encoding, zero dependencies; the message set covers attach/input/output/layout control frames plus hook, statusline, and auto-approve frames.
+- Public surface: `Frame`, `read_frame`, `write_frame`, `MAX_FRAME` — see `Frame` in `crates/roster-proto/src/lib.rs` for the current message set and each variant's relay semantics.
 - **Why agent-safe:** pure serialization with round-trip and corruption tests; no I/O beyond the passed-in streams.
 
 ## roster (binary) — **mostly do-at-keyboard**

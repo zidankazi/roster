@@ -50,7 +50,7 @@ Tie it together into a running thing.
 
 ## What came after v1
 
-Persistence (detach/reattach via a background server owning the PTYs, attachable over ssh) shipped — the biggest keyboard-side lift, the daemon/IPC layer in `roster-proto` plus the session server. **Next up is the Claude-native attention layer** ([`05-claude-native-attention.md`](05-claude-native-attention.md)): reading Claude Code's hooks and statusline for exact state, an attention inbox, and answering permission prompts from the sidebar.
+Persistence (detach/reattach via a background server owning the PTYs, attachable over ssh) shipped — the biggest keyboard-side lift, the daemon/IPC layer in `roster-proto` plus the session server. Workspaces (multiple windows, each grid-tiled or solo), the solo layout's sidebar-as-switcher, and the fleet `auto-yes` auto-approve toggle also shipped post-v1 — see README.md and `00-architecture.md` for how they work. **Next up is the Claude-native attention layer** ([`05-claude-native-attention.md`](05-claude-native-attention.md)): reading Claude Code's hooks and statusline for exact state, an attention inbox, and answering permission prompts from the sidebar.
 
 ## The unattended-run recipe
 

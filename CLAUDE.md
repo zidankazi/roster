@@ -356,8 +356,8 @@ cargo machete                                          # no unused dependencies
 
 ### Docs change
 
-- [ ] The owning doc updated (00 map / 01 crates / 02 detection / 04 website
-      / 05 direction), plus README when user-facing
+- [ ] The owning doc updated (00 map / 01 crates / 02 detection / 03 build
+      order / 04 website / 05 direction), plus README when user-facing
 - [ ] Old claims grepped for and removed — no contradicting sentence left
 - [ ] Comparisons stay generic ("tmux", "GUI managers", "status-only
       tools"); never name specific competing products in the repo

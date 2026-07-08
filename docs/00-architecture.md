@@ -10,6 +10,15 @@
 
 **Is not:** no git worktrees, no diff/review UI, and — deliberately — no agent-orchestration socket API for agents to drive the multiplexer. That last one is a different product — agents watching agents; keeping the human in the cockpit is ours (see docs/05). Not a security boundary: it spawns your already-logged-in agents as child processes, exactly as tmux would.
 
+Agents launched from **+ new agent** open in their own workspace window
+rather than splitting the current pane; the sidebar groups cards by
+workspace and doubles as the switcher — its header also carries the
+**`auto-yes`** fleet toggle to arm auto-approve for every agent at once.
+Each workspace renders as either a tiled grid (every pane visible) or solo
+(one pane full-size, the sidebar left as the way to flip between agents).
+This is UI surface, not architecture — see README.md for the click targets
+and keybindings.
+
 ## Repo layout
 
 ```

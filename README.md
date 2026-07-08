@@ -185,7 +185,8 @@ artifact the site reads at build time — that is the only bridge.
 | `roster` | The binary; the event loop, and the session server |
 
 Architecture docs live in [`docs/`](docs) — start with
-[`docs/00-architecture.md`](docs/00-architecture.md).
+[`docs/00-architecture.md`](docs/00-architecture.md), the map that links out
+to the per-crate, detection, build-order, website, and direction docs.
 
 ## Install
 

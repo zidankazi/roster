@@ -91,7 +91,9 @@ bun run build    # the gate for any site change — run it before proposing one
 ```
 
 Deployment is Vercel, rooted at `website/`; `vercel.json`'s `ignoreCommand`
-skips deploys for commits that didn't touch the directory.
+skips deploys for commits that didn't touch the directory (its `git diff
+... -- .` is relative to the Vercel dashboard's Root Directory setting,
+`website/` — an out-of-repo config the claim depends on).
 
 ## Later, maybe
 
