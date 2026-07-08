@@ -136,6 +136,9 @@ main {
   flex: none;
   width: 2.3em;
   height: 1.55em;
+  /* Nudged up so the mascot's legs sit level with the text baseline; the flex
+     row centers it otherwise, leaving the feet hanging below the word. */
+  transform: translateY(-0.3em);
 }
 
 .wordmark-row {
