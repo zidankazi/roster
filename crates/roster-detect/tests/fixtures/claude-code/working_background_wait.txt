@@ -1,0 +1,7 @@
+⏺ I'll wait for that mapping to come back, then write you a plan.
+✳ Waiting for 1 background agent to finish
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ use plan mode
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  Enter to view · x to stop
+● Explore(Map binary sidebar wiring and toggles)

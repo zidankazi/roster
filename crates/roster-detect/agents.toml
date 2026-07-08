@@ -12,7 +12,10 @@
 # (see crates/roster/examples/capture.rs; latest capture 2.1.204). Its
 # permission prompts show "Do you want to proceed?" over a "❯ 1. Yes" menu;
 # while working it shows "esc to interrupt"; at rest the input line is "❯"
-# between horizontal rules (not a box-bordered "> ").
+# between horizontal rules (not a box-bordered "> "). When a backgrounded
+# task is running it shows "✳ Waiting for N background agent(s) to finish"
+# above the prompt, with the background-task tray ("Enter to view · x to
+# stop") below it.
 
 [claude-code]
 match_command = ["claude"]
@@ -22,7 +25,14 @@ match_command = ["claude"]
 # Order matters: earlier patterns win the reason, so "Do you want to proceed?"
 # must outrank the "❯ N. Yes" menu row rendered beneath it.
 blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d+\. Yes']
-working = ['esc to interrupt', '(?i)ctrl\+c to interrupt']
+# "Waiting for N background agent(s) to finish" is a genuine working state:
+# the main thread has yielded its spinner while a backgrounded task runs, so
+# there is no "esc to interrupt" and the idle prompt is on screen. Without
+# this, the settled prompt reads as done, then flips back to working when the
+# background task reports — a confusing done↔working flicker. working
+# outranks idle, so this pins the pane to working until the wait is actually
+# over.
+working = ['esc to interrupt', '(?i)ctrl\+c to interrupt', 'Waiting for \d+ background agent']
 idle    = ['^❯']                                              # input prompt line
 reason.blocked = "matched_line"
 reason.working = "last_nonempty"
@@ -30,5 +40,5 @@ reason.working = "last_nonempty"
 # result line), not the model status bar, the input prompt, the
 # interrupt/shortcut hints, the mode indicator, or the completion flourish
 # ("✻ Cogitated for 2s" — a random verb, so the word is a wildcard).
-reason.ignore = ['^\s*●', 'to interrupt', '\? for shortcuts', '^\s*⎿', '^\s*❯', '^\s*▎', '^\s*[✻✳*] ?\w+ for \d+s$', '^\s*⏸']
+reason.ignore = ['^\s*●', 'to interrupt', '\? for shortcuts', '^\s*⎿', '^\s*❯', '^\s*▎', '^\s*[✻✳*] ?\w+ for \d+s$', '^\s*⏸', '^\s*Enter to view']
 done.after_activity_secs = 8

@@ -91,6 +91,31 @@ fn claude_working_from_ctrl_c_hint() {
 }
 
 #[test]
+fn claude_background_wait_stays_working_not_done() {
+    // The bug this guards: while waiting on a backgrounded task, no "esc to
+    // interrupt" shows and the idle prompt is on screen, so the settled
+    // prompt used to read as `done` within the activity window — then flip
+    // back to `working` when the task reported. The wait is a working state
+    // and must stay working even 3s after the last activity (inside the 8s
+    // done window). The reason is the wait line itself; the background-task
+    // tray hint below the prompt is skipped as chrome.
+    assert_reading(
+        classify_after_activity("claude-code", "claude", "working_background_wait.txt", 3),
+        AgentState::Working,
+        Some("✳ Waiting for 1 background agent to finish"),
+    );
+}
+
+#[test]
+fn claude_background_wait_reads_working_without_history() {
+    assert_reading(
+        classify_fresh("claude-code", "claude", "working_background_wait.txt"),
+        AgentState::Working,
+        Some("✳ Waiting for 1 background agent to finish"),
+    );
+}
+
+#[test]
 fn claude_idle_at_rest() {
     assert_reading(
         classify_fresh("claude-code", "claude", "idle_prompt.txt"),
