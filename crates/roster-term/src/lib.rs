@@ -122,6 +122,24 @@ impl Screen {
         self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
+    /// Whether the application asked to receive mouse events (any of the
+    /// DECSET 1000/1002/1003 tracking modes). Such apps handle the wheel
+    /// themselves — Claude Code scrolls its own transcript — so roster
+    /// should forward the raw event, not translate it to arrow keys.
+    pub fn mouse_reporting(&self) -> bool {
+        self.term.mode().intersects(
+            TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
+        )
+    }
+
+    /// Whether the application negotiated SGR mouse encoding (DECSET 1006).
+    /// A forwarded mouse report must use the `CSI < … M` form only when this
+    /// is set; a tracking app that left it off expects the legacy X10 byte
+    /// encoding and would misread SGR bytes as stray keystrokes.
+    pub fn sgr_mouse(&self) -> bool {
+        self.term.mode().contains(TermMode::SGR_MOUSE)
+    }
+
     /// How far the view is scrolled up into history, in lines. Zero means
     /// live at the bottom.
     pub fn display_offset(&self) -> usize {
@@ -377,6 +395,39 @@ mod tests {
         // A reset clears it back to none.
         screen.advance(b"\x1b]0;\x07");
         assert_eq!(screen.title().as_deref(), Some(""));
+    }
+
+    #[test]
+    fn mouse_reporting_tracks_the_tracking_modes() {
+        let mut screen = Screen::new(10, 2);
+        assert!(!screen.mouse_reporting());
+        // Any tracking mode counts; Claude Code turns on click+drag+motion.
+        screen.advance(b"\x1b[?1000h");
+        assert!(screen.mouse_reporting());
+        screen.advance(b"\x1b[?1000l");
+        assert!(!screen.mouse_reporting());
+        screen.advance(b"\x1b[?1002h");
+        assert!(screen.mouse_reporting());
+        screen.advance(b"\x1b[?1002l");
+        screen.advance(b"\x1b[?1003h");
+        assert!(screen.mouse_reporting());
+        // The SGR-encoding toggle (1006) alone is not a tracking mode.
+        screen.advance(b"\x1b[?1003l");
+        screen.advance(b"\x1b[?1006h");
+        assert!(!screen.mouse_reporting());
+    }
+
+    #[test]
+    fn sgr_mouse_tracks_decset_1006() {
+        let mut screen = Screen::new(10, 2);
+        assert!(!screen.sgr_mouse());
+        // Tracking without 1006 (legacy X10 encoding) is not SGR.
+        screen.advance(b"\x1b[?1002h");
+        assert!(!screen.sgr_mouse());
+        screen.advance(b"\x1b[?1006h");
+        assert!(screen.sgr_mouse());
+        screen.advance(b"\x1b[?1006l");
+        assert!(!screen.sgr_mouse());
     }
 
     #[test]

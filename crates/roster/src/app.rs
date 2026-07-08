@@ -1726,22 +1726,29 @@ impl App {
                 | Hit::PaneRestart(id) = hit
                 {
                     let up = mouse.kind == MouseEventKind::ScrollUp;
+                    // Pane-local, 1-based coords for a forwarded mouse report;
+                    // computed before the mutable runtime borrow.
+                    let local = self.pane_content_rect(id).map(|c| {
+                        let col = x.saturating_sub(c.x).min(c.width.saturating_sub(1)) + 1;
+                        let row = y.saturating_sub(c.y).min(c.height.saturating_sub(1)) + 1;
+                        (col, row)
+                    });
                     if let Some(rt) = self.runtimes.get_mut(&id) {
-                        if rt.screen.alternate_screen() {
-                            // Full-screen TUIs own their history; feed them
-                            // arrows like a terminal would.
-                            if rt.exited.is_none() {
-                                let bytes: &[u8] = if up {
-                                    b"\x1b[A\x1b[A\x1b[A"
-                                } else {
-                                    b"\x1b[B\x1b[B\x1b[B"
-                                };
-                                let _ = rt.io.write(bytes);
+                        // A dead child can't receive input, so wheel_action
+                        // routes exited panes to a history scroll instead.
+                        match wheel_action(
+                            up,
+                            rt.screen.mouse_reporting(),
+                            rt.screen.sgr_mouse(),
+                            rt.screen.alternate_screen(),
+                            rt.exited.is_none(),
+                            local,
+                        ) {
+                            Some(WheelAction::Forward(bytes)) => {
+                                let _ = rt.io.write(&bytes);
                             }
-                        } else {
-                            // Plain output scrolls roster's own history —
-                            // exited panes included.
-                            rt.screen.scroll_display(if up { 3 } else { -3 });
+                            Some(WheelAction::Scroll(delta)) => rt.screen.scroll_display(delta),
+                            None => {}
                         }
                     }
                 }
@@ -2067,6 +2074,57 @@ fn is_prefix(key: &KeyEvent) -> bool {
     key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
+/// What a wheel notch does over a pane, decided by the guest's terminal
+/// modes.
+enum WheelAction {
+    /// Bytes to write to the guest PTY — a mouse report or arrow keys.
+    Forward(Vec<u8>),
+    /// Move roster's own scrollback by this many lines (positive = up).
+    Scroll(i32),
+}
+
+/// Route a wheel notch by what the guest negotiated. A live app that tracks
+/// the mouse *and* speaks SGR (Claude Code turns on DECSET 1000/1002/1003 +
+/// 1006) handles the wheel itself — forward a real mouse report so it
+/// scrolls its own transcript, rather than arrow keys it would read as
+/// cursor/selection movement. A live full-screen app that does not — a
+/// pager, or a legacy-mouse app roster can't encode for — gets arrows, the
+/// closest thing to scroll it understands. Everything else, including any
+/// exited pane whose child can no longer receive input, moves roster's own
+/// scrollback. `pos` is the pane-local 1-based pointer; a forwarding guest
+/// with no resolvable position gets nothing.
+fn wheel_action(
+    up: bool,
+    mouse_reporting: bool,
+    sgr_mouse: bool,
+    alt_screen: bool,
+    alive: bool,
+    pos: Option<(u16, u16)>,
+) -> Option<WheelAction> {
+    if alive && mouse_reporting && sgr_mouse {
+        pos.map(|(col, row)| WheelAction::Forward(sgr_wheel(up, col, row)))
+    } else if alive && alt_screen {
+        let arrows: &[u8] = if up {
+            b"\x1b[A\x1b[A\x1b[A"
+        } else {
+            b"\x1b[B\x1b[B\x1b[B"
+        };
+        Some(WheelAction::Forward(arrows.to_vec()))
+    } else {
+        Some(WheelAction::Scroll(if up { 3 } else { -3 }))
+    }
+}
+
+/// Encode a wheel notch as an SGR mouse report (DECSET 1006) at 1-based
+/// `(col, row)`. Wheel up is button 64, wheel down 65; wheel events are
+/// press-only, so the sequence always ends in `M`. Callers must confirm the
+/// guest negotiated SGR first — a legacy-encoding guest would misread these
+/// bytes.
+fn sgr_wheel(up: bool, col: u16, row: u16) -> Vec<u8> {
+    let button = if up { 64 } else { 65 };
+    format!("\x1b[<{button};{col};{row}M").into_bytes()
+}
+
 /// Hand the text to the hosting terminal's clipboard via OSC 52 — it works
 /// locally and through SSH alike, wherever the terminal supports it.
 fn copy_to_clipboard(text: &str) {
@@ -2225,6 +2283,57 @@ mod tests {
             base64("selected text ✓".as_bytes()),
             "c2VsZWN0ZWQgdGV4dCDinJM="
         );
+    }
+
+    #[test]
+    fn sgr_wheel_encodes_button_and_position() {
+        // Wheel up is button 64, down 65; SGR is 1-based and press-only (M).
+        assert_eq!(sgr_wheel(true, 1, 1), b"\x1b[<64;1;1M");
+        assert_eq!(sgr_wheel(false, 12, 7), b"\x1b[<65;12;7M");
+    }
+
+    #[test]
+    fn wheel_routes_by_guest_mode() {
+        let pos = Some((5, 8));
+        // args: up, mouse_reporting, sgr_mouse, alt_screen, alive, pos.
+        // A live SGR mouse-tracking guest (Claude Code) gets a forwarded
+        // report, NOT arrow keys — the regression that motivated the change.
+        assert!(matches!(
+            wheel_action(true, true, true, true, true, pos),
+            Some(WheelAction::Forward(b)) if b == sgr_wheel(true, 5, 8)
+        ));
+        // A tracking guest that did NOT negotiate SGR (legacy X10 encoding)
+        // must not be sent SGR bytes; it falls back to the arrows path.
+        assert!(matches!(
+            wheel_action(true, true, false, true, true, pos),
+            Some(WheelAction::Forward(b)) if b == b"\x1b[A\x1b[A\x1b[A"
+        ));
+        // A live full-screen app without mouse tracking (a pager) gets arrows.
+        assert!(matches!(
+            wheel_action(true, false, false, true, true, pos),
+            Some(WheelAction::Forward(b)) if b == b"\x1b[A\x1b[A\x1b[A"
+        ));
+        assert!(matches!(
+            wheel_action(false, false, false, true, true, pos),
+            Some(WheelAction::Forward(b)) if b == b"\x1b[B\x1b[B\x1b[B"
+        ));
+        // Plain output scrolls roster's own history; up is positive.
+        assert!(matches!(
+            wheel_action(true, false, false, false, true, pos),
+            Some(WheelAction::Scroll(3))
+        ));
+        assert!(matches!(
+            wheel_action(false, false, false, false, true, pos),
+            Some(WheelAction::Scroll(-3))
+        ));
+        // An exited pane can't receive input; even a tracking+SGR guest
+        // routes to a history scroll rather than a dropped forward.
+        assert!(matches!(
+            wheel_action(true, true, true, true, false, pos),
+            Some(WheelAction::Scroll(3))
+        ));
+        // A live forwarding guest with no resolvable pointer does nothing.
+        assert!(wheel_action(true, true, true, true, true, None).is_none());
     }
 
     #[test]
