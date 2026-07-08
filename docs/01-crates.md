@@ -38,9 +38,9 @@ Turns the raw byte stream from a PTY into a structured screen grid. This is the 
 
 The multiplexer's model, with no I/O. Pure data + logic.
 
-- The pane tree (splits), windows/tabs, focus, geometry, and per-pane metadata (which agent, current state, last-activity timestamp).
+- The pane tree (splits), windows/tabs, focus, geometry, and per-pane metadata (which agent, current state, last-activity timestamp, live telemetry when the statusline bridge feeds one).
 - Layout math: given a terminal size and a split tree, compute each pane's rect.
-- Public surface (sketch): `Session`, `Pane { id, agent, rect, state, reason, last_change }`, `session.split(...)`, `session.focus(...)`, `session.layout(size) -> Vec<(PaneId, Rect)>`.
+- Public surface (sketch): `Session`, `Pane { id, agent, rect, state, reason, last_change, telemetry }`, `session.split(...)`, `session.focus(...)`, `session.layout(size) -> Vec<(PaneId, Rect)>`.
 - **Why agent-safe:** it's a tree and some arithmetic. Fully unit-testable, no terminal, no processes. Prime candidate for unattended agent work.
 
 ## roster-detect — **agent-safe**

@@ -3,8 +3,8 @@
 //!
 //! Pure formatting over [`roster_core::Telemetry`] — absent readings render
 //! nothing, so a pane without the statusline bridge contributes an empty
-//! line. Not yet wired into the sidebar layout; the card renderer adopts it
-//! once the layout is settled. See `docs/05-claude-native-attention.md`.
+//! line. The sidebar draws it as a card's third line, only when the entry
+//! carries telemetry. See `docs/05-claude-native-attention.md`.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};

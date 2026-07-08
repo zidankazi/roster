@@ -58,7 +58,9 @@ fn json_that_is_not_an_object_returns_none() {
 }
 
 #[test]
-fn empty_object_is_telemetry_with_no_readings() {
-    let t = parse("{}").expect("an empty object is a valid payload");
-    assert_eq!(t, roster_core::Telemetry::default());
+fn empty_object_is_no_telemetry_not_an_empty_report() {
+    // An object with none of the mapped fields — `{}`, or a payload whose
+    // keys all drifted — is "no telemetry": a `Some(default)` would grow a
+    // blank badge line on the pane's sidebar card.
+    assert_eq!(parse("{}"), None);
 }

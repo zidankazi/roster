@@ -1094,6 +1094,10 @@ impl App {
             Some(format!("exited ({code})")),
             Instant::now(),
         );
+        // Clearing kind takes the pane out of the detection loop — the only
+        // other place telemetry is written — so without this the dead
+        // pane's badges would freeze at their last numbers forever.
+        self.session.set_telemetry(id, None);
     }
 
     /// The solo pane, when solo view is active: it follows focus.
@@ -1144,6 +1148,10 @@ impl App {
             // the fallback, never suspended.
             let grid = rt.screen.grid();
             let reading = rt.tracker.update(&self.detector, kind, &grid, now);
+            // Telemetry rides every reading — pinned-blocked panes too —
+            // and a `None` clears the model, mirroring the tracker's aging
+            // instead of freezing the last numbers on screen.
+            self.session.set_telemetry(*id, reading.telemetry);
             // The hook wins on freshness and richness, the screen wins on
             // settled reality — a missed clear (an interrupt at the prompt
             // fires no hook) self-heals here. See `hook_pin_wins`.

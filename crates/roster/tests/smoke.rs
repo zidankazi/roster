@@ -953,6 +953,62 @@ fn hook_bridge_pins_blocked_and_clears_end_to_end() {
 }
 
 #[test]
+fn statusline_telemetry_reaches_the_sidebar_card() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A fake claude that feeds the statusline bridge exactly like the real
+    // one: Claude Code pipes the session JSON to the registered command,
+    // which inherits ROSTER_PANE / ROSTER_HOOK_SOCK from the pane. The
+    // screen never prints these numbers, so the badge below can only have
+    // come through the socket.
+    let dir = std::env::temp_dir().join(format!("roster-sl-smoke-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create fake agent dir");
+    let script = dir.join("claude");
+    let payload = r#"{"model":{"display_name":"Opus"},"context_window":{"remaining_percentage":62.0},"cost":{"total_cost_usd":1.23}}"#;
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nprintf 'thinking hard...\\n'\n\
+             printf '%s' '{payload}' | '{roster}' _statusline\n\
+             sleep 2\n",
+            roster = bin(),
+        ),
+    )
+    .expect("write fake agent");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod fake agent");
+
+    let (cols, rows) = (120u16, 30u16);
+    let pty = Pty::spawn(&format!("'{}' '{}'", bin(), script.display()), cols, rows)
+        .expect("spawn roster");
+    let rx = pump(&pty);
+
+    let mut screen = Screen::new(cols, rows);
+
+    // The full badge line on the card: model, context, cost.
+    assert!(
+        drain_while(&mut screen, "Opus · 62% context · $1.23", true, &rx),
+        "statusline telemetry never reached the sidebar:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // The script exits (~2s): the pane lingers as an exited card, but its
+    // badges must clear — frozen telemetry on a dead pane misleads.
+    assert!(
+        drain_while(&mut screen, "Opus · 62% context", false, &rx),
+        "telemetry never cleared after the pane exited:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert!(
+        drain_while(&mut screen, "exited (0)", true, &rx),
+        "the exited card itself should linger:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn statusline_forwarder_sends_the_payload_verbatim_and_prints_nothing() {
     use std::io::Write as _;
     use std::os::unix::net::UnixListener;

@@ -180,6 +180,9 @@ pub fn hit_test(
                     Hit::SidebarEntry(*index)
                 }
             }
+            // Badges are informational; the click is the card, so the whole
+            // taller card stays one jump target.
+            Some(SidebarRow::EntryTelemetry(index)) => Hit::SidebarEntry(*index),
             Some(SidebarRow::Blank) | None => Hit::Sidebar,
         };
     }
@@ -316,6 +319,45 @@ mod tests {
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, 26, 2),
             Hit::SidebarEntry(0)
+        );
+    }
+
+    #[test]
+    fn telemetry_rows_resolve_to_their_card_and_shift_the_rows_below() {
+        let now = Instant::now();
+        let (mut session, entries) = setup();
+        // Feed telemetry to the blocked pane — the first card — so its card
+        // grows a third row and everything below shifts down one.
+        let blocked = entries[0].pane;
+        session.set_telemetry(
+            blocked,
+            Some(roster_core::Telemetry {
+                model: Some("Opus".into()),
+                ..roster_core::Telemetry::default()
+            }),
+        );
+        let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);
+        let area = Rect::new(0, 0, 120, 30);
+        // Card 0 spans rows 2-4 (name, detail, telemetry); the badge row is
+        // the card, not a chip — clicking it jumps.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 4),
+            Hit::SidebarEntry(0)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 27, 4),
+            Hit::SidebarEntry(0),
+            "the chip columns on a telemetry row are still the card"
+        );
+        // The second card sits a row lower than the two-line layout put it —
+        // its chip included. (The full row plan is sidebar.rs's test.)
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 6),
+            Hit::SidebarEntry(1)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 27, 7),
+            Hit::SidebarAuto(1)
         );
     }
 

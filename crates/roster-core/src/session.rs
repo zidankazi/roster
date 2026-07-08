@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::layout::{layout, replace_leaf, LayoutNode, Rect, RemoveOutcome, SplitDirection};
+use crate::telemetry::Telemetry;
 
 /// Stable identifier for a pane, unique within a [`Session`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -54,6 +55,10 @@ pub struct Pane {
     pub reason: Option<String>,
     /// When `state` last changed value.
     pub last_change: Option<Instant>,
+    /// The pane's live statusline telemetry, when the bridge feeds one.
+    /// `None` for panes without the feed — and again once a feed goes
+    /// stale, so the sidebar never asserts numbers nobody is reporting.
+    pub telemetry: Option<Telemetry>,
 }
 
 impl Pane {
@@ -64,6 +69,7 @@ impl Pane {
             state: AgentState::default(),
             reason: None,
             last_change: None,
+            telemetry: None,
         }
     }
 }
@@ -477,6 +483,18 @@ impl Session {
         true
     }
 
+    /// Record a pane's live telemetry — `None` clears it (the feed went
+    /// stale or away). Callers pass every reading's telemetry verbatim, so
+    /// the model mirrors the tracker's aging instead of freezing the last
+    /// numbers. Returns `false` if the pane does not exist.
+    pub fn set_telemetry(&mut self, target: PaneId, telemetry: Option<Telemetry>) -> bool {
+        let Some(pane) = self.panes.get_mut(&target) else {
+            return false;
+        };
+        pane.telemetry = telemetry;
+        true
+    }
+
     /// The index of the window containing `target`, or `None` if no window
     /// holds it.
     pub fn window_of(&self, target: PaneId) -> Option<usize> {
@@ -873,6 +891,28 @@ mod tests {
             None,
             Instant::now()
         ));
+    }
+
+    #[test]
+    fn set_telemetry_sets_and_clears_a_panes_readings() {
+        let mut s = Session::new();
+        let id = s.focused().unwrap();
+        assert_eq!(s.pane(id).unwrap().telemetry, None);
+
+        let telemetry = Telemetry {
+            model: Some("Opus".into()),
+            context_pct: Some(62.0),
+            ..Telemetry::default()
+        };
+        assert!(s.set_telemetry(id, Some(telemetry.clone())));
+        assert_eq!(s.pane(id).unwrap().telemetry, Some(telemetry));
+
+        // A `None` reading clears — the feed aged out; the numbers go with
+        // it rather than freezing.
+        assert!(s.set_telemetry(id, None));
+        assert_eq!(s.pane(id).unwrap().telemetry, None);
+
+        assert!(!s.set_telemetry(PaneId::from_raw(999), None));
     }
 
     #[test]

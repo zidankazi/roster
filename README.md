@@ -139,6 +139,13 @@ relaunching. It's per-pane and forward-looking — it approves the pane's
 *next* asks (including any its subagents make), not a prompt already waiting
 for you.
 
+With the statusline feed registered, each Claude card also carries a quiet
+telemetry line — model, **context remaining** (colored like the state dots as
+it runs low: yellow at warn, bold red when the agent is about to compact and
+lose the thread), session cost, and the most-used rate-limit window. Panes
+without the feed keep the plain two-line card, and a feed that goes quiet
+ages out instead of freezing stale numbers.
+
 This is the first slice of the Claude-native attention layer — reading hooks
 and statusline for exact state, context-left, and cost;
 [`docs/05-claude-native-attention.md`](docs/05-claude-native-attention.md) is

@@ -4,9 +4,11 @@
 //! that feed is the sanctioned telemetry source — never the session
 //! transcript (see `docs/05-claude-native-attention.md`). Parsing is
 //! all-optional: a missing, `null`, or mistyped field yields `None` for
-//! that field alone, and only input that is not a JSON object at all fails
-//! the parse. Rate-limit `resets_at` arrives as unix epoch seconds and is
-//! converted to a remaining duration, saturating to zero for past resets.
+//! that field alone; input that is not a JSON object — or an object where
+//! nothing we map is present (payload keys drifted, or junk) — fails the
+//! parse, so downstream never grows UI for an empty reading. Rate-limit
+//! `resets_at` arrives as unix epoch seconds and is converted to a
+//! remaining duration, saturating to zero for past resets.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -14,7 +16,10 @@ use roster_core::{RateLimit, RateLimitWindow, Telemetry};
 use serde_json::Value;
 
 /// The telemetry carried by a statusline JSON payload, or `None` when the
-/// input is not a JSON object. Absent fields stay `None` — never an error.
+/// input is not a JSON object or none of the mapped fields are present —
+/// an all-empty reading is "no telemetry", not a report of nothing, so a
+/// card never grows a blank badge line for it. Absent fields stay `None` —
+/// never an error.
 pub fn parse(json: &str) -> Option<Telemetry> {
     let root: Value = serde_json::from_str(json).ok()?;
     if !root.is_object() {
@@ -25,6 +30,7 @@ pub fn parse(json: &str) -> Option<Telemetry> {
         .unwrap_or_default()
         .as_secs();
     Some(read_telemetry(&root, now_epoch_secs))
+        .filter(|telemetry| *telemetry != Telemetry::default())
 }
 
 /// The field-by-field mapping, with the clock injected so the epoch math is
@@ -151,6 +157,16 @@ mod tests {
     fn null_remaining_percentage_reads_as_absent_not_zero() {
         let v = root(r#"{"context_window":{"remaining_percentage":null,"used_percentage":null}}"#);
         assert_eq!(read_telemetry(&v, 0).context_pct, None);
+    }
+
+    #[test]
+    fn empty_or_unmapped_objects_parse_to_no_telemetry() {
+        // A payload with none of the mapped fields is "no telemetry" — a
+        // Some(default) here would grow a blank badge line on the card.
+        assert_eq!(parse("{}"), None);
+        assert_eq!(parse(r#"{"session_id":"s","version":"2.1.0"}"#), None);
+        // One mapped field is a report.
+        assert!(parse(r#"{"cost":{"total_cost_usd":0.5}}"#).is_some());
     }
 
     #[test]

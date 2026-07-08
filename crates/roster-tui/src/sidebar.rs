@@ -1,22 +1,25 @@
 //! The agent-state sidebar: agents grouped by workspace, each rendered as a
-//! two-line card — a colored status glyph, the agent name, and its age on
-//! top; the state, its reason, and the clickable `auto` (auto-approve) chip
-//! below. Blocked and done float to the top of each workspace so the agents
-//! that need you are always in view.
+//! card — a colored status glyph, the agent name, and its age on top; the
+//! state, its reason, and the clickable `auto` (auto-approve) chip below;
+//! and, only when the statusline bridge feeds one, a third line of
+//! telemetry badges (see `telemetry.rs`). Blocked and done float to the top
+//! of each workspace so the agents that need you are always in view.
 
 use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
-use roster_core::{AgentState, PaneId, Session};
+use roster_core::{AgentState, PaneId, Session, Telemetry};
 use roster_detect::Detector;
 
 use crate::style::{muted, state_color, state_glyph, state_label};
+use crate::telemetry::telemetry_line;
 
 /// One sidebar row: an agent pane and everything shown about it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SidebarEntry {
     /// The pane this row describes.
     pub pane: PaneId,
@@ -33,6 +36,10 @@ pub struct SidebarEntry {
     /// Whether roster auto-approves this pane's permission asks. Set by the
     /// binary (which owns the auto-approve set); the sidebar only renders it.
     pub auto_approve: bool,
+    /// The pane's live statusline telemetry. `None` — a pane without the
+    /// bridge, or a feed gone stale — renders exactly the two-line card
+    /// from before the field existed.
+    pub telemetry: Option<Telemetry>,
 }
 
 /// Build the sidebar rows from the session: every pane whose command
@@ -56,6 +63,7 @@ pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> 
                 // The binary lights this from its auto-approve set; the
                 // session model here has no notion of it.
                 auto_approve: false,
+                telemetry: pane.telemetry.clone(),
             })
         })
         .collect();
@@ -137,6 +145,10 @@ pub enum SidebarRow {
     EntryName(usize),
     /// The second line of an entry's card: state and reason.
     EntryDetail(usize),
+    /// The third line of an entry's card: telemetry badges. Emitted only
+    /// when the entry carries telemetry, so bridge-less cards keep their
+    /// exact two-line shape.
+    EntryTelemetry(usize),
     /// An agent-less workspace's placeholder line (window index).
     Empty(usize),
     /// Breathing room.
@@ -148,12 +160,18 @@ pub enum SidebarRow {
 /// With several, every workspace gets a header even when no agent runs in
 /// it, so plain-shell windows stay reachable by mouse.
 pub fn sidebar_rows(entries: &[SidebarEntry], workspaces: usize) -> Vec<SidebarRow> {
+    fn push_card(rows: &mut Vec<SidebarRow>, index: usize, entry: &SidebarEntry) {
+        rows.push(SidebarRow::EntryName(index));
+        rows.push(SidebarRow::EntryDetail(index));
+        if entry.telemetry.is_some() {
+            rows.push(SidebarRow::EntryTelemetry(index));
+        }
+        rows.push(SidebarRow::Blank);
+    }
     let mut rows = Vec::new();
     if workspaces <= 1 {
-        for index in 0..entries.len() {
-            rows.push(SidebarRow::EntryName(index));
-            rows.push(SidebarRow::EntryDetail(index));
-            rows.push(SidebarRow::Blank);
+        for (index, entry) in entries.iter().enumerate() {
+            push_card(&mut rows, index, entry);
         }
         return rows;
     }
@@ -163,9 +181,7 @@ pub fn sidebar_rows(entries: &[SidebarEntry], workspaces: usize) -> Vec<SidebarR
         for (index, entry) in entries.iter().enumerate() {
             if entry.window == window {
                 any = true;
-                rows.push(SidebarRow::EntryName(index));
-                rows.push(SidebarRow::EntryDetail(index));
-                rows.push(SidebarRow::Blank);
+                push_card(&mut rows, index, entry);
             }
         }
         if !any {
@@ -432,6 +448,20 @@ impl Widget for Sidebar<'_> {
                         buf.set_string(area.x + cols.start, y, AUTO_CHIP, style);
                     }
                 }
+                SidebarRow::EntryTelemetry(index) => {
+                    // Badge line under the detail row, same indent: model,
+                    // context %, cost, rate limit — formatted and colored by
+                    // `telemetry_line` (the context badge escalates through
+                    // the state colors as it runs out).
+                    let entry = &self.entries[index];
+                    if let Some(telemetry) = &entry.telemetry {
+                        // Card indent + one right-margin column, like the
+                        // rows above.
+                        let budget = width.saturating_sub(4).saturating_sub(1);
+                        let line = truncate_line(telemetry_line(telemetry), budget);
+                        buf.set_line(area.x + 4, y, &line, area.width.saturating_sub(4));
+                    }
+                }
                 SidebarRow::Blank => {}
             }
             y += 1;
@@ -459,6 +489,48 @@ fn truncate(text: &str, width: usize) -> String {
     let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
     out.push('…');
     out
+}
+
+/// [`truncate`] for a styled line, keeping each span's style: a cut is
+/// marked with the same trailing `…` as the plain-text rows. A hard clip
+/// would leave a badge reading as a smaller number than it is
+/// (`$12.34` → `$12`), which misleads instead of signalling "narrow".
+/// Budgets by display cells, not chars — the buffer clips by cells, and a
+/// double-width char (the feed copies `display_name` verbatim) must not
+/// push the `…` off the edge.
+fn truncate_line(line: Line<'static>, width: usize) -> Line<'static> {
+    if line.width() <= width {
+        return line;
+    }
+    let mut budget = width.saturating_sub(1);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for span in line.spans {
+        if budget == 0 {
+            break;
+        }
+        if span.width() <= budget {
+            budget -= span.width();
+            spans.push(span);
+        } else {
+            // Cut inside the span on a char boundary, counting cells: a
+            // wide char that doesn't fit whole is dropped whole.
+            let mut end = 0;
+            let mut used = 0;
+            for (at, ch) in span.content.char_indices() {
+                let next = at + ch.len_utf8();
+                let cells = Span::raw(&span.content[at..next]).width();
+                if used + cells > budget {
+                    break;
+                }
+                used += cells;
+                end = next;
+            }
+            spans.push(Span::styled(span.content[..end].to_string(), span.style));
+            budget = 0;
+        }
+    }
+    spans.push(Span::styled("…", muted()));
+    Line::from(spans)
 }
 
 #[cfg(test)]
@@ -735,6 +807,138 @@ mod tests {
             let row = buffer_row(&buf, y);
             assert!(!row.contains("auto"), "chip on a narrow row: {row}");
         }
+    }
+
+    #[test]
+    fn telemetry_cards_grow_a_badge_line_and_bridge_less_cards_do_not() {
+        let now = Instant::now();
+        let (mut session, ids) = populated_session(now);
+        // Feed telemetry to the blocked pane only; the others stay two-line.
+        session.set_telemetry(
+            ids[1],
+            Some(Telemetry {
+                model: Some("Opus".into()),
+                context_pct: Some(62.0),
+                cost_usd: Some(1.23),
+                rate_limit: None,
+            }),
+        );
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+
+        // The row plan grows the telemetry row for that card alone.
+        let rows = sidebar_rows(&entries, 1);
+        assert_eq!(
+            rows,
+            vec![
+                SidebarRow::EntryName(0),
+                SidebarRow::EntryDetail(0),
+                SidebarRow::EntryTelemetry(0),
+                SidebarRow::Blank,
+                SidebarRow::EntryName(1),
+                SidebarRow::EntryDetail(1),
+                SidebarRow::Blank,
+                SidebarRow::EntryName(2),
+                SidebarRow::EntryDetail(2),
+                SidebarRow::Blank,
+            ]
+        );
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 16));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 40, 16), &mut buf);
+        // The badge line sits under the blocked card's detail row, at the
+        // card indent, with the muted separators.
+        assert_eq!(buffer_row(&buf, 4), "    Opus · 62% context · $1.23");
+        // Muted chrome for the model badge; the healthy context badge too.
+        assert_eq!(buf.cell((4, 4)).unwrap().style().fg, muted().fg);
+        // The next card starts after one blank, one row lower than before.
+        assert_eq!(buffer_row(&buf, 5), "");
+        assert!(
+            buffer_row(&buf, 6).starts_with("  "),
+            "second card shifted down: {}",
+            buffer_row(&buf, 6)
+        );
+        assert!(
+            buffer_row(&buf, 7).starts_with("    done · finished"),
+            "second card detail: {}",
+            buffer_row(&buf, 7)
+        );
+    }
+
+    #[test]
+    fn narrow_badge_lines_truncate_with_an_ellipsis_not_a_hard_clip() {
+        let now = Instant::now();
+        let (mut session, ids) = populated_session(now);
+        session.set_telemetry(
+            ids[1],
+            Some(Telemetry {
+                model: Some("Opus".into()),
+                context_pct: Some(62.0),
+                cost_usd: Some(12.34),
+                rate_limit: None,
+            }),
+        );
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // Too narrow for the whole line: the cut is marked with the same
+        // trailing … the name and reason rows use, and no partial cost
+        // survives to read as a smaller number than it is.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 26, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 26, 14), &mut buf);
+        let row = buffer_row(&buf, 4);
+        assert!(row.ends_with('…'), "cut not marked: {row}");
+        assert!(
+            !row.contains('$'),
+            "clipped cost reads as a fabricated number: {row}"
+        );
+
+        // Cell-width budgeting: a double-width model name must not push
+        // the … past the buffer's clip and hard-cut a number after all.
+        session.set_telemetry(
+            ids[1],
+            Some(Telemetry {
+                model: Some("私のモデル".into()),
+                context_pct: Some(62.0),
+                cost_usd: Some(12.34),
+                rate_limit: None,
+            }),
+        );
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 26, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 26, 14), &mut buf);
+        let row = buffer_row(&buf, 4);
+        assert!(row.ends_with('…'), "wide-char cut not marked: {row}");
+        assert!(
+            !row.contains('$'),
+            "wide-char clip fabricated a number: {row}"
+        );
+    }
+
+    #[test]
+    fn critical_context_badge_renders_bold_blocked_red_on_the_card() {
+        let now = Instant::now();
+        let (mut session, ids) = populated_session(now);
+        session.set_telemetry(
+            ids[0],
+            Some(Telemetry {
+                context_pct: Some(5.0),
+                ..Telemetry::default()
+            }),
+        );
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // ids[0] is the working pane: third card in sort order, so its
+        // telemetry row is the last card's third line.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 16));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 40, 16), &mut buf);
+        let badge_row = (0..16)
+            .find(|y| buffer_row(&buf, *y).contains("5% context"))
+            .expect("critical badge rendered");
+        let x = buffer_row(&buf, badge_row).find("5%").unwrap() as u16;
+        let style = buf.cell((x, badge_row)).unwrap().style();
+        assert_eq!(style.fg, Some(state_color(AgentState::Blocked)));
+        assert!(style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
