@@ -59,6 +59,13 @@ pub fn muted() -> Style {
     Style::default().fg(MUTED)
 }
 
+/// The red for destructive affordances and error chrome (close buttons,
+/// error toasts) — the same red as the blocked state, routed through one
+/// place so a retune of the palette can't strand hardcoded copies.
+pub fn danger() -> Color {
+    state_color(AgentState::Blocked)
+}
+
 /// Spinner frames for the working state, advanced by the frame tick.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 

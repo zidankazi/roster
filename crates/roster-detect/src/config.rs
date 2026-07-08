@@ -14,6 +14,8 @@ use regex::Regex;
 use serde::Deserialize;
 
 /// Fallback for `done.after_activity_secs` when an agent doesn't set it.
+/// Tuned against the observed gap between Claude Code's completion
+/// flourish and its next idle prompt.
 const DEFAULT_DONE_AFTER_SECS: u64 = 8;
 
 /// Where a state's human-readable reason is pulled from.

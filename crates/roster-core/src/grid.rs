@@ -5,6 +5,8 @@
 //! ever *consume* a grid — stay free of any PTY or emulator dependency and
 //! can be driven entirely from fixtures in tests. Wide-character and
 //! escape-sequence handling belong to the emulator, not to this type.
+//!
+//! See `docs/01-crates.md`.
 
 /// A terminal color, as reported by the emulator.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

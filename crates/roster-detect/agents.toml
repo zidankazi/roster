@@ -19,6 +19,8 @@ match_command = ["claude"]
 # launch_command sets the exact command the launcher runs — flags included.
 # Without it, the first match_command binary is launched bare.
 # launch_command = "claude --dangerously-skip-permissions"
+# Order matters: earlier patterns win the reason, so "Do you want to proceed?"
+# must outrank the "❯ N. Yes" menu row rendered beneath it.
 blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d+\. Yes']
 working = ['esc to interrupt', '(?i)ctrl\+c to interrupt']
 idle    = ['^❯']                                              # input prompt line

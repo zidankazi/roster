@@ -5,7 +5,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 
 use crate::launcher::{fill, frame};
 
@@ -92,7 +92,9 @@ pub fn draw_exited(
     }
     let mut close_style = Style::default().add_modifier(Modifier::REVERSED);
     if hover_close {
-        close_style = close_style.add_modifier(Modifier::BOLD).fg(Color::Red);
+        close_style = close_style
+            .add_modifier(Modifier::BOLD)
+            .fg(crate::style::danger());
     }
     buf.set_string(restart.x, restart.y, RESTART_LABEL, restart_style);
     buf.set_string(close.x, close.y, CLOSE_LABEL, close_style);

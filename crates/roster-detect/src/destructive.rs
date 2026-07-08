@@ -359,12 +359,12 @@ mod tests {
     }
 
     #[test]
-    fn plain_ls_is_not() {
+    fn plain_ls_is_not_destructive() {
         assert!(!is_destructive("Bash", "ls -la"));
     }
 
     #[test]
-    fn empty_input_false() {
+    fn empty_input_is_not_destructive() {
         assert!(!is_destructive("Bash", ""));
     }
 

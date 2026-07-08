@@ -1,4 +1,9 @@
 //! Session state: windows, panes, focus, and per-pane agent metadata.
+//!
+//! Pure data — the binary drives it with events (split, close, focus,
+//! detection readings) and reads back layout and pane state; nothing here
+//! touches a terminal, a process, or a clock beyond the `Instant` values
+//! callers pass in. See `docs/01-crates.md`.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -271,6 +276,18 @@ impl Session {
     /// active window, and each pane's command — into a text blob that
     /// [`Session::restore`] can rebuild, pane ids preserved. Agent state is
     /// deliberately left out: it is re-detected from live screens.
+    ///
+    /// This is a persisted compatibility surface (v1); the grammar, one
+    /// line per production:
+    /// - `v1` — the format header, always the first line.
+    /// - `window focused=<id> <node>` — one per window, in order. `<node>`
+    ///   is `(l <id>)` for a leaf or `(h <ratio> <node> <node>)` /
+    ///   `(v <ratio> <node> <node>)` for a split (ratio to 4 decimal places).
+    /// - `active <n>` — the active window's index.
+    /// - `wname <idx> <name>` — one per window with a user-set name; unlisted
+    ///   windows default to `None` (auto-named) on restore.
+    /// - `pane <id> <command>` — one per pane with a known command; unlisted
+    ///   panes default to `None` on restore.
     pub fn snapshot(&self) -> String {
         let mut out = String::from("v1\n");
         for window in &self.windows {
@@ -389,6 +406,11 @@ impl Session {
                 );
             }
             RemoveOutcome::LastLeaf => {
+                // `windows.remove` already ran, so every index at or after
+                // window_idx shifted down by one — this covers both "closed
+                // a window before the active one" and "closed the active
+                // window itself" in a single adjustment, clamped so closing
+                // window 0 can't underflow.
                 if self.active >= window_idx && self.active > 0 {
                     self.active -= 1;
                 }

@@ -4,6 +4,8 @@
 //! splits with a direction and a ratio. [`layout`] walks the tree and tiles a
 //! target rectangle exactly — no gaps, no overlap. Separators, if any, are a
 //! rendering concern and are drawn inside pane rects by `roster-tui`.
+//!
+//! See `docs/01-crates.md`.
 
 use crate::session::PaneId;
 
@@ -286,6 +288,9 @@ fn divide(area: Rect, direction: SplitDirection, ratio: f32) -> (Rect, Rect) {
     }
 }
 
+/// Round `ratio` of `total` to a cell count, keeping at least one cell
+/// on each side when the axis can spare it — a ratio near 0 or 1 must
+/// not starve a pane to zero width or height.
 fn portion(total: u16, ratio: f32) -> u16 {
     if total < 2 {
         return total;

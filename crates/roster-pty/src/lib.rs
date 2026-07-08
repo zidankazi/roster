@@ -173,6 +173,8 @@ impl Drop for Pty {
             Ok(None) => {}
         }
         let _ = self.child.kill();
+        // 10 × 20ms = 200ms of grace: long enough for a normal exit
+        // handler to run, short enough that closing a pane never stalls.
         for _ in 0..10 {
             if let Ok(Some(_)) = self.child.try_wait() {
                 return;

@@ -205,6 +205,9 @@ const AUTO_CHIP: &str = "[auto]";
 /// the chip (the keyboard toggle still works), never the reason.
 const MIN_REASON: u16 = 8;
 
+/// The card body's left indent, in sidebar-inner columns.
+const CARD_INDENT: u16 = 4;
+
 /// The columns of an entry detail row's `auto` chip, in sidebar-inner
 /// columns: the word right-aligned one column in from the edge, mirroring
 /// the age on the name row above. `None` when the row can't host it and a
@@ -226,7 +229,9 @@ pub fn auto_chip_cols(width: u16) -> Option<std::ops::Range<u16>> {
     .unwrap_or(0) as u16;
     // Card indent + the longest state word + a gap + the reason's reserve
     // + the gutter before the chip.
-    let taken = 4 + longest_label + 1 + MIN_REASON + 1;
+    let gap_after_label = 1;
+    let gutter = 1;
+    let taken = CARD_INDENT + longest_label + gap_after_label + MIN_REASON + gutter;
     (width > taken + chip).then(|| width - 1 - chip..width - 1)
 }
 
@@ -244,8 +249,12 @@ const AUTO_ALL: &str = "[auto-yes]";
 /// off its click target.
 pub fn auto_all_cols(width: u16) -> Option<std::ops::Range<u16>> {
     let button = AUTO_ALL.chars().count() as u16;
-    // " agents" + gap + the widest plausible count ("9 blocked") + gutter.
-    let taken = 1 + 6 + 2 + 9 + 1;
+    // " agents" label + gap + the widest plausible count + gutter.
+    let label = 1 + 6; // leading pad + "agents"
+    let gap = 2;
+    let widest_count = 9; // "9 blocked"
+    let gutter = 1;
+    let taken = label + gap + widest_count + gutter;
     (width > taken + button).then(|| width - 1 - button..width - 1)
 }
 
@@ -771,7 +780,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_header_and_spaced_state_colored_cards() {
+    fn header_shows_blocked_count_and_cards_render_state_colored() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);

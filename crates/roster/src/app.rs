@@ -44,6 +44,10 @@ const DETECT_EVERY: Duration = Duration::from_millis(400);
 /// this grace, a committed non-blocked scrape means the prompt is gone and
 /// the pin is stale (a missed clear — e.g. an interrupt at the prompt).
 const HOOK_PIN_GRACE: Duration = Duration::from_secs(2);
+/// How close two clicks must land to count as a double-click — matches
+/// typical OS double-click defaults; shared by the header rename gesture
+/// and the pane-title solo toggle.
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 /// Whether a hook-reported ask still outranks the committed scrape: always
 /// within the paint grace, and for as long as the settled screen keeps
@@ -1597,7 +1601,7 @@ impl App {
                         // Double-clicking a header renames the workspace;
                         // a single click jumps to it.
                         let double = self.last_click.is_some_and(|(at, pos)| {
-                            at.elapsed() < Duration::from_millis(400) && pos == (x, y)
+                            at.elapsed() < DOUBLE_CLICK_WINDOW && pos == (x, y)
                         });
                         self.session.activate_window(window);
                         if double {
@@ -1617,7 +1621,7 @@ impl App {
                         // Double-clicking a title toggles solo, like
                         // double-clicking a window's title bar maximizes.
                         let double = self.last_click.is_some_and(|(at, pos)| {
-                            at.elapsed() < Duration::from_millis(400) && pos == (x, y)
+                            at.elapsed() < DOUBLE_CLICK_WINDOW && pos == (x, y)
                         });
                         if double && matches!(hit, Hit::PaneTitle(_)) {
                             self.zoomed = !self.zoomed;

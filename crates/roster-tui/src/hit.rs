@@ -172,6 +172,8 @@ pub fn hit_test(
                 return Hit::SidebarAutoAll;
             }
         }
+        // Mirrors sidebar.rs's render: one header row plus one blank
+        // spacer (`y += 2`) before the first card row.
         let first = cards.y + 2;
         if y < first {
             return Hit::Sidebar;

@@ -184,6 +184,8 @@ fn spawn_server(name: &str, dir: &Path) -> Result<(), String> {
     command
         .spawn()
         .map_err(|e| format!("starting session server: {e}"))?;
+    // 100 × 20ms = a 2s startup budget: generous next to spawn + bind
+    // time, but bounded so a wedged server can't hang the launching client.
     for _ in 0..100 {
         if server::session_alive(dir, name) {
             return Ok(());

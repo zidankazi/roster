@@ -5,10 +5,17 @@
 //! is small and stable, and the crate stays dependency-free. The transport
 //! is any `Read`/`Write` pair: a unix socket locally, an ssh subprocess's
 //! stdio remotely.
+//!
+//! Corrupt or oversized input is always an `io::Error`, never a panic — see
+//! `MAX_FRAME` and the length checks in `read_frame`. Tags are an
+//! append-only compatibility surface: never reuse or renumber one (see
+//! `Frame::tag`).
 
 use std::io::{self, Read, Write};
 
-/// Frames larger than this are rejected as corrupt rather than allocated.
+/// The largest frame either side will read or write. Enforced before the
+/// length-prefixed allocation happens — a corrupt or hostile length prefix
+/// must never drive an unbounded `Vec` allocation.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
 
 /// One pane as described in a [`Frame::Hello`]: the server's id, the
@@ -193,6 +200,10 @@ pub enum Frame {
 }
 
 impl Frame {
+    // Tags are an append-only compatibility surface: never reuse or
+    // renumber one, even for a removed variant. A new tag needs an arm
+    // here, in write_frame, in read_frame, and a round-trip case in
+    // every_frame_round_trips.
     fn tag(&self) -> u8 {
         match self {
             Frame::Attach => 1,
@@ -301,6 +312,8 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Frame>> {
         Err(e) => return Err(e),
     }
     let len = u32::from_le_bytes(len_buf);
+    // A frame is always tag + payload, so a zero length is corruption,
+    // not an empty frame; the upper bound guards the allocation below.
     if len == 0 || len > MAX_FRAME {
         return Err(corrupt("frame length out of range"));
     }
@@ -352,6 +365,9 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Frame>> {
         },
         64 => {
             let count = p.u64()?;
+            // A pane count small in bytes can still claim far more
+            // slots than the payload could possibly hold; cap it before
+            // with_capacity over-allocates on a corrupt frame.
             if count > 4096 {
                 return Err(corrupt("absurd pane count"));
             }
@@ -452,6 +468,8 @@ impl Cursor<'_> {
 
     fn bytes(&mut self) -> io::Result<Vec<u8>> {
         let len = self.u32()?;
+        // Deliberately re-checked: a nested length claim is corrupt input
+        // independently of the outer frame length read_frame already vetted.
         if len > MAX_FRAME {
             return Err(corrupt("bytes length out of range"));
         }

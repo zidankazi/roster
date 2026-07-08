@@ -553,7 +553,7 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
         // The ✕ lights up red under the pointer.
         let style = if view.hover == Some(Hit::PaneClose(id)) {
             Style::default()
-                .fg(ratatui::style::Color::Red)
+                .fg(style::danger())
                 .add_modifier(Modifier::BOLD)
         } else {
             style::muted()

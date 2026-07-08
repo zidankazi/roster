@@ -6,7 +6,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Widget;
 
 use crate::launcher::{fill, frame};
@@ -118,7 +118,7 @@ impl Widget for Confirm<'_> {
             cancel_style = cancel_style.add_modifier(Modifier::BOLD);
         }
         let mut close_style = Style::default()
-            .fg(Color::Red)
+            .fg(crate::style::danger())
             .add_modifier(Modifier::REVERSED | Modifier::BOLD);
         if self.hover == Some(ConfirmButton::Close) {
             close_style = close_style.remove_modifier(Modifier::REVERSED);

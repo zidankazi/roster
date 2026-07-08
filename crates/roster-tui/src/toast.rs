@@ -5,10 +5,10 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 
 use crate::launcher::{fill, frame};
-use crate::style::ACCENT;
+use crate::style::{danger, ACCENT};
 
 /// How loud a toast is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +56,7 @@ pub fn draw_toasts(buf: &mut Buffer, area: Rect, toasts: &[(&str, ToastLevel)]) 
         // Re-tint the border by level: errors read as red.
         let border = match level {
             ToastLevel::Info => Style::default().fg(ACCENT),
-            ToastLevel::Error => Style::default().fg(Color::Red),
+            ToastLevel::Error => Style::default().fg(danger()),
         };
         for y in rect.y..rect.y + rect.height {
             for x in rect.x..rect.x + rect.width {
@@ -75,7 +75,7 @@ pub fn draw_toasts(buf: &mut Buffer, area: Rect, toasts: &[(&str, ToastLevel)]) 
             ToastLevel::Info => ("✓", Style::default().fg(ACCENT)),
             ToastLevel::Error => (
                 "✗",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default().fg(danger()).add_modifier(Modifier::BOLD),
             ),
         };
         buf.set_string(rect.x + 2, rect.y + 1, glyph, glyph_style);
@@ -91,6 +91,8 @@ pub fn draw_toasts(buf: &mut Buffer, area: Rect, toasts: &[(&str, ToastLevel)]) 
 
 #[cfg(test)]
 mod tests {
+    use ratatui::style::Color;
+
     use super::*;
 
     #[test]

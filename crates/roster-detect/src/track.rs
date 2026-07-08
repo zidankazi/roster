@@ -388,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn scrape_only_unchanged() {
+    fn pane_without_telemetry_reads_unchanged() {
         // A pane with no bridge feed reads exactly as before the field
         // existed: scraped state and reason, telemetry never `Some`.
         let (detector, kind) = tracker_detector();
