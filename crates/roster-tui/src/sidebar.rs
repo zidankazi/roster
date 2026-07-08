@@ -98,43 +98,75 @@ pub enum Message {
     JumpToPane(PaneId),
 }
 
-/// Keyboard-navigation state for the sidebar: which row is selected.
+/// Keyboard-navigation state for the sidebar: which pane is selected.
+///
+/// Selection is identity-based, not positional: `sidebar_entries` re-triages
+/// rows by attention priority every frame, so a pane whose committed state
+/// flips between keystrokes changes rows. Anchoring to the pane keeps the
+/// highlight — and anything acted on it (jump, auto-approve) — on the agent
+/// the user chose. The remembered row is only the fallback for when the
+/// anchored pane disappears from the entries.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SidebarState {
-    selected: usize,
+    pane: Option<PaneId>,
+    index: usize,
 }
 
 impl SidebarState {
-    /// A state with the first row selected.
+    /// A state with the first row selected and no pane anchored yet.
     pub fn new() -> Self {
         SidebarState::default()
     }
 
-    /// The selected row index, clamped to `len`; `None` when there are no
-    /// rows.
-    pub fn selected(&self, len: usize) -> Option<usize> {
-        (len > 0).then(|| self.selected.min(len - 1))
+    /// A state anchored to the top row's pane — the selection jump mode
+    /// opens with. Anchoring at construction keeps the unanchored-but-
+    /// selectable state out of the key handlers: a re-triage before the
+    /// first keystroke can't hand the selection to whichever pane rises
+    /// to row zero.
+    pub fn anchored(entries: &[SidebarEntry]) -> Self {
+        let mut state = SidebarState::default();
+        state.anchor(0, entries);
+        state
+    }
+
+    /// The selected row: the anchored pane's current position in `entries`,
+    /// or the last-anchored row (clamped) when the pane is gone or none was
+    /// anchored. `None` when there are no rows.
+    pub fn selected(&self, entries: &[SidebarEntry]) -> Option<usize> {
+        if entries.is_empty() {
+            return None;
+        }
+        let anchored = self
+            .pane
+            .and_then(|pane| entries.iter().position(|entry| entry.pane == pane));
+        Some(anchored.unwrap_or(self.index.min(entries.len() - 1)))
     }
 
     /// Move the selection down one row, wrapping.
-    pub fn select_next(&mut self, len: usize) {
-        if len > 0 {
-            self.selected = (self.selected.min(len - 1) + 1) % len;
+    pub fn select_next(&mut self, entries: &[SidebarEntry]) {
+        if let Some(current) = self.selected(entries) {
+            self.anchor((current + 1) % entries.len(), entries);
         }
     }
 
     /// Move the selection up one row, wrapping.
-    pub fn select_prev(&mut self, len: usize) {
-        if len > 0 {
-            let current = self.selected.min(len - 1);
-            self.selected = (current + len - 1) % len;
+    pub fn select_prev(&mut self, entries: &[SidebarEntry]) {
+        if let Some(current) = self.selected(entries) {
+            self.anchor((current + entries.len() - 1) % entries.len(), entries);
         }
     }
 
     /// The intent behind pressing enter: jump to the selected entry's pane.
     pub fn activate(&self, entries: &[SidebarEntry]) -> Option<Message> {
-        let index = self.selected(entries.len())?;
+        let index = self.selected(entries)?;
         Some(Message::JumpToPane(entries[index].pane))
+    }
+
+    fn anchor(&mut self, index: usize, entries: &[SidebarEntry]) {
+        if let Some(entry) = entries.get(index) {
+            self.pane = Some(entry.pane);
+            self.index = index;
+        }
     }
 }
 
@@ -764,19 +796,65 @@ mod tests {
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut state = SidebarState::new();
-        assert_eq!(state.selected(entries.len()), Some(0));
+        assert_eq!(state.selected(&entries), Some(0));
 
-        state.select_prev(entries.len());
-        assert_eq!(state.selected(entries.len()), Some(2));
-        state.select_next(entries.len());
-        assert_eq!(state.selected(entries.len()), Some(0));
+        state.select_prev(&entries);
+        assert_eq!(state.selected(&entries), Some(2));
+        state.select_next(&entries);
+        assert_eq!(state.selected(&entries), Some(0));
 
         assert_eq!(
             state.activate(&entries),
             Some(Message::JumpToPane(entries[0].pane))
         );
-        assert_eq!(SidebarState::new().selected(0), None);
+        assert_eq!(SidebarState::new().selected(&[]), None);
         assert_eq!(SidebarState::new().activate(&[]), None);
+    }
+
+    #[test]
+    fn selection_follows_its_pane_across_a_retriage() {
+        let now = Instant::now();
+        let (mut session, ids) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let state = SidebarState::anchored(&entries);
+        let chosen = entries[0].pane;
+        assert_eq!(chosen, ids[1], "the blocked pane leads the triage");
+
+        // The chosen pane's ask gets answered (say, auto-approved) and it
+        // goes working: it sinks to the bottom tier and a different pane
+        // takes row zero.
+        session.set_reading(ids[1], AgentState::Working, Some("resumed".into()), now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        assert_ne!(entries[0].pane, chosen, "the retriage must move the pane");
+
+        // The highlight, the jump, and anything resolved through
+        // `selected()` — the binary's auto-approve toggle included — stay
+        // on the chosen pane, not on whichever pane now holds its old row.
+        let selected = state.selected(&entries).unwrap();
+        assert_eq!(entries[selected].pane, chosen);
+        assert_eq!(state.activate(&entries), Some(Message::JumpToPane(chosen)));
+    }
+
+    #[test]
+    fn selection_falls_back_to_the_held_row_when_its_pane_closes() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut state = SidebarState::new();
+        state.select_next(&entries);
+        let gone = entries[1].pane;
+
+        // The anchored pane vanishes: the selection keeps the row it held.
+        let remaining: Vec<SidebarEntry> = entries
+            .iter()
+            .filter(|entry| entry.pane != gone)
+            .cloned()
+            .collect();
+        assert_eq!(state.selected(&remaining), Some(1));
+
+        // And that row clamps when the list shrinks below it.
+        assert_eq!(state.selected(&remaining[..1]), Some(0));
+        assert_eq!(state.selected(&[]), None);
     }
 
     #[test]

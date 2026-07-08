@@ -690,7 +690,7 @@ impl App {
                 .filter_map(|(id, rt)| rt.exited.map(|code| (*id, code)))
                 .collect();
             let selected = match self.mode {
-                Mode::Jump => self.sidebar.selected(self.last_entries.len()),
+                Mode::Jump => self.sidebar.selected(&self.last_entries),
                 _ => None,
             };
             // Hover follows the last known pointer position; the launcher
@@ -1396,7 +1396,7 @@ impl App {
                         }
                     }
                     KeyCode::Char('j') => {
-                        self.sidebar = SidebarState::new();
+                        self.sidebar = SidebarState::anchored(&self.last_entries);
                         self.mode = Mode::Jump;
                     }
                     KeyCode::Char(',') => {
@@ -1445,16 +1445,16 @@ impl App {
             },
             Mode::Jump => match key.code {
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.sidebar.select_next(self.last_entries.len());
+                    self.sidebar.select_next(&self.last_entries);
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    self.sidebar.select_prev(self.last_entries.len());
+                    self.sidebar.select_prev(&self.last_entries);
                 }
                 // Toggle auto-approve on the selected agent and stay in jump
                 // mode. Forward-looking: it answers the pane's *next* asks,
                 // not any prompt already waiting.
                 KeyCode::Char('a') => {
-                    if let Some(index) = self.sidebar.selected(self.last_entries.len()) {
+                    if let Some(index) = self.sidebar.selected(&self.last_entries) {
                         let pane = self.last_entries[index].pane.raw();
                         self.toggle_auto_approve(pane);
                     }
