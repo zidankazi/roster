@@ -59,6 +59,10 @@ pub struct Pane {
     /// `None` for panes without the feed — and again once a feed goes
     /// stale, so the sidebar never asserts numbers nobody is reporting.
     pub telemetry: Option<Telemetry>,
+    /// The terminal title the pane's program last set (OSC 0/2) — agent
+    /// CLIs put their current task there. Best-effort and display-only,
+    /// never a detection signal.
+    pub title: Option<String>,
 }
 
 impl Pane {
@@ -70,6 +74,7 @@ impl Pane {
             reason: None,
             last_change: None,
             telemetry: None,
+            title: None,
         }
     }
 }
@@ -495,6 +500,17 @@ impl Session {
         true
     }
 
+    /// Record a pane's terminal title — `None` clears it (the program
+    /// reset the title or never set one). Returns `false` if the pane
+    /// does not exist.
+    pub fn set_title(&mut self, target: PaneId, title: Option<String>) -> bool {
+        let Some(pane) = self.panes.get_mut(&target) else {
+            return false;
+        };
+        pane.title = title;
+        true
+    }
+
     /// The index of the window containing `target`, or `None` if no window
     /// holds it.
     pub fn window_of(&self, target: PaneId) -> Option<usize> {
@@ -913,6 +929,25 @@ mod tests {
         assert_eq!(s.pane(id).unwrap().telemetry, None);
 
         assert!(!s.set_telemetry(PaneId::from_raw(999), None));
+    }
+
+    #[test]
+    fn set_title_sets_and_clears_a_panes_title() {
+        let mut s = Session::new();
+        let id = s.focused().unwrap();
+        assert_eq!(s.pane(id).unwrap().title, None);
+
+        assert!(s.set_title(id, Some("fixing the auth bug".into())));
+        assert_eq!(
+            s.pane(id).unwrap().title.as_deref(),
+            Some("fixing the auth bug")
+        );
+
+        // A reset title clears rather than freezing the last task.
+        assert!(s.set_title(id, None));
+        assert_eq!(s.pane(id).unwrap().title, None);
+
+        assert!(!s.set_title(PaneId::from_raw(999), None));
     }
 
     #[test]

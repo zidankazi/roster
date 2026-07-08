@@ -40,6 +40,11 @@ pub struct SidebarEntry {
     /// bridge, or a feed gone stale — renders exactly the two-line card
     /// from before the field existed.
     pub telemetry: Option<Telemetry>,
+    /// The pane's live terminal title — the agent's current task, when it
+    /// broadcasts one. The card's first line prefers it over the config
+    /// name: in a Claude-only sidebar every card saying `claude-code`
+    /// carries no information, but the task does.
+    pub title: Option<String>,
 }
 
 /// Build the sidebar rows from the session: every pane whose command
@@ -64,6 +69,7 @@ pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> 
                 // session model here has no notion of it.
                 auto_approve: false,
                 telemetry: pane.telemetry.clone(),
+                title: pane.title.clone(),
             })
         })
         .collect();
@@ -385,12 +391,10 @@ impl Widget for Sidebar<'_> {
                     } else {
                         Style::default().add_modifier(Modifier::BOLD)
                     };
-                    buf.set_string(
-                        area.x + 4,
-                        y,
-                        truncate(&entry.agent, name_width),
-                        name_style,
-                    );
+                    // The live task title beats the config name — every
+                    // card saying `claude-code` says nothing.
+                    let name = entry.title.as_deref().unwrap_or(&entry.agent);
+                    buf.set_string(area.x + 4, y, truncate(name, name_width), name_style);
                     if !age.is_empty() {
                         let x = area.x + area.width - 1 - age.len() as u16;
                         buf.set_string(x, y, &age, muted());
@@ -718,6 +722,32 @@ mod tests {
         assert_eq!(
             buf.cell((4, 3)).unwrap().style().fg,
             Some(state_color(AgentState::Blocked))
+        );
+    }
+
+    #[test]
+    fn card_title_prefers_the_panes_terminal_title_over_the_agent_name() {
+        let now = Instant::now();
+        let (mut session, panes) = populated_session(now);
+        // The blocked pane broadcasts its task; the others never set one.
+        session.set_title(panes[1], Some("fixing the auth bug".into()));
+
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+
+        // The blocked card (sorted first) is labeled by its task…
+        let titled = buffer_row(&buf, 2);
+        assert!(
+            titled.starts_with("  ◉ fixing the auth bug"),
+            "row: {titled}"
+        );
+        // …and a card without a title keeps the agent-name fallback.
+        assert!(
+            buffer_row(&buf, 5).contains("claude-code"),
+            "fallback row: {}",
+            buffer_row(&buf, 5)
         );
     }
 
