@@ -305,22 +305,22 @@ mod tests {
     fn auto_chip_cols_resolve_to_auto_hits_on_detail_rows_only() {
         let (session, entries) = setup();
         let area = Rect::new(0, 0, 120, 30);
-        // The header row hosts the auto-yes fleet toggle at cols 9..17;
+        // The header row hosts the auto-yes fleet toggle at cols 20..30;
         // the rest of the header is inert sidebar.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, 9, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 20, 0),
             Hit::SidebarAutoAll
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, 16, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 29, 0),
             Hit::SidebarAutoAll
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, 17, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 30, 0),
             Hit::Sidebar
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, 8, 0),
+            hit_test(area, &session, SidebarSide::Left, &entries, None, 19, 0),
             Hit::Sidebar
         );
 

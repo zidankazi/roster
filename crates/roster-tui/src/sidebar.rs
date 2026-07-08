@@ -234,19 +234,22 @@ pub fn auto_chip_cols(width: u16) -> Option<std::ops::Range<u16>> {
 }
 
 /// The fleet toggle's text — arms auto-approve for every agent at once.
-const AUTO_ALL: &str = "auto-yes";
+/// The brackets are the affordance, same as the per-card chip: a pressable
+/// control even in terminals that never show a hand cursor.
+const AUTO_ALL: &str = "[auto-yes]";
 
-/// The columns of the sidebar header's `auto-yes` fleet toggle, in
-/// sidebar-inner columns: right after the `agents` label. `None` on
-/// sidebars too narrow to keep it clear of the blocked count at the right
-/// edge. Render draws it and `hit_test` targets it, so the button can't
-/// drift off its click target.
+/// The columns of the sidebar header's `[auto-yes]` fleet toggle, in
+/// sidebar-inner columns: right-aligned one column in from the edge,
+/// mirroring the per-card chip below it. `None` on sidebars too narrow to
+/// keep it clear of the inline blocked count on the left. Width-only and
+/// static, so the button never jumps as the blocked count comes and goes.
+/// Render draws it and `hit_test` targets it, so the button can't drift
+/// off its click target.
 pub fn auto_all_cols(width: u16) -> Option<std::ops::Range<u16>> {
     let button = AUTO_ALL.chars().count() as u16;
-    // " agents" + a gap, then the button; the blocked count ("N blocked")
-    // needs its own right-aligned span with a gutter between them.
-    let start = 1 + 6 + 2;
-    (width >= start + button + 11).then(|| start..start + button)
+    // " agents" + gap + the widest plausible count ("9 blocked") + gutter.
+    let taken = 1 + 6 + 2 + 9 + 1;
+    (width > taken + button).then(|| width - 1 - button..width - 1)
 }
 
 /// The agent-state sidebar widget.
@@ -341,10 +344,26 @@ impl Widget for Sidebar<'_> {
         let bottom = area.y + area.height;
         let mut y = area.y;
 
-        // Quiet header: lowercase, dim; the blocked count appears on the
-        // right only when someone actually needs you.
+        // Quiet header: lowercase, dim; the blocked count follows it inline
+        // (only when someone actually needs you), and the `[auto-yes]`
+        // fleet toggle holds the right edge at fixed columns.
         let blocked = self.blocked_count();
         buf.set_stringn(area.x + 1, y, "agents", width.saturating_sub(1), muted());
+        if blocked > 0 {
+            let summary = format!("{blocked} blocked");
+            let budget = auto_all_cols(area.width)
+                .map(|cols| cols.start.saturating_sub(1 + 6 + 2 + 1))
+                .unwrap_or_else(|| area.width.saturating_sub(1 + 6 + 2 + 1));
+            buf.set_stringn(
+                area.x + 1 + 6 + 2,
+                y,
+                &summary,
+                usize::from(budget),
+                Style::default()
+                    .fg(state_color(AgentState::Blocked))
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
         // The fleet toggle: arm auto-approve for every agent, or disarm
         // all when everything is already on. Accent when the whole fleet
         // is armed, muted otherwise — same vocabulary as the per-card chip.
@@ -361,20 +380,6 @@ impl Widget for Sidebar<'_> {
                 style = style.add_modifier(Modifier::REVERSED);
             }
             buf.set_string(area.x + cols.start, y, AUTO_ALL, style);
-        }
-        if blocked > 0 {
-            let summary = format!("{blocked} blocked");
-            let len = summary.chars().count() as u16;
-            if len + 2 < area.width {
-                buf.set_string(
-                    area.x + area.width - 1 - len,
-                    y,
-                    &summary,
-                    Style::default()
-                        .fg(state_color(AgentState::Blocked))
-                        .add_modifier(Modifier::BOLD),
-                );
-            }
         }
         y += 2;
 
@@ -738,7 +743,8 @@ mod tests {
         // Quiet lowercase header with the blocked count on the right.
         let header = buffer_row(&buf, 0);
         assert!(header.starts_with(" agents"), "header: {header}");
-        assert!(header.ends_with("1 blocked"), "header: {header}");
+        assert!(header.contains("1 blocked"), "header: {header}");
+        assert!(header.ends_with("[auto-yes]"), "header: {header}");
 
         // Cards start after a blank row: the blocked card first (glyph, bold
         // name, right-aligned age; state word + dim reason below), then a
@@ -803,10 +809,11 @@ mod tests {
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 31, 14), &mut buf);
 
-        // The button shares the header row with the blocked count.
+        // The blocked count sits inline after the label; the button holds
+        // the right edge.
         let header = buffer_row(&buf, 0);
-        assert!(header.starts_with(" agents  auto-yes"), "header: {header}");
-        assert!(header.ends_with("1 blocked"), "header: {header}");
+        assert!(header.starts_with(" agents  1 blocked"), "header: {header}");
+        assert!(header.ends_with("[auto-yes]"), "header: {header}");
         // Mixed fleet (none armed here): the button is quiet chrome.
         let cols = auto_all_cols(31).unwrap();
         let off = buf.cell((cols.start, 0)).unwrap().style();
@@ -826,10 +833,11 @@ mod tests {
 
     #[test]
     fn auto_all_cols_guard_narrow_widths() {
-        // " agents" + gap, 8 wide, clear of the blocked count.
-        assert_eq!(auto_all_cols(31), Some(9..17));
-        assert_eq!(auto_all_cols(28), Some(9..17));
-        assert_eq!(auto_all_cols(27), None);
+        // Right-aligned one column in from the edge, 10 wide, clear of the
+        // inline blocked count on the left.
+        assert_eq!(auto_all_cols(31), Some(20..30));
+        assert_eq!(auto_all_cols(30), Some(19..29));
+        assert_eq!(auto_all_cols(29), None);
         assert_eq!(auto_all_cols(0), None);
     }
 
