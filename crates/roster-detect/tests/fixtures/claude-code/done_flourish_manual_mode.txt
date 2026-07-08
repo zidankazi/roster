@@ -1,0 +1,30 @@
+
+ ▐▛███▜▌   Claude Code v2.1.204
+▝▜█████▛▘  Haiku 4.5 · Claude Max
+  ▘▘ ▝▝    ~/Desktop/roster/.claude/worktrees/live-verify
+
+ ⚠ 2 MCP servers need authentication · run /mcp
+
+ ▎ Extended: Fable 5 is included in your weekly limit
+ ▎ Through July 12, you can use up to 50% of your weekly usage limit on Fable 5. If you hit your
+ ▎ limit, you can continue on Fable 5 with usage credits. Fable 5 draws down usage faster than Opus
+ ▎ 4.8. Run /model and select Fable to use it. Learn more
+ ▎ (https://support.claude.com/en/articles/15424964-claude-fable-5-promotional-access)
+
+❯ say hi
+
+⏺ Hey! 👋  How's it going? What are you working on?
+
+✻ Cogitated for 2s
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ⏸ manual mode on

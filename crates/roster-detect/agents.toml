@@ -9,10 +9,10 @@
 # See docs/02-state-detection.md.
 #
 # The claude-code patterns are tuned against Claude Code 2.1 captured live
-# (see crates/roster/examples/capture.rs). Its permission prompts show
-# "Do you want to proceed?" over a "❯ 1. Yes" menu; while working it shows
-# "esc to interrupt"; at rest the input line is "❯" between horizontal
-# rules (not a box-bordered "> ").
+# (see crates/roster/examples/capture.rs; latest capture 2.1.204). Its
+# permission prompts show "Do you want to proceed?" over a "❯ 1. Yes" menu;
+# while working it shows "esc to interrupt"; at rest the input line is "❯"
+# between horizontal rules (not a box-bordered "> ").
 
 [claude-code]
 match_command = ["claude"]
@@ -24,8 +24,9 @@ working = ['esc to interrupt', '(?i)ctrl\+c to interrupt']
 idle    = ['^❯']                                              # input prompt line
 reason.blocked = "matched_line"
 reason.working = "last_nonempty"
-# Skip UI chrome so a working/done reason is real content (e.g. the spinner
-# status or the last result line), not the model status bar, the input
-# prompt, or the interrupt/shortcut hints.
-reason.ignore = ['^\s*●', 'to interrupt', '\? for shortcuts', '^\s*⎿', '^\s*❯', '^\s*▎']
+# Skip UI chrome so a working/done reason is real content (e.g. the last
+# result line), not the model status bar, the input prompt, the
+# interrupt/shortcut hints, the mode indicator, or the completion flourish
+# ("✻ Cogitated for 2s" — a random verb, so the word is a wildcard).
+reason.ignore = ['^\s*●', 'to interrupt', '\? for shortcuts', '^\s*⎿', '^\s*❯', '^\s*▎', '^\s*[✻✳*] ?\w+ for \d+s$', '^\s*⏸']
 done.after_activity_secs = 8

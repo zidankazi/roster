@@ -101,10 +101,24 @@ fn claude_idle_at_rest() {
 
 #[test]
 fn claude_done_shortly_after_activity() {
+    // The completion flourish ("✻ Cogitated for 3s") is ignored chrome;
+    // the reason is the last real content line — the response itself.
     assert_reading(
         classify_after_activity("claude-code", "claude", "done_after_task.txt", 3),
         AgentState::Done,
-        Some("✻ Cogitated for 3s"),
+        Some("⏺ pumpernickel"),
+    );
+}
+
+#[test]
+fn claude_done_reason_skips_flourish_and_mode_indicator() {
+    // Captured from Claude Code 2.1.204: the flourish sits between the
+    // response and the prompt, and "⏸ manual mode on" sits below — both
+    // are chrome the reason must skip to land on the response line.
+    assert_reading(
+        classify_after_activity("claude-code", "claude", "done_flourish_manual_mode.txt", 3),
+        AgentState::Done,
+        Some("⏺ Hey! 👋  How's it going? What are you working on?"),
     );
 }
 
@@ -176,7 +190,8 @@ fn pane_tracker_full_lifecycle() {
     assert_eq!(seen.state, AgentState::Working);
     let seen = tracker.update(&detector, kind, &done, at(8));
     assert_eq!(seen.state, AgentState::Done);
-    assert_eq!(seen.reason.as_deref(), Some("✻ Cogitated for 3s"));
+    // The flourish is ignored chrome; the reason is the response itself.
+    assert_eq!(seen.reason.as_deref(), Some("⏺ pumpernickel"));
 
     // Long after the done window (8s for claude-code), the pane goes idle.
     let seen = tracker.update(&detector, kind, &done, at(20));
