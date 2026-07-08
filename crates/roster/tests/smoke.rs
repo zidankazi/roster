@@ -203,7 +203,7 @@ fn mouse_clicks_focus_launch_and_jump() {
 
     // The second command has focus at startup; the status line names it.
     assert!(
-        drain_while(&mut screen, "sleep 70   ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 70 · ctrl-b", true, &rx),
         "first frame:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -234,7 +234,7 @@ fn mouse_clicks_focus_launch_and_jump() {
     // focus follows the mouse click.
     pty.write(&click(40, 10)).expect("click left pane");
     assert!(
-        drain_while(&mut screen, "sleep 60   ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 60 · ctrl-b", true, &rx),
         "click did not focus the left pane:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -295,13 +295,13 @@ fn mouse_clicks_focus_launch_and_jump() {
     // header) jumps to the agent again.
     pty.write(&click(5, 3)).expect("click workspace 1 header");
     assert!(
-        drain_while(&mut screen, "sleep 60   ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 60 · ctrl-b", true, &rx),
         "workspace header click did not switch windows:\n{}",
         screen.grid().lines().join("\n")
     );
     pty.write(&click(5, 7)).expect("click sidebar card");
     assert!(
-        drain_while(&mut screen, "claude   ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ claude · ctrl-b", true, &rx),
         "sidebar click did not jump to the agent:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -323,7 +323,7 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     let mut screen = Screen::new(cols, rows);
 
     assert!(
-        drain_while(&mut screen, "sleep 70   ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 70 · ctrl-b", true, &rx),
         "first frame:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -332,7 +332,7 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     // agent button: 0-based y 27 → 1-based 28; word at cols 8..12).
     pty.write(&click(10, 28)).expect("click solo");
     assert!(
-        drain_while(&mut screen, "sleep 70   click a card", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 70 · click a card", true, &rx),
         "solo never engaged:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -354,7 +354,7 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"o").expect("focus next");
     assert!(
-        drain_while(&mut screen, "sleep 60   click a card", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 60 · click a card", true, &rx),
         "solo did not follow focus:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -363,7 +363,7 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     // separator is back.
     pty.write(&click(3, 28)).expect("click grid");
     assert!(
-        drain_while(&mut screen, "sleep 60   ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 60 · ctrl-b", true, &rx),
         "grid never returned:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -379,7 +379,7 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     pty.write(&click(40, 1)).expect("first click");
     pty.write(&click(40, 1)).expect("second click");
     assert!(
-        drain_while(&mut screen, "sleep 60   click a card", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 60 · click a card", true, &rx),
         "double-click did not go solo:\n{}",
         screen.grid().lines().join("\n")
     );

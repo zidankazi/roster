@@ -1966,31 +1966,34 @@ impl App {
     fn status_line(&self) -> (Option<&'static str>, String) {
         match &self.mode {
             Mode::Normal => {
+                // "focused ▸ claude" says where keystrokes go; a pane with
+                // no known command drops the prefix rather than dangling.
                 let focused = self
                     .session
                     .focused()
                     .and_then(|id| self.session.pane(id))
                     .and_then(|pane| pane.command.as_deref())
-                    .unwrap_or("");
+                    .map(|command| format!("focused ▸ {command} · "))
+                    .unwrap_or_default();
                 if self.zoomed {
                     (
                         Some("SOLO"),
                         format!(
-                            "{focused}   click a card to switch · ctrl-b: keys · then z: grid · j: jump · q: quit"
+                            "{focused}click a card to switch · ctrl-b: keys · then z: grid · j: jump · q: quit roster"
                         ),
                     )
                 } else {
                     (
                         None,
                         format!(
-                            "{focused}   ctrl-b: keys · then c: new agent · j: jump · z: solo · x: close · d: detach · q: quit"
+                            "{focused}ctrl-b: keys · then c: new agent · j: jump · z: solo · x: close agent · d: detach · q: quit roster"
                         ),
                     )
                 }
             }
             Mode::Prefix => (
                 Some("PREFIX"),
-                "c: new agent · n/p: windows · ,: rename · z: solo · %/\": split · o: focus · j: jump · x: close · d: detach · q: quit"
+                "c: new agent · n/p: windows · ,: rename · z: solo · %/\": split · o: focus · j: jump · x: close agent · d: detach · q: quit roster"
                     .to_string(),
             ),
             Mode::Jump => (
