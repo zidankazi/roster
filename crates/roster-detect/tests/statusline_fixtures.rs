@@ -1,8 +1,13 @@
 //! Statusline payloads in `tests/fixtures/statusline/`, each parsed and
-//! asserted field by field. `full.json` is the complete example payload
-//! from the official statusline docs; `partial.json` is an early-session
-//! payload with `null` percentages and no `rate_limits`; `garbage.txt` is
-//! not JSON. Malformed input must return `None`, never panic.
+//! asserted field by field. `full.json` and `partial.json` are captured
+//! verbatim from live Claude Code 2.1.202 (the registered statusline
+//! command tee'd to a file): `full.json` is a mid-turn payload with every
+//! window reported, `partial.json` a session-start payload with `null`
+//! percentages and no `rate_limits`. Live payloads carry integer
+//! percentages and fields the parser doesn't map (`prompt_id`,
+//! `effort.level`, `context_window.current_usage`, …) — the tests prove
+//! both are handled. `garbage.txt` stays synthetic: it exists to not be
+//! JSON. Malformed input must return `None`, never panic.
 
 use std::path::Path;
 
@@ -19,15 +24,16 @@ fn fixture(name: &str) -> String {
 #[test]
 fn full_payload_yields_every_telemetry_field() {
     let t = parse(&fixture("full.json")).expect("full payload parses");
-    assert_eq!(t.model.as_deref(), Some("Opus"));
-    assert_eq!(t.context_pct, Some(92.0));
-    assert_eq!(t.cost_usd, Some(0.01234));
+    assert_eq!(t.model.as_deref(), Some("Fable 5"));
+    // Live payloads report integer percentages.
+    assert_eq!(t.context_pct, Some(96.0));
+    assert_eq!(t.cost_usd, Some(0.765_263));
     let rl = t.rate_limit.expect("rate-limit windows reported");
     let five = rl.five_hour.expect("five-hour window reported");
-    assert_eq!(five.used_pct, 23.5);
+    assert_eq!(five.used_pct, 26.0);
     let seven = rl.seven_day.expect("seven-day window reported");
-    assert_eq!(seven.used_pct, 41.2);
-    // The fixture's `resets_at` values are fixed epoch instants; the
+    assert_eq!(seven.used_pct, 24.0);
+    // The fixture's `resets_at` values are the captured epoch instants; the
     // remaining durations depend on the wall clock, so only presence is
     // asserted — the epoch arithmetic is unit-tested with an injected clock.
     assert!(five.resets_in.is_some());
@@ -36,8 +42,10 @@ fn full_payload_yields_every_telemetry_field() {
 
 #[test]
 fn partial_payload_maps_null_and_absent_fields_to_none() {
+    // A session-start payload: `current_usage` and both percentages are
+    // `null`, `rate_limits` absent, and the cost a literal integer `0`.
     let t = parse(&fixture("partial.json")).expect("partial payload parses");
-    assert_eq!(t.model.as_deref(), Some("Opus"));
+    assert_eq!(t.model.as_deref(), Some("Fable 5"));
     assert_eq!(t.context_pct, None, "null percentage is absent, not zero");
     assert_eq!(t.cost_usd, Some(0.0));
     assert_eq!(t.rate_limit, None);
