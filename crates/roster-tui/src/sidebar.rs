@@ -2,8 +2,9 @@
 //! card — a colored status glyph, the agent name, and its age on top; the
 //! state, its reason, and the clickable `auto` (auto-approve) chip below;
 //! and, only when the statusline bridge feeds one, a third line of
-//! telemetry badges (see `telemetry.rs`). Blocked and done float to the top
-//! of each workspace so the agents that need you are always in view.
+//! telemetry badges (see `telemetry.rs`). Within each workspace, cards are
+//! triaged by `roster_core::attention` — blocked, done, idle, then working
+//! at the bottom — so the agents that need you are always in view.
 
 use std::time::{Duration, Instant};
 
@@ -12,7 +13,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
-use roster_core::{AgentState, PaneId, Session, Telemetry};
+use roster_core::{AgentState, AttentionItem, PaneId, Session, Telemetry};
 use roster_detect::Detector;
 
 use crate::style::{muted, state_color, state_glyph, state_label};
@@ -49,8 +50,8 @@ pub struct SidebarEntry {
 
 /// Build the sidebar rows from the session: every pane whose command
 /// identifies as a configured agent, grouped by workspace and, within a
-/// workspace, sorted so blocked and done float up and the longest-waiting
-/// rows lead.
+/// workspace, triaged by `roster_core::attention` — blocked first (longest
+/// wait leading), then done, idle, and working at the bottom.
 pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> Vec<SidebarEntry> {
     let mut entries: Vec<SidebarEntry> = session
         .panes()
@@ -74,23 +75,19 @@ pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> 
         })
         .collect();
     entries.sort_by_key(|e| {
-        (
-            e.window,
-            state_rank(e.state),
-            std::cmp::Reverse(e.age.unwrap_or(Duration::ZERO)),
-            e.pane,
-        )
+        // Committed state and age only, so the order can't jitter as raw
+        // readings bounce. `destructive` has no session-model source yet
+        // (the hook bridge will feed it — docs/05); false ranks the ask as
+        // plain. The pane id breaks exact ties, keeping equal-priority
+        // cards in a stable position frame to frame.
+        let item = AttentionItem {
+            state: e.state,
+            waiting_for: e.age,
+            destructive: false,
+        };
+        (e.window, item.priority(), e.pane)
     });
     entries
-}
-
-fn state_rank(state: AgentState) -> u8 {
-    match state {
-        AgentState::Blocked => 0,
-        AgentState::Done => 1,
-        AgentState::Working => 2,
-        AgentState::Idle => 3,
-    }
 }
 
 /// A pane-switch request surfaced by the sidebar. The binary owns the
@@ -683,6 +680,48 @@ mod tests {
     }
 
     #[test]
+    fn working_sinks_below_idle() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        let a = session.focused().unwrap();
+        let b = session.split(a, SplitDirection::Horizontal).unwrap();
+        session.pane_mut(a).unwrap().command = Some("claude".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
+        // The working pane has been at it far longer; the idle one still
+        // leads — the tier is the signal, age only orders within it.
+        session.set_reading(
+            a,
+            AgentState::Working,
+            Some("running tests".into()),
+            now - Duration::from_secs(600),
+        );
+        session.set_reading(b, AgentState::Idle, None, now - Duration::from_secs(5));
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        assert_eq!(entries[0].pane, b);
+        assert_eq!(entries[0].state, AgentState::Idle);
+        assert_eq!(entries[1].pane, a);
+        assert_eq!(entries[1].state, AgentState::Working);
+    }
+
+    #[test]
+    fn equal_priority_keeps_pane_order() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        let a = session.focused().unwrap();
+        let b = session.split(a, SplitDirection::Horizontal).unwrap();
+        session.pane_mut(a).unwrap().command = Some("claude".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
+        let at = now - Duration::from_secs(30);
+        session.set_reading(a, AgentState::Working, Some("w".into()), at);
+        session.set_reading(b, AgentState::Working, Some("w".into()), at);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // Same state, same age: the pane id breaks the tie, so equal
+        // cards hold a stable position instead of reshuffling.
+        assert_eq!(entries[0].pane, a);
+        assert_eq!(entries[1].pane, b);
+    }
+
+    #[test]
     fn entries_group_and_order_by_workspace() {
         let now = Instant::now();
         let mut session = Session::new();
@@ -772,6 +811,40 @@ mod tests {
             buf.cell((4, 3)).unwrap().style().fg,
             Some(state_color(AgentState::Blocked))
         );
+    }
+
+    #[test]
+    fn renders_cards_in_triage_order() {
+        // Creation order deliberately scrambled: working, idle, done,
+        // blocked. The rendered cards read top-down as blocked, done, idle,
+        // working — the triage order, not the creation order.
+        let now = Instant::now();
+        let mut session = Session::new();
+        let a = session.focused().unwrap();
+        let b = session.split(a, SplitDirection::Horizontal).unwrap();
+        let c = session.split(b, SplitDirection::Vertical).unwrap();
+        let d = session.split(c, SplitDirection::Vertical).unwrap();
+        for id in [a, b, c, d] {
+            session.pane_mut(id).unwrap().command = Some("claude".into());
+        }
+        session.set_reading(a, AgentState::Working, Some("tests".into()), now);
+        session.set_reading(b, AgentState::Idle, None, now);
+        session.set_reading(c, AgentState::Done, Some("finished".into()), now);
+        session.set_reading(d, AgentState::Blocked, Some("Approve?".into()), now);
+
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 16));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 16), &mut buf);
+
+        // Two-line cards with a blank between: detail rows at 3, 6, 9, 12.
+        for (y, label) in [(3, "blocked"), (6, "done"), (9, "idle"), (12, "working")] {
+            let row = buffer_row(&buf, y);
+            assert!(
+                row.starts_with(&format!("    {label}")),
+                "row {y} should lead with {label}: {row}"
+            );
+        }
     }
 
     #[test]

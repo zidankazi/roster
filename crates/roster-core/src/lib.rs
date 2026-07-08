@@ -15,7 +15,7 @@ mod layout;
 mod session;
 mod telemetry;
 
-pub use attention::{rank, AttentionItem};
+pub use attention::{rank, AttentionItem, Priority};
 pub use context::{context_alert, ContextAlert, CRITICAL_THRESHOLD_PCT, WARN_THRESHOLD_PCT};
 pub use grid::{Cell, CellStyle, Color, Cursor, Grid};
 pub use layout::{Rect, SplitDirection};

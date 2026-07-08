@@ -31,7 +31,7 @@ The heart. Build against `Grid` fixtures, not live agents.
 
 Make it visible and sexy. This is where your UX strength lives.
 
-- `roster-tui`: blit each pane's grid into its rect; render the sidebar (color + label + reason + age, blocked/done sorted to top). **agent-safe**
+- `roster-tui`: blit each pane's grid into its rect; render the sidebar (color + label + reason + age, triaged by `roster_core::attention` — blocked/done up, working at the bottom). **agent-safe**
 - Snapshot-test the sidebar against known models.
 - **Hand to agents:** the rendering and layout, yes. But **you own the taste pass** — the sidebar is the demo, and the demo is the product. Agents get it functional; you make it beautiful.
 

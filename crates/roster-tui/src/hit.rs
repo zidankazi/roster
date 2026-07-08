@@ -302,6 +302,30 @@ mod tests {
     }
 
     #[test]
+    fn clicks_resolve_to_the_triage_ordered_cards() {
+        // Creation order: pane a (working) then pane b (idle). Triage puts
+        // the idle card first, and the click follows the reordered rows —
+        // the top card jumps to pane b, not to the first-created pane.
+        let now = Instant::now();
+        let mut session = Session::new();
+        let a = session.focused().unwrap();
+        let b = session.split(a, SplitDirection::Horizontal).unwrap();
+        session.pane_mut(a).unwrap().command = Some("claude".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
+        session.set_reading(a, AgentState::Working, Some("w".into()), now);
+        session.set_reading(b, AgentState::Idle, None, now);
+        let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);
+
+        let area = Rect::new(0, 0, 120, 30);
+        let first = hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 2);
+        assert_eq!(first, Hit::SidebarEntry(0));
+        assert_eq!(entries[0].pane, b);
+        let second = hit_test(area, &session, SidebarSide::Left, &entries, None, 5, 5);
+        assert_eq!(second, Hit::SidebarEntry(1));
+        assert_eq!(entries[1].pane, a);
+    }
+
+    #[test]
     fn auto_chip_cols_resolve_to_auto_hits_on_detail_rows_only() {
         let (session, entries) = setup();
         let area = Rect::new(0, 0, 120, 30);

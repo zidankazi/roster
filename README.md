@@ -15,9 +15,10 @@ real terminal panes and see at a glance which one is 🔴 blocked, 🟡 working,
  + new agent                    │                      │
 ```
 
-The sidebar rolls every agent up to a colored glyph — blocked and done float
-to the top so whoever needs you is always in view — and, unlike a bare status
-dot, shows **the reason**: the exact prompt an agent is blocked on. Every pane
+The sidebar rolls every agent up to a colored glyph — cards are triaged by
+who needs you first: blocked (longest-waiting leading), then done, then idle,
+with working agents at the bottom — and, unlike a bare status dot, shows
+**the reason**: the exact prompt an agent is blocked on. Every pane
 gets a title bar with its agent's live state; the focused pane is highlighted.
 
 **Use it like an app — no hotkeys to learn.** Every action is a visible click
