@@ -189,7 +189,19 @@ impl Drop for Pty {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
         }
-        let _ = self.child.wait();
+        // Reap with a bounded poll, never a blocking wait: a SIGKILLed
+        // child can wedge mid-exit in the kernel while its pty master is
+        // still open (observed live with Claude Code on macOS — wait4
+        // blocked the dropping thread indefinitely). Giving up leaves an
+        // unreaped child that resolves once the master closes; a stalled
+        // pane close — or a capture run that never exits — is the greater
+        // evil.
+        for _ in 0..25 {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 }
 
