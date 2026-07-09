@@ -17,7 +17,6 @@ mod exited;
 mod hit;
 mod launcher;
 mod pane;
-mod rename;
 mod sidebar;
 mod style;
 mod telemetry;
@@ -28,10 +27,9 @@ pub use exited::{draw_exited, exited_buttons, exited_card_rect};
 pub use hit::{hit_test, pointer_for, Hit, Pointer};
 pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
-pub use rename::{draw_rename, rename_contains, rename_cursor, rename_rect};
 pub use sidebar::{
     auto_all_cols, auto_chip_cols, format_age, sidebar_entries, sidebar_rows, Message, Sidebar,
-    SidebarEntry, SidebarRow, SidebarState, SidebarView,
+    SidebarEntry, SidebarRow, SidebarState,
 };
 pub use style::{cell_style, muted, state_color, state_glyph, state_label, ACCENT};
 pub use telemetry::telemetry_line;
@@ -80,9 +78,6 @@ pub struct View<'a> {
     pub zoomed: bool,
     /// Which edge the sidebar occupies.
     pub side: SidebarSide,
-    /// How the sidebar orders its cards: grouped by workspace, or one flat
-    /// attention ranking across all workspaces.
-    pub sidebar_view: SidebarView,
     /// The agent launcher, when open: its items and input state.
     pub launcher: Option<(&'a [LaunchItem], &'a LauncherState)>,
     /// The close-confirmation dialog, when open: the button under the
@@ -95,12 +90,6 @@ pub struct View<'a> {
     pub selection: Option<Selection>,
     /// Panes scrolled up into history, with how many lines back they sit.
     pub scrolled: &'a HashMap<PaneId, usize>,
-    /// Resolved workspace display names, one per window: a manual name or
-    /// a live terminal title; empty entries fall back to `workspace N`.
-    pub window_names: &'a [String],
-    /// The workspace-rename dialog, when open: the window index and the
-    /// input typed so far.
-    pub rename: Option<(usize, &'a str)>,
     /// Bare start: draw the launcher as the full welcome screen (wordmark
     /// over the picker) instead of the compact modal.
     pub welcome: bool,
@@ -190,30 +179,6 @@ pub fn sidebar_view_row(frame_area: Rect, side: SidebarSide) -> Option<u16> {
 pub fn view_toggle_cols() -> (std::ops::Range<u16>, std::ops::Range<u16>) {
     // " grid · solo" — generous targets around each word.
     (0..6, 7..13)
-}
-
-/// The sidebar row hosting the `by space · by need` triage switcher, which
-/// flips the sidebar between per-workspace grouping and one global attention
-/// ranking. It sits one row above the `grid · solo` layout switcher, or —
-/// when that switcher is hidden (`has_view_row` false) — in the row the
-/// layout switcher would occupy. `None` on sidebars too short or narrow to
-/// host it; the caller further gates it on there being more than one
-/// workspace, since with one the two orderings are identical and the control
-/// would be noise. `render` draws it and `hit_test` targets it.
-pub fn sidebar_triage_row(frame_area: Rect, side: SidebarSide, has_view_row: bool) -> Option<u16> {
-    let bar = sidebar_inner(frame_area, side);
-    // Above the pinned button (which reserves the bottom row and a breathing
-    // row) and, when present, the layout switcher on the row above that.
-    let offset = 2 + u16::from(has_view_row);
-    (bar.height >= 8 + u16::from(has_view_row) && bar.width >= 20)
-        .then(|| bar.y + bar.height - offset)
-}
-
-/// The triage switcher's click targets on its row, in sidebar-inner
-/// columns: `(by space, by need)` word spans.
-pub fn triage_toggle_cols() -> (std::ops::Range<u16>, std::ops::Range<u16>) {
-    // " by space · by need" — generous targets around each label.
-    (0..10, 11..20)
 }
 
 /// The status row's right-aligned workspace indicator — `⧉ 2/3`, clickable
@@ -372,7 +337,6 @@ pub fn render(frame: &mut Frame, view: &View) {
             }
         } else if view.launcher.is_none()
             && view.confirm.is_none()
-            && view.rename.is_none()
             && focused == Some(id)
             && grid.cursor.visible
         {
@@ -415,7 +379,7 @@ pub fn render(frame: &mut Frame, view: &View) {
         );
     }
     // A switcher word: accent+bold when it names the active mode, muted
-    // otherwise, inverted under the pointer — shared by both switchers.
+    // otherwise, inverted under the pointer.
     let word = |active: bool, hovered: bool| -> Style {
         let mut style = if active {
             Style::default()
@@ -432,7 +396,6 @@ pub fn render(frame: &mut Frame, view: &View) {
     // The grid · solo switcher, above the button, when there is anything
     // to switch between.
     let multi_pane = view.session.layout(panes.width, panes.height).len() > 1;
-    let has_view_row = multi_pane && sidebar_view_row(area, view.side).is_some();
     if multi_pane {
         if let Some(view_y) = sidebar_view_row(area, view.side) {
             cards.height = cards.height.saturating_sub(1);
@@ -452,28 +415,6 @@ pub fn render(frame: &mut Frame, view: &View) {
             );
         }
     }
-    // The by space · by need triage switcher, above the layout switcher.
-    // Only with more than one workspace — with one, both orderings match.
-    if view.session.window_count() > 1 {
-        if let Some(triage_y) = sidebar_triage_row(area, view.side, has_view_row) {
-            cards.height = cards.height.saturating_sub(1);
-            let by_space = view.sidebar_view == SidebarView::BySpace;
-            let buf = frame.buffer_mut();
-            buf.set_string(
-                bar_inner.x + 1,
-                triage_y,
-                "by space",
-                word(by_space, view.hover == Some(Hit::SidebarViewBySpace)),
-            );
-            buf.set_string(bar_inner.x + 10, triage_y, "·", style::muted());
-            buf.set_string(
-                bar_inner.x + 12,
-                triage_y,
-                "by need",
-                word(!by_space, view.hover == Some(Hit::SidebarViewByNeed)),
-            );
-        }
-    }
     let hovered_entry = match view.hover {
         Some(Hit::SidebarEntry(index)) => Some(index),
         _ => None,
@@ -482,16 +423,6 @@ pub fn render(frame: &mut Frame, view: &View) {
         Some(Hit::SidebarAuto(index)) => Some(index),
         _ => None,
     };
-    let hovered_window = match view.hover {
-        Some(Hit::SidebarWindow(window)) => Some(window),
-        _ => None,
-    };
-    // Which workspaces carry a user-set name: a lone agent in an unnamed one
-    // hides its header (it would echo the card). `hit_test` derives the same
-    // flags from the session, so headers land where they were drawn.
-    let window_named: Vec<bool> = (0..view.session.window_count())
-        .map(|w| view.session.window_name(w).is_some())
-        .collect();
     frame.render_widget(
         Sidebar::new(
             view.entries,
@@ -500,13 +431,8 @@ pub fn render(frame: &mut Frame, view: &View) {
             view.session.window_count(),
             view.tick,
         )
-        .active(view.session.active_window().unwrap_or(0))
         .hovered_auto(hovered_auto)
-        .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
-        .hovered_window(hovered_window)
-        .names(view.window_names)
-        .named(&window_named)
-        .view(view.sidebar_view),
+        .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll)),
         cards,
     );
 
@@ -523,12 +449,6 @@ pub fn render(frame: &mut Frame, view: &View) {
 
     if let Some(hover) = view.confirm {
         frame.render_widget(Confirm::new().hover(hover), area);
-    }
-
-    if let Some((window, input)) = view.rename {
-        draw_rename(frame.buffer_mut(), area, window, input);
-        let (cursor_x, cursor_y) = rename_cursor(area, input);
-        frame.set_cursor_position(Position::new(cursor_x, cursor_y));
     }
 }
 

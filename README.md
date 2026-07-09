@@ -82,13 +82,12 @@ bar. `ctrl-b` is the prefix; the status bar keeps the hints on screen, and
 ## workspaces
 
 each agent from `+ new agent` opens its own workspace window instead of
-splitting the current pane; cycle them with `ctrl-b n`/`p`. with more than one
-workspace, the sidebar's `by space · by need` switcher (`ctrl-b t`) either
-groups cards under their workspace or flattens everything into one list ranked
-most-blocked-first, so the agent waiting on you rises to the top no matter
-where it lives. workspaces name themselves after the task Claude Code is
-working on (`fix auth bug`, not `claude-code`); rename with `ctrl-b ,`, and the
-name sticks across detach/reattach.
+splitting the current pane; cycle them with `ctrl-b n`/`p` or click the `⧉`
+indicator in the status bar. the sidebar is one list ranked
+most-blocked-first across every workspace, so the agent waiting on you rises
+to the top no matter where it lives — with more than one workspace each card
+carries a `⧉N` tag naming its home. cards name themselves after the task
+Claude Code is working on (`fix auth bug`, not `claude-code`).
 
 ## persistent sessions
 

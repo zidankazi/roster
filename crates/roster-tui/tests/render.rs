@@ -11,8 +11,7 @@ use ratatui::Terminal;
 use roster_core::{AgentState, Grid, Session, SplitDirection};
 use roster_detect::Detector;
 use roster_tui::{
-    launch_items, muted, render, sidebar_entries, Hit, LauncherState, SidebarSide, SidebarView,
-    View, ACCENT,
+    launch_items, muted, render, sidebar_entries, Hit, LauncherState, SidebarSide, View, ACCENT,
 };
 
 fn region_text(buf: &Buffer, x0: u16, x1: u16, y: u16) -> String {
@@ -59,7 +58,7 @@ fn panes_get_title_bars_and_content_shifts_down() {
     grids.insert(right, right_grid);
 
     let detector = Detector::builtin();
-    let entries = sidebar_entries(&session, &detector, now, SidebarView::BySpace);
+    let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
     let scrolled = HashMap::new();
     let view = View {
@@ -71,14 +70,11 @@ fn panes_get_title_bars_and_content_shifts_down() {
         hover: None,
         zoomed: false,
         side: SidebarSide::Left,
-        sidebar_view: SidebarView::BySpace,
         launcher: None,
         confirm: None,
         toasts: &[],
         selection: None,
         scrolled: &scrolled,
-        window_names: &[],
-        rename: None,
         welcome: false,
         mode_badge: None,
         status: "hints with ctrl-b",
@@ -161,7 +157,7 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
     grids.insert(left, Grid::from_text("left agent output"));
     grids.insert(right, Grid::from_text("right agent output"));
     let detector = Detector::builtin();
-    let entries = sidebar_entries(&session, &detector, now, SidebarView::BySpace);
+    let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
     let scrolled = HashMap::new();
     let view = View {
@@ -173,14 +169,11 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
         hover: None,
         zoomed: false,
         side: SidebarSide::Left,
-        sidebar_view: SidebarView::BySpace,
         launcher: None,
         confirm: None,
         toasts: &[],
         selection: None,
         scrolled: &scrolled,
-        window_names: &[],
-        rename: None,
         welcome: false,
         mode_badge: None,
         status: "click a pane to focus · ctrl-b for keys",
@@ -226,7 +219,7 @@ fn hover_lights_up_interactive_chrome() {
     grids.insert(left, Grid::from_text("left"));
     grids.insert(right, Grid::from_text("right"));
     let detector = Detector::builtin();
-    let entries = sidebar_entries(&session, &detector, now, SidebarView::BySpace);
+    let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
 
     let draw = |hover: Option<Hit>| -> Buffer {
@@ -240,14 +233,11 @@ fn hover_lights_up_interactive_chrome() {
             hover,
             zoomed: false,
             side: SidebarSide::Left,
-            sidebar_view: SidebarView::BySpace,
             launcher: None,
             confirm: None,
             toasts: &[],
             selection: None,
             scrolled: &scrolled,
-            window_names: &[],
-            rename: None,
             welcome: false,
             mode_badge: None,
             status: "",
@@ -300,7 +290,7 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
     grids.insert(left, Grid::from_text("left agent output"));
     grids.insert(right, Grid::from_text("right agent output"));
     let detector = Detector::builtin();
-    let entries = sidebar_entries(&session, &detector, now, SidebarView::BySpace);
+    let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
     let scrolled = HashMap::new();
     let view = View {
@@ -312,14 +302,11 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
         hover: None,
         zoomed: true,
         side: SidebarSide::Left,
-        sidebar_view: SidebarView::BySpace,
         launcher: None,
         confirm: None,
         toasts: &[],
         selection: None,
         scrolled: &scrolled,
-        window_names: &[],
-        rename: None,
         welcome: false,
         mode_badge: Some("SOLO"),
         status: "click agents on the left to switch",
@@ -360,7 +347,7 @@ fn launcher_modal_overlays_the_frame() {
     grids.insert(right, Grid::from_text("right agent output"));
 
     let detector = Detector::builtin();
-    let entries = sidebar_entries(&session, &detector, now, SidebarView::BySpace);
+    let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
     let items = launch_items(&detector, "/bin/zsh");
     let state = LauncherState::new();
@@ -374,14 +361,11 @@ fn launcher_modal_overlays_the_frame() {
         hover: None,
         zoomed: false,
         side: SidebarSide::Left,
-        sidebar_view: SidebarView::BySpace,
         launcher: Some((&items, &state)),
         confirm: None,
         toasts: &[],
         selection: None,
         scrolled: &scrolled,
-        window_names: &[],
-        rename: None,
         welcome: false,
         mode_badge: Some("LAUNCH"),
         status: "type to filter",
@@ -421,14 +405,11 @@ fn welcome_screen_shows_wordmark_picker_and_command_hint() {
         hover: None,
         zoomed: false,
         side: SidebarSide::Left,
-        sidebar_view: SidebarView::BySpace,
         launcher: Some((&items, &state)),
         confirm: None,
         toasts: &[],
         selection: None,
         scrolled: &scrolled,
-        window_names: &[],
-        rename: None,
         welcome: true,
         mode_badge: Some("LAUNCH"),
         status: "type to filter",
@@ -482,14 +463,11 @@ fn welcome_wordmark_reveals_with_the_tick() {
             hover: None,
             zoomed: false,
             side: SidebarSide::Left,
-            sidebar_view: SidebarView::BySpace,
             launcher: Some((&items, &state)),
             confirm: None,
             toasts: &[],
             selection: None,
             scrolled: &scrolled,
-            window_names: &[],
-            rename: None,
             welcome: true,
             mode_badge: None,
             status: "",
@@ -553,14 +531,11 @@ fn exited_pane_overlay_card_and_title_marker() {
         hover: None,
         zoomed: false,
         side: SidebarSide::Left,
-        sidebar_view: SidebarView::BySpace,
         launcher: None,
         confirm: None,
         toasts: &[],
         selection: None,
         scrolled: &scrolled,
-        window_names: &[],
-        rename: None,
         welcome: false,
         mode_badge: Some("PREFIX"),
         status: "hints",
@@ -606,14 +581,11 @@ fn exited_pane_too_small_for_the_card_keeps_the_strip() {
         hover: None,
         zoomed: false,
         side: SidebarSide::Left,
-        sidebar_view: SidebarView::BySpace,
         launcher: None,
         confirm: None,
         toasts: &[],
         selection: None,
         scrolled: &scrolled,
-        window_names: &[],
-        rename: None,
         welcome: false,
         mode_badge: None,
         status: "hints",
@@ -634,8 +606,7 @@ fn exited_pane_too_small_for_the_card_keeps_the_strip() {
 
 fn two_workspace_session(now: Instant) -> Session {
     // Window 0: an idle agent. Window 1: a blocked one. One pane each, so
-    // the grid·solo switcher stays hidden and the triage switcher sits on
-    // the row just above the + new agent button.
+    // the grid·solo switcher stays hidden.
     let mut session = Session::new();
     let a = session.focused().unwrap();
     session.pane_mut(a).unwrap().command = Some("claude".into());
@@ -652,14 +623,14 @@ fn two_workspace_session(now: Instant) -> Session {
 }
 
 #[test]
-fn by_need_view_flattens_workspaces_tags_cards_and_lights_its_switcher() {
+fn sidebar_ranks_globally_across_workspaces_and_tags_cards() {
     let now = Instant::now();
     let session = two_workspace_session(now);
     let grids = HashMap::new();
     let exited = HashMap::new();
     let scrolled = HashMap::new();
     let detector = Detector::builtin();
-    let entries = sidebar_entries(&session, &detector, now, SidebarView::ByNeed);
+    let entries = sidebar_entries(&session, &detector, now);
     // Global ranking: the blocked agent in window 1 leads the idle one in
     // window 0, and the workspace no longer groups them.
     assert_eq!(entries[0].window, 1);
@@ -674,14 +645,11 @@ fn by_need_view_flattens_workspaces_tags_cards_and_lights_its_switcher() {
         hover: None,
         zoomed: false,
         side: SidebarSide::Left,
-        sidebar_view: SidebarView::ByNeed,
         launcher: None,
         confirm: None,
         toasts: &[],
         selection: None,
         scrolled: &scrolled,
-        window_names: &[],
-        rename: None,
         welcome: false,
         mode_badge: None,
         status: "hints",
@@ -714,17 +682,10 @@ fn by_need_view_flattens_workspaces_tags_cards_and_lights_its_switcher() {
         "next card should tag window 1: {card1}"
     );
 
-    // The triage switcher renders `by space · by need`, with the active
-    // `by need` accented and `by space` merely muted. Sidebar height 19
-    // (20 − status), one pane per window → the switcher lands on row 17.
-    let switcher = region_text(&buf, 0, 31, 17);
+    // The removed `by space · by need` switcher must leave no residue: the
+    // ranking has exactly one scope now, so the sidebar hosts no such row.
     assert!(
-        switcher.contains("by space") && switcher.contains("by need"),
-        "switcher row: {switcher}"
+        !sidebar.contains("by space") && !sidebar.contains("by need"),
+        "no triage switcher may render:\n{sidebar}"
     );
-    // `by need` starts at inner col 12 (active → accent); `by space` at
-    // col 1 (inactive → muted, not accent).
-    assert_eq!(buf.cell((12, 17)).unwrap().style().fg, Some(ACCENT));
-    assert_eq!(buf.cell((1, 17)).unwrap().style().fg, muted().fg);
-    assert_ne!(buf.cell((1, 17)).unwrap().style().fg, Some(ACCENT));
 }

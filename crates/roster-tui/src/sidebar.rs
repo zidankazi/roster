@@ -1,13 +1,12 @@
-//! The agent-state sidebar: agents grouped by workspace, each rendered as a
-//! card — a colored status glyph, the agent name, and its age on top; the
-//! state, its reason, and the clickable `auto` (auto-approve) chip below;
-//! and, only when the statusline bridge feeds one, a third line of
-//! telemetry badges (see `telemetry.rs`). Cards are triaged by
-//! `roster_core::attention` — blocked, done, idle, then working at the
-//! bottom — so the agents that need you are always in view. The
-//! [`SidebarView`] toggle scopes that triage: `BySpace` ranks within each
-//! workspace (grouped under headers, the default), `ByNeed` ranks globally
-//! across all workspaces (one flat list, each card tagged with its home).
+//! The agent-state sidebar: every agent across every workspace in one flat
+//! list, each rendered as a card — a colored status glyph, the agent name,
+//! and its age on top; the state, its reason, and the clickable `auto`
+//! (auto-approve) chip below; and, only when the statusline bridge feeds
+//! one, a third line of telemetry badges (see `telemetry.rs`). Cards are
+//! ranked globally by `roster_core::attention` — blocked, done, idle, then
+//! working at the bottom — so the agents that need you are always at the
+//! top, regardless of which workspace they live in. With more than one
+//! workspace each card carries a `⧉N` tag naming its home.
 
 use std::time::{Duration, Instant};
 
@@ -51,33 +50,12 @@ pub struct SidebarEntry {
     pub title: Option<String>,
 }
 
-/// How the sidebar orders and groups its agent cards.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SidebarView {
-    /// Grouped by workspace, triaged within each — the default. Every
-    /// workspace gets a header and its own attention-ordered block, so the
-    /// sidebar mirrors the window layout.
-    #[default]
-    BySpace,
-    /// One flat list ranked by attention across every workspace, ignoring
-    /// workspace boundaries — the most blocked agent anywhere rises to the
-    /// top. Cards carry a `⧉N` workspace tag so their home stays legible
-    /// without the headers.
-    ByNeed,
-}
-
 /// Build the sidebar rows from the session: every pane whose command
-/// identifies as a configured agent, triaged by `roster_core::attention` —
-/// blocked first (longest wait leading), then done, idle, and working at
-/// the bottom. In [`SidebarView::BySpace`] the ordering is scoped per
-/// workspace (each window forms its own block); in [`SidebarView::ByNeed`]
-/// it ranks globally across all workspaces.
-pub fn sidebar_entries(
-    session: &Session,
-    detector: &Detector,
-    now: Instant,
-    view: SidebarView,
-) -> Vec<SidebarEntry> {
+/// identifies as a configured agent, ranked globally by
+/// `roster_core::attention` — blocked first (longest wait leading), then
+/// done, idle, and working at the bottom — across all workspaces at once,
+/// so the most blocked agent anywhere rises to the top.
+pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> Vec<SidebarEntry> {
     let mut entries: Vec<SidebarEntry> = session
         .panes()
         .into_iter()
@@ -104,20 +82,14 @@ pub fn sidebar_entries(
         // readings bounce. `destructive` has no session-model source yet
         // (the hook bridge will feed it — docs/05); false ranks the ask as
         // plain. The pane id breaks exact ties, keeping equal-priority
-        // cards in a stable position frame to frame.
+        // cards in a stable position frame to frame. No workspace term: the
+        // ranking is global, so the most blocked agent anywhere leads.
         let item = AttentionItem {
             state: e.state,
             waiting_for: e.age,
             destructive: false,
         };
-        // The workspace leads the key in BySpace so each window forms its
-        // own triaged block; in ByNeed it drops out (a constant), collapsing
-        // the sort to a single attention ranking across all workspaces.
-        let group = match view {
-            SidebarView::BySpace => e.window,
-            SidebarView::ByNeed => 0,
-        };
-        (group, item.priority(), e.pane)
+        (item.priority(), e.pane)
     });
     entries
 }
@@ -206,8 +178,6 @@ impl SidebarState {
 /// draws this plan and hit-testing mirrors it, so the two can't drift.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidebarRow {
-    /// A workspace header (window index). Clickable: jumps to the window.
-    Header(usize),
     /// The first line of an entry's card: glyph, name, age.
     EntryName(usize),
     /// The second line of an entry's card: state and reason.
@@ -216,66 +186,22 @@ pub enum SidebarRow {
     /// when the entry carries telemetry, so bridge-less cards keep their
     /// exact two-line shape.
     EntryTelemetry(usize),
-    /// An agent-less workspace's placeholder line (window index).
-    Empty(usize),
     /// Breathing room.
     Blank,
 }
 
-/// The sidebar's card-region rows for `entries` across `workspaces`
-/// windows. `named[w]` is whether window `w` carries a user-set name.
-///
-/// With a single window — or in [`SidebarView::ByNeed`], where the list is
-/// ranked globally — there are no headers, just the cards. In
-/// [`SidebarView::BySpace`] with several windows, a workspace holding
-/// exactly one *auto-named* agent also skips its header: the header there
-/// would only echo the card's own name row (both fall back to the agent's
-/// terminal title). Headers stay for empty workspaces (a plain-shell
-/// window's only mouse target), multi-agent workspaces (to group and
-/// separate their cards), and any manually named workspace (the name is
-/// real information, not an echo, and its header is the rename gesture's
-/// target).
-pub fn sidebar_rows(
-    entries: &[SidebarEntry],
-    workspaces: usize,
-    named: &[bool],
-    view: SidebarView,
-) -> Vec<SidebarRow> {
-    fn push_card(rows: &mut Vec<SidebarRow>, index: usize, entry: &SidebarEntry) {
+/// The sidebar's card-region rows for `entries`: one flat, globally-ranked
+/// list of cards with no workspace headers — the ranking already interleaves
+/// workspaces, so there is nothing to group under.
+pub fn sidebar_rows(entries: &[SidebarEntry]) -> Vec<SidebarRow> {
+    let mut rows = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
         rows.push(SidebarRow::EntryName(index));
         rows.push(SidebarRow::EntryDetail(index));
         if entry.telemetry.is_some() {
             rows.push(SidebarRow::EntryTelemetry(index));
         }
         rows.push(SidebarRow::Blank);
-    }
-    let mut rows = Vec::new();
-    if workspaces <= 1 || view == SidebarView::ByNeed {
-        for (index, entry) in entries.iter().enumerate() {
-            push_card(&mut rows, index, entry);
-        }
-        return rows;
-    }
-    for window in 0..workspaces {
-        let cards: Vec<(usize, &SidebarEntry)> = entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.window == window)
-            .collect();
-        // A lone auto-named agent needs no header — it would echo the card.
-        // Everything else keeps one; see this function's doc comment.
-        let echoes_card = cards.len() == 1 && !named.get(window).copied().unwrap_or(false);
-        if !echoes_card {
-            rows.push(SidebarRow::Header(window));
-        }
-        if cards.is_empty() {
-            rows.push(SidebarRow::Empty(window));
-            rows.push(SidebarRow::Blank);
-        } else {
-            for (index, entry) in cards {
-                push_card(&mut rows, index, entry);
-            }
-        }
     }
     rows
 }
@@ -350,21 +276,16 @@ pub struct Sidebar<'a> {
     hovered: Option<usize>,
     hovered_auto: Option<usize>,
     hovered_auto_all: bool,
-    hovered_window: Option<usize>,
     workspaces: usize,
-    active: usize,
-    names: &'a [String],
-    named: &'a [bool],
-    view: SidebarView,
     tick: u64,
 }
 
 impl<'a> Sidebar<'a> {
     /// A sidebar over `entries`, highlighting `selected` when given and
     /// giving `hovered` (the card under the mouse) a dim marker.
-    /// `workspaces` is the session's window count; workspace headers are
-    /// shown only when there is more than one, with the `active` window's
-    /// header lit. `tick` animates the working spinner.
+    /// `workspaces` is the session's window count; with more than one, each
+    /// card carries a `⧉N` tag naming its home. `tick` animates the working
+    /// spinner.
     pub fn new(
         entries: &'a [SidebarEntry],
         selected: Option<usize>,
@@ -378,22 +299,9 @@ impl<'a> Sidebar<'a> {
             hovered,
             hovered_auto: None,
             hovered_auto_all: false,
-            hovered_window: None,
             workspaces,
-            active: 0,
-            names: &[],
-            named: &[],
-            view: SidebarView::default(),
             tick,
         }
-    }
-
-    /// The ordering/grouping mode — [`SidebarView::BySpace`] (grouped by
-    /// workspace) or [`SidebarView::ByNeed`] (one flat global ranking, cards
-    /// tagged with their workspace). Defaults to `BySpace`.
-    pub fn view(mut self, view: SidebarView) -> Self {
-        self.view = view;
-        self
     }
 
     /// The entry index whose `auto` chip is under the mouse, for hover
@@ -406,34 +314,6 @@ impl<'a> Sidebar<'a> {
     /// Whether the header's `auto-yes` fleet toggle is under the mouse.
     pub fn hovered_auto_all(mut self, hovered: bool) -> Self {
         self.hovered_auto_all = hovered;
-        self
-    }
-
-    /// Display names for the workspace headers, one per window — a manual
-    /// name or a live terminal title, already resolved by the caller.
-    /// Windows past the slice's end fall back to `workspace N`.
-    pub fn names(mut self, names: &'a [String]) -> Self {
-        self.names = names;
-        self
-    }
-
-    /// Which workspaces carry a user-set name, one flag per window. A lone
-    /// agent in an unnamed workspace hides its header (it would echo the
-    /// card); a named one keeps it. Windows past the slice's end are unnamed.
-    pub fn named(mut self, named: &'a [bool]) -> Self {
-        self.named = named;
-        self
-    }
-
-    /// The active window, lighting its workspace header.
-    pub fn active(mut self, window: usize) -> Self {
-        self.active = window;
-        self
-    }
-
-    /// The workspace header under the mouse, for hover highlighting.
-    pub fn hovered_window(mut self, window: Option<usize>) -> Self {
-        self.hovered_window = window;
         self
     }
 
@@ -494,33 +374,11 @@ impl Widget for Sidebar<'_> {
         }
         y += 2;
 
-        for row in sidebar_rows(self.entries, self.workspaces, self.named, self.view) {
+        for row in sidebar_rows(self.entries) {
             if y >= bottom {
                 break;
             }
             match row {
-                SidebarRow::Header(window) => {
-                    // The active workspace's header is lit; hovering any
-                    // header lights it as a click target.
-                    let mut style = if window == self.active {
-                        Style::default()
-                            .fg(crate::style::ACCENT)
-                            .add_modifier(Modifier::ITALIC)
-                    } else {
-                        muted().add_modifier(Modifier::ITALIC)
-                    };
-                    if self.hovered_window == Some(window) {
-                        style = style.add_modifier(Modifier::REVERSED);
-                    }
-                    let label = match self.names.get(window) {
-                        Some(name) => truncate(name, width.saturating_sub(2)),
-                        None => format!("workspace {}", window + 1),
-                    };
-                    buf.set_stringn(area.x + 1, y, label, width.saturating_sub(1), style);
-                }
-                SidebarRow::Empty(_) => {
-                    buf.set_stringn(area.x + 4, y, "no agents", width.saturating_sub(4), muted());
-                }
                 SidebarRow::EntryName(index) => {
                     let entry = &self.entries[index];
                     let selected = self.selected == Some(index);
@@ -541,13 +399,13 @@ impl Widget for Sidebar<'_> {
                         state_glyph(entry.state, self.tick),
                         Style::default().fg(state_color(entry.state)),
                     );
-                    // The right block: an optional `⧉N` workspace tag — only
-                    // in the ByNeed global view, where the headers that would
-                    // otherwise name the workspace are gone — then the age,
-                    // laid out from the right edge inward past a one-column
-                    // margin.
+                    // The right block: an optional `⧉N` workspace tag —
+                    // shown once there is more than one workspace, since the
+                    // flat global list has no headers to name the home — then
+                    // the age, laid out from the right edge inward past a
+                    // one-column margin.
                     let age = entry.age.map(format_age).unwrap_or_default();
-                    let tag = if self.view == SidebarView::ByNeed && self.workspaces > 1 {
+                    let tag = if self.workspaces > 1 {
                         format!("⧉{}", entry.window + 1)
                     } else {
                         String::new()
@@ -773,7 +631,7 @@ mod tests {
     fn entries_skip_non_agent_panes() {
         let now = Instant::now();
         let (session, ids) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         assert_eq!(entries.len(), 3);
         assert!(entries.iter().all(|e| e.pane != ids[3]));
     }
@@ -782,7 +640,7 @@ mod tests {
     fn entries_sort_blocked_then_done_then_working() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let states: Vec<AgentState> = entries.iter().map(|e| e.state).collect();
         assert_eq!(
             states,
@@ -812,7 +670,7 @@ mod tests {
             Some("q2".into()),
             now - Duration::from_secs(60),
         );
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         // Both panes run claude; the longer-waiting one (pane b, 60s) leads.
         assert_eq!(entries[0].pane, b);
         assert_eq!(entries[1].pane, a);
@@ -835,7 +693,7 @@ mod tests {
             now - Duration::from_secs(600),
         );
         session.set_reading(b, AgentState::Idle, None, now - Duration::from_secs(5));
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         assert_eq!(entries[0].pane, b);
         assert_eq!(entries[0].state, AgentState::Idle);
         assert_eq!(entries[1].pane, a);
@@ -853,7 +711,7 @@ mod tests {
         let at = now - Duration::from_secs(30);
         session.set_reading(a, AgentState::Working, Some("w".into()), at);
         session.set_reading(b, AgentState::Working, Some("w".into()), at);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         // Same state, same age: the pane id breaks the tie, so equal
         // cards hold a stable position instead of reshuffling.
         assert_eq!(entries[0].pane, a);
@@ -861,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn entries_group_and_order_by_workspace() {
+    fn entries_rank_across_workspaces_ignoring_grouping() {
         let now = Instant::now();
         let mut session = Session::new();
         let a = session.focused().unwrap();
@@ -871,30 +729,9 @@ mod tests {
         session.pane_mut(b).unwrap().command = Some("claude".into());
         session.set_reading(b, AgentState::Blocked, Some("q".into()), now);
 
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
-        // Window 0's agent comes before window 1's, even though window 1's is
-        // blocked — grouping is by workspace first.
-        assert_eq!(entries[0].window, 0);
-        assert_eq!(entries[0].agent, "claude-code");
-        assert_eq!(entries[1].window, 1);
-        assert_eq!(entries[1].agent, "claude-code");
-    }
-
-    #[test]
-    fn by_need_ranks_across_workspaces_ignoring_grouping() {
-        let now = Instant::now();
-        let mut session = Session::new();
-        let a = session.focused().unwrap();
-        session.pane_mut(a).unwrap().command = Some("claude".into());
-        session.set_reading(a, AgentState::Idle, None, now);
-        let b = session.new_window();
-        session.pane_mut(b).unwrap().command = Some("claude".into());
-        session.set_reading(b, AgentState::Blocked, Some("q".into()), now);
-
-        // The same panes that group workspace-first under BySpace flip under
-        // ByNeed: the blocked agent in window 1 outranks the idle one in
-        // window 0, because the window no longer leads the sort key.
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::ByNeed);
+        // The ranking is global: the blocked agent in window 1 outranks the
+        // idle one in window 0, because no workspace term leads the sort key.
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         assert_eq!(entries[0].window, 1);
         assert_eq!(entries[0].state, AgentState::Blocked);
         assert_eq!(entries[1].window, 0);
@@ -902,7 +739,7 @@ mod tests {
     }
 
     #[test]
-    fn by_need_emits_a_flat_headerless_plan_across_workspaces() {
+    fn rows_are_a_flat_headerless_plan_across_workspaces() {
         let now = Instant::now();
         let mut session = Session::new();
         let a = session.focused().unwrap();
@@ -912,16 +749,21 @@ mod tests {
         session.pane_mut(b).unwrap().command = Some("claude".into());
         session.set_reading(b, AgentState::Blocked, Some("q".into()), now);
 
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::ByNeed);
-        // Two workspaces, but ByNeed draws one flat list — no workspace
-        // headers, unlike the grouped view (see below). Window 1 is marked
-        // manually named so its BySpace header survives echo-hiding (a lone
-        // auto-named agent otherwise drops its header), keeping the contrast
-        // about the view mode, not the naming.
-        let flat = sidebar_rows(&entries, 2, &[false, true], SidebarView::ByNeed);
-        assert!(!flat.iter().any(|r| matches!(r, SidebarRow::Header(_))));
-        let grouped = sidebar_rows(&entries, 2, &[false, true], SidebarView::BySpace);
-        assert!(grouped.iter().any(|r| matches!(r, SidebarRow::Header(_))));
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // Two workspaces, one flat list: each card is name + detail + blank,
+        // nothing else — no header or placeholder rows between them.
+        let rows = sidebar_rows(&entries);
+        assert_eq!(
+            rows,
+            vec![
+                SidebarRow::EntryName(0),
+                SidebarRow::EntryDetail(0),
+                SidebarRow::Blank,
+                SidebarRow::EntryName(1),
+                SidebarRow::EntryDetail(1),
+                SidebarRow::Blank,
+            ]
+        );
     }
 
     #[test]
@@ -936,7 +778,7 @@ mod tests {
     fn selection_wraps_both_ways_and_activates() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut state = SidebarState::new();
         assert_eq!(state.selected(&entries), Some(0));
 
@@ -957,7 +799,7 @@ mod tests {
     fn selection_follows_its_pane_across_a_retriage() {
         let now = Instant::now();
         let (mut session, ids) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let state = SidebarState::anchored(&entries);
         let chosen = entries[0].pane;
         assert_eq!(chosen, ids[1], "the blocked pane leads the triage");
@@ -966,7 +808,7 @@ mod tests {
         // goes working: it sinks to the bottom tier and a different pane
         // takes row zero.
         session.set_reading(ids[1], AgentState::Working, Some("resumed".into()), now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         assert_ne!(entries[0].pane, chosen, "the retriage must move the pane");
 
         // The highlight, the jump, and anything resolved through
@@ -981,7 +823,7 @@ mod tests {
     fn selection_falls_back_to_the_held_row_when_its_pane_closes() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut state = SidebarState::new();
         state.select_next(&entries);
         let gone = entries[1].pane;
@@ -1003,7 +845,7 @@ mod tests {
     fn header_shows_blocked_count_and_cards_render_state_colored() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 14), &mut buf);
@@ -1061,7 +903,7 @@ mod tests {
         session.set_reading(c, AgentState::Done, Some("finished".into()), now);
         session.set_reading(d, AgentState::Blocked, Some("Approve?".into()), now);
 
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 32, 16));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 16), &mut buf);
@@ -1077,8 +919,8 @@ mod tests {
     }
 
     #[test]
-    fn by_need_workspace_tag_yields_to_the_glyph_on_a_narrow_sidebar() {
-        // Two workspaces so ByNeed tags each card with `⧉N`.
+    fn workspace_tag_yields_to_the_glyph_on_a_narrow_sidebar() {
+        // Two workspaces so each card carries a `⧉N` tag.
         let now = Instant::now();
         let mut session = Session::new();
         let a = session.focused().unwrap();
@@ -1087,12 +929,11 @@ mod tests {
         let b = session.new_window();
         session.pane_mut(b).unwrap().command = Some("claude".into());
         session.set_reading(b, AgentState::Idle, None, now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::ByNeed);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
 
         // A roomy sidebar shows the tag.
         let mut wide = Buffer::empty(Rect::new(0, 0, 32, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
-            .view(SidebarView::ByNeed)
             .render(Rect::new(0, 0, 32, 14), &mut wide);
         assert!(
             buffer_row(&wide, 2).contains('⧉'),
@@ -1104,7 +945,6 @@ mod tests {
         // overpainting the status glyph at column 2.
         let mut narrow = Buffer::empty(Rect::new(0, 0, 8, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
-            .view(SidebarView::ByNeed)
             .render(Rect::new(0, 0, 8, 14), &mut narrow);
         let row = buffer_row(&narrow, 2);
         assert!(!row.contains('⧉'), "narrow card must drop the tag: {row}");
@@ -1122,7 +962,7 @@ mod tests {
         // The blocked pane broadcasts its task; the others never set one.
         session.set_title(panes[1], Some("fixing the auth bug".into()));
 
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 14), &mut buf);
@@ -1145,8 +985,7 @@ mod tests {
     fn auto_all_button_sits_in_the_header_accent_when_fleet_armed() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let mut entries =
-            sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 31, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 31, 14), &mut buf);
@@ -1200,8 +1039,7 @@ mod tests {
     fn auto_chip_sits_on_every_card_accent_on_muted_off() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let mut entries =
-            sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
         // Auto-approve the first (blocked) card; leave the rest off.
         entries[0].auto_approve = true;
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 14));
@@ -1230,7 +1068,7 @@ mod tests {
     fn auto_chip_hover_inverts_the_chip() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .hovered_auto(Some(0))
@@ -1255,7 +1093,7 @@ mod tests {
     fn auto_chip_gives_way_to_the_reason_on_a_narrow_sidebar() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         // One column below the chip's threshold: the reason — the signal —
         // still renders; the chip is what yields.
         let mut buf = Buffer::empty(Rect::new(0, 0, 25, 14));
@@ -1286,10 +1124,10 @@ mod tests {
                 rate_limit: None,
             }),
         );
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
 
         // The row plan grows the telemetry row for that card alone.
-        let rows = sidebar_rows(&entries, 1, &[], SidebarView::BySpace);
+        let rows = sidebar_rows(&entries);
         assert_eq!(
             rows,
             vec![
@@ -1341,7 +1179,7 @@ mod tests {
                 rate_limit: None,
             }),
         );
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         // Too narrow for the whole line: the cut is marked with the same
         // trailing … the name and reason rows use, and no partial cost
         // survives to read as a smaller number than it is.
@@ -1366,7 +1204,7 @@ mod tests {
                 rate_limit: None,
             }),
         );
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 26, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 26, 14), &mut buf);
@@ -1389,7 +1227,7 @@ mod tests {
                 ..Telemetry::default()
             }),
         );
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         // ids[0] is the working pane: third card in sort order, so its
         // telemetry row is the last card's third line.
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 16));
@@ -1408,7 +1246,7 @@ mod tests {
     fn glyphs_carry_state_color_and_working_spins() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 14), &mut buf);
@@ -1431,14 +1269,14 @@ mod tests {
     }
 
     #[test]
-    fn multi_agent_workspaces_get_a_header_single_agent_ones_do_not() {
+    fn no_workspace_headers_render_even_for_multi_agent_workspaces() {
         let now = Instant::now();
         let mut session = Session::new();
-        // Window 0: a single agent — its header would only echo the card.
+        // Window 0: a single agent. Window 1: two agents — the old grouped
+        // view gave the pair a header; the flat global list never does.
         let a = session.focused().unwrap();
         session.pane_mut(a).unwrap().command = Some("claude".into());
         session.set_reading(a, AgentState::Idle, None, now);
-        // Window 1: two agents — the header groups them.
         let b = session.new_window();
         session.pane_mut(b).unwrap().command = Some("claude".into());
         session.set_reading(b, AgentState::Working, Some("go".into()), now);
@@ -1446,52 +1284,23 @@ mod tests {
         session.pane_mut(c).unwrap().command = Some("claude".into());
         session.set_reading(c, AgentState::Idle, None, now);
 
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 32, 20));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 20), &mut buf);
 
         let rows: Vec<String> = (0..20).map(|y| buffer_row(&buf, y)).collect();
         assert!(
-            !rows.iter().any(|r| r.trim() == "workspace 1"),
-            "single-agent window 0 should have no header, rows: {rows:#?}"
+            !rows.iter().any(|r| r.trim().starts_with("workspace")),
+            "the flat list draws no workspace headers, rows: {rows:#?}"
         );
-        assert!(
-            rows.iter().any(|r| r.trim() == "workspace 2"),
-            "two-agent window 1 should keep its header, rows: {rows:#?}"
-        );
-    }
-
-    #[test]
-    fn a_manually_named_single_agent_workspace_keeps_its_header() {
-        // Two windows, one agent each. Window 0 is auto-named — its header
-        // would echo the card, so it drops. Window 1 was renamed by the
-        // user: the name is real information and its header is the rename
-        // gesture's mouse target, so it stays.
-        let now = Instant::now();
-        let mut session = Session::new();
-        let a = session.focused().unwrap();
-        session.pane_mut(a).unwrap().command = Some("claude".into());
-        session.set_reading(a, AgentState::Idle, None, now);
-        let b = session.new_window();
-        session.pane_mut(b).unwrap().command = Some("claude".into());
-        session.set_reading(b, AgentState::Idle, None, now);
-
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
-        let rows = sidebar_rows(&entries, 2, &[false, true], SidebarView::BySpace);
-
-        assert!(!rows.contains(&SidebarRow::Header(0)), "rows: {rows:?}");
-        assert!(rows.contains(&SidebarRow::Header(1)), "rows: {rows:?}");
-        // Both cards still render regardless of the header decision.
-        assert!(rows.contains(&SidebarRow::EntryName(0)), "rows: {rows:?}");
-        assert!(rows.contains(&SidebarRow::EntryName(1)), "rows: {rows:?}");
     }
 
     #[test]
     fn selected_card_shows_accent_marker() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now, SidebarView::BySpace);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
         Sidebar::new(&entries, Some(0), None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 14), &mut buf);

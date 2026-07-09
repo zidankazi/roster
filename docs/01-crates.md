@@ -59,7 +59,7 @@ The differentiator. Identifies which panes are agents and classifies each one's 
 Renders everything with `ratatui`: the pane contents and the sidebar.
 
 - Draw each pane's `Grid` into its rect (a grid-of-cells → ratatui buffer blit).
-- Draw the sidebar: one row per agent with color + label + reason + age, triaged per workspace by `roster_core::attention` (blocked, done, idle, then working at the bottom).
+- Draw the sidebar: one row per agent with color + label + reason + age, ranked globally across all workspaces by `roster_core::attention` (blocked, done, idle, then working at the bottom).
 - Handle input intent (select a row, jump to pane) as *messages*, not by doing the I/O itself — the binary wires the actual pane switch.
 - Public surface (sketch): `render(frame, &Session, &[StateReading])`, `Sidebar` widget, `PaneView` widget.
 - **Why agent-safe:** rendering a known model into a ratatui buffer is deterministic and snapshot-testable. Agents can build and polish the sidebar look while you're away — and this is the part your UX strength should own.

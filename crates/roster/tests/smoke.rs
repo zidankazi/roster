@@ -288,18 +288,19 @@ fn mouse_clicks_focus_launch_and_jump() {
         screen.grid().lines().join("\n")
     );
 
-    // The launched agent opened in its own window and has focus. The
-    // sidebar now lists both workspaces — the shell-only one included —
-    // so clicking the "workspace 1" header (1-based row 3) jumps back to
-    // the shells, and the agent's card (rows 7-8, under the "workspace 2"
-    // header) jumps to the agent again.
-    pty.write(&click(5, 3)).expect("click workspace 1 header");
+    // The launched agent opened in its own window and has focus. The flat
+    // sidebar lists agents only — the shell-only workspace has no rows —
+    // so the status row's `⧉ 2/2` indicator (right edge, 7 columns) cycles
+    // back to the shells, and the agent's card (top of the sidebar, 1-based
+    // rows 3-4) jumps to the agent again.
+    pty.write(&click(116, 30))
+        .expect("click status windows indicator");
     assert!(
         drain_while(&mut screen, "focused ▸ sleep 60 · ctrl-b", true, &rx),
-        "workspace header click did not switch windows:\n{}",
+        "status indicator click did not switch windows:\n{}",
         screen.grid().lines().join("\n")
     );
-    pty.write(&click(5, 7)).expect("click sidebar card");
+    pty.write(&click(5, 3)).expect("click sidebar card");
     assert!(
         drain_while(&mut screen, "focused ▸ claude · ctrl-b", true, &rx),
         "sidebar click did not jump to the agent:\n{}",

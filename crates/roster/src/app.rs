@@ -28,9 +28,9 @@ use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
     confirm_button_at, confirm_contains, content_rect, exited_buttons, hit_test, launch_items,
-    local_panes, panes_area, pointer_for, rename_contains, render, sidebar_entries, toast_rects,
-    ConfirmButton, Hit, LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry,
-    SidebarSide, SidebarState, SidebarView, ToastLevel, View,
+    local_panes, panes_area, pointer_for, render, sidebar_entries, toast_rects, ConfirmButton, Hit,
+    LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry, SidebarSide, SidebarState,
+    ToastLevel, View,
 };
 
 use crate::keys::encode_key;
@@ -45,8 +45,7 @@ const DETECT_EVERY: Duration = Duration::from_millis(400);
 /// the pin is stale (a missed clear — e.g. an interrupt at the prompt).
 const HOOK_PIN_GRACE: Duration = Duration::from_secs(2);
 /// How close two clicks must land to count as a double-click — matches
-/// typical OS double-click defaults; shared by the header rename gesture
-/// and the pane-title solo toggle.
+/// typical OS double-click defaults; used by the pane-title solo toggle.
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 /// Whether a hook-reported ask still outranks the committed scrape: always
@@ -98,8 +97,6 @@ enum Mode {
     Launch(LauncherState),
     /// Closing this pane would kill a live agent; waiting for a yes/no.
     ConfirmClose(PaneId),
-    /// Renaming a workspace: the window index and the input typed so far.
-    Rename(usize, String),
 }
 
 /// How long a toast stays up before it fades on its own.
@@ -231,9 +228,6 @@ pub struct App {
     detector: Detector,
     sidebar: SidebarState,
     side: SidebarSide,
-    /// How the sidebar orders its cards: grouped by workspace (the default)
-    /// or one flat attention ranking across all workspaces.
-    sidebar_view: SidebarView,
     mode: Mode,
     launchables: Vec<LaunchItem>,
     last_entries: Vec<SidebarEntry>,
@@ -302,7 +296,6 @@ impl App {
             detector,
             sidebar: SidebarState::new(),
             side,
-            sidebar_view: SidebarView::default(),
             mode: if open_launcher {
                 Mode::Launch(LauncherState::new())
             } else {
@@ -474,7 +467,6 @@ impl App {
             detector,
             sidebar: SidebarState::new(),
             side,
-            sidebar_view: SidebarView::default(),
             mode: if placeholder.is_some() {
                 Mode::Launch(LauncherState::new())
             } else {
@@ -686,12 +678,7 @@ impl App {
             self.toasts.retain(|toast| toast.born.elapsed() < TOAST_TTL);
             self.sync_remote_layout();
 
-            self.last_entries = sidebar_entries(
-                &self.session,
-                &self.detector,
-                Instant::now(),
-                self.sidebar_view,
-            );
+            self.last_entries = sidebar_entries(&self.session, &self.detector, Instant::now());
             // Light the `auto` chip from the shared set (a poisoned lock
             // just leaves chips unlit). Different fields than last_entries, so
             // the borrows are disjoint.
@@ -717,7 +704,7 @@ impl App {
             // Hover follows the last known pointer position; the launcher
             // and confirm modals own hover themselves while open.
             let hover = match self.mode {
-                Mode::Launch(_) | Mode::ConfirmClose(_) | Mode::Rename(..) => None,
+                Mode::Launch(_) | Mode::ConfirmClose(_) => None,
                 _ => self.last_mouse.map(|(x, y)| self.hit_at(x, y)),
             };
             let (mode_badge, status) = self.status_line();
@@ -732,11 +719,6 @@ impl App {
                         .and_then(|(x, y)| confirm_button_at(self.last_area, x, y));
                     Some(hover)
                 }
-                _ => None,
-            };
-            let window_names = self.window_display_names();
-            let rename = match &self.mode {
-                Mode::Rename(window, input) => Some((*window, input.as_str())),
                 _ => None,
             };
             let toast_view: Vec<(&str, ToastLevel)> = self
@@ -761,14 +743,11 @@ impl App {
                 hover,
                 zoomed: self.zoomed,
                 side: self.side,
-                sidebar_view: self.sidebar_view,
                 launcher,
                 confirm,
                 toasts: &toast_view,
                 selection: self.selection,
                 scrolled: &scrolled,
-                window_names: &window_names,
-                rename,
                 welcome: self.placeholder.is_some(),
                 mode_badge,
                 status: &status,
@@ -1346,7 +1325,6 @@ impl App {
             &self.session,
             self.side,
             &self.last_entries,
-            self.sidebar_view,
             self.zoomed_pane(),
             (x, y),
         );
@@ -1442,15 +1420,6 @@ impl App {
                     KeyCode::Char('n') => self.session.next_window(),
                     KeyCode::Char('p') => self.session.prev_window(),
                     KeyCode::Char('z') => self.zoomed = !self.zoomed,
-                    // Flip the sidebar between per-workspace grouping and one
-                    // global attention ranking. Harmless with a single
-                    // workspace (both orderings coincide), so it needn't gate.
-                    KeyCode::Char('t') => {
-                        self.sidebar_view = match self.sidebar_view {
-                            SidebarView::BySpace => SidebarView::ByNeed,
-                            SidebarView::ByNeed => SidebarView::BySpace,
-                        };
-                    }
                     KeyCode::Char('x') => {
                         if let Some(id) = self.session.focused() {
                             self.request_close(id);
@@ -1459,11 +1428,6 @@ impl App {
                     KeyCode::Char('j') => {
                         self.sidebar = SidebarState::anchored(&self.last_entries);
                         self.mode = Mode::Jump;
-                    }
-                    KeyCode::Char(',') => {
-                        if let Some(window) = self.session.active_window() {
-                            self.open_rename(window);
-                        }
                     }
                     KeyCode::Char('d') => self.detach(),
                     // Quitting a persistent session detaches — leaving must
@@ -1488,22 +1452,6 @@ impl App {
                     _ => {} // anything else cancels
                 }
             }
-            Mode::Rename(window, ref mut input) => match key.code {
-                KeyCode::Enter => {
-                    let name = input.trim().to_string();
-                    self.session
-                        .set_window_name(window, (!name.is_empty()).then_some(name));
-                    self.mode = Mode::Normal;
-                }
-                KeyCode::Esc => self.mode = Mode::Normal,
-                KeyCode::Backspace => {
-                    input.pop();
-                }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    input.push(c);
-                }
-                _ => {}
-            },
             Mode::Jump => match key.code {
                 KeyCode::Down | KeyCode::Char('j') => {
                     self.sidebar.select_next(&self.last_entries);
@@ -1542,21 +1490,6 @@ impl App {
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         let (x, y) = (mouse.column, mouse.row);
         self.last_mouse = Some((x, y));
-
-        // The rename dialog owns the mouse while open: clicking outside
-        // cancels, clicks inside are the input's.
-        if let Mode::Rename(..) = self.mode {
-            match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if !rename_contains(self.last_area, x, y) {
-                        self.mode = Mode::Normal;
-                    }
-                }
-                MouseEventKind::Moved => set_pointer(&mut self.pointer, Pointer::Default),
-                _ => {}
-            }
-            return;
-        }
 
         // The confirm dialog owns the mouse while open: its buttons decide,
         // and clicking anywhere else dismisses it.
@@ -1658,24 +1591,11 @@ impl App {
                         }
                     }
                     Hit::SidebarAutoAll => self.toggle_auto_all(),
-                    Hit::SidebarWindow(window) => {
-                        // Double-clicking a header renames the workspace;
-                        // a single click jumps to it.
-                        let double = self.last_click.is_some_and(|(at, pos)| {
-                            at.elapsed() < DOUBLE_CLICK_WINDOW && pos == (x, y)
-                        });
-                        self.session.activate_window(window);
-                        if double {
-                            self.open_rename(window);
-                        }
-                    }
                     Hit::SidebarNewAgent => {
                         self.mode = Mode::Launch(LauncherState::new());
                     }
                     Hit::SidebarViewGrid => self.zoomed = false,
                     Hit::SidebarViewSolo => self.zoomed = true,
-                    Hit::SidebarViewBySpace => self.sidebar_view = SidebarView::BySpace,
-                    Hit::SidebarViewByNeed => self.sidebar_view = SidebarView::ByNeed,
                     Hit::StatusWindows => self.session.next_window(),
                     Hit::PaneClose(id) => self.request_close(id),
                     Hit::PaneRestart(id) => self.restart_pane(id),
@@ -1836,12 +1756,9 @@ impl App {
                 | Hit::SidebarNewAgent
                 | Hit::SidebarViewGrid
                 | Hit::SidebarViewSolo
-                | Hit::SidebarViewBySpace
-                | Hit::SidebarViewByNeed
                 | Hit::SidebarEntry(_)
                 | Hit::SidebarAuto(_)
                 | Hit::SidebarAutoAll
-                | Hit::SidebarWindow(_)
                 | Hit::StatusWindows
         ) {
             return Pointer::Hand;
@@ -1931,41 +1848,6 @@ impl App {
         }
     }
 
-    /// Each workspace's display name: a user-set name wins, then the
-    /// focused pane's terminal title (agent CLIs put their current task
-    /// there), then a numbered default. Named headers keep the number for
-    /// n/p orientation.
-    fn window_display_names(&self) -> Vec<String> {
-        (0..self.session.window_count())
-            .map(|window| {
-                if let Some(name) = self.session.window_name(window) {
-                    return format!("{} · {}", window + 1, name);
-                }
-                let title = self
-                    .session
-                    .window_focused(window)
-                    .and_then(|id| self.runtimes.get(&id))
-                    .and_then(|rt| rt.screen.title())
-                    .map(|t| t.trim().to_string())
-                    .filter(|t| !t.is_empty());
-                match title {
-                    Some(title) => format!("{} · {}", window + 1, title),
-                    None => format!("workspace {}", window + 1),
-                }
-            })
-            .collect()
-    }
-
-    /// Open the rename dialog for a window, prefilled with its manual name.
-    fn open_rename(&mut self, window: usize) {
-        let input = self
-            .session
-            .window_name(window)
-            .unwrap_or_default()
-            .to_string();
-        self.mode = Mode::Rename(window, input);
-    }
-
     /// A pane's display name: its agent card's name when detected, else its
     /// command.
     fn pane_name(&self, id: PaneId) -> String {
@@ -2022,10 +1904,6 @@ impl App {
             for c in text.chars().filter(|c| !c.is_control()) {
                 state.push(c);
             }
-            return;
-        }
-        if let Mode::Rename(_, input) = &mut self.mode {
-            input.extend(text.chars().filter(|c| !c.is_control()));
             return;
         }
         let Some(id) = self.session.focused() else {
@@ -2104,14 +1982,14 @@ impl App {
                     (
                         None,
                         format!(
-                            "{focused}ctrl-b: keys · then c: new agent · j: jump · z: solo · t: triage · x: close agent · d: detach · q: quit roster"
+                            "{focused}ctrl-b: keys · then c: new agent · j: jump · z: solo · x: close agent · d: detach · q: quit roster"
                         ),
                     )
                 }
             }
             Mode::Prefix => (
                 Some("PREFIX"),
-                "c: new agent · n/p: windows · ,: rename · z: solo · t: triage · %/\": split · o: focus · j: jump · x: close agent · d: detach · q: quit roster"
+                "c: new agent · n/p: windows · z: solo · %/\": split · o: focus · j: jump · x: close agent · d: detach · q: quit roster"
                     .to_string(),
             ),
             Mode::Jump => (
@@ -2126,10 +2004,6 @@ impl App {
             Mode::ConfirmClose(_) => (
                 Some("CLOSE?"),
                 "y/enter: close · esc: cancel".to_string(),
-            ),
-            Mode::Rename(..) => (
-                Some("RENAME"),
-                "enter: save · empty input restores auto · esc: cancel".to_string(),
             ),
         }
     }

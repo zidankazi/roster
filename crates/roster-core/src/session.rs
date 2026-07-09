@@ -87,9 +87,6 @@ impl Pane {
 struct Window {
     root: LayoutNode,
     focused: PaneId,
-    /// A user-set name. `None` means auto: callers fall back to a live
-    /// source (the focused pane's terminal title) or a numbered default.
-    name: Option<String>,
 }
 
 /// The whole multiplexer model: windows of split panes plus focus.
@@ -151,7 +148,6 @@ impl Session {
         self.windows.push(Window {
             root: LayoutNode::Leaf(id),
             focused: id,
-            name: None,
         });
         self.active = self.windows.len() - 1;
         id
@@ -172,38 +168,6 @@ impl Session {
         }
     }
 
-    /// Activate the window at `index`. Returns false when out of range.
-    pub fn activate_window(&mut self, index: usize) -> bool {
-        if index < self.windows.len() {
-            self.active = index;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// The user-set name of the window at `index`, if any.
-    pub fn window_name(&self, index: usize) -> Option<&str> {
-        self.windows.get(index)?.name.as_deref()
-    }
-
-    /// Name (or, with `None`, un-name) the window at `index`. Un-named
-    /// windows fall back to an automatic label. Returns false when out of
-    /// range.
-    pub fn set_window_name(&mut self, index: usize, name: Option<String>) -> bool {
-        let Some(window) = self.windows.get_mut(index) else {
-            return false;
-        };
-        window.name = name.filter(|n| !n.trim().is_empty());
-        true
-    }
-
-    /// The focused pane of the window at `index` — not necessarily the
-    /// session-wide focused pane.
-    pub fn window_focused(&self, index: usize) -> Option<PaneId> {
-        Some(self.windows.get(index)?.focused)
-    }
-
     /// Adopt a pane whose id was allocated elsewhere (a session server)
     /// into a fresh window, activate it, and focus the pane. Returns `None`
     /// when the id is already taken.
@@ -212,7 +176,6 @@ impl Session {
         self.windows.push(Window {
             root: LayoutNode::Leaf(id),
             focused: id,
-            name: None,
         });
         self.active = self.windows.len() - 1;
         Some(id)
@@ -284,10 +247,12 @@ impl Session {
     ///   is `(l <id>)` for a leaf or `(h <ratio> <node> <node>)` /
     ///   `(v <ratio> <node> <node>)` for a split (ratio to 4 decimal places).
     /// - `active <n>` — the active window's index.
-    /// - `wname <idx> <name>` — one per window with a user-set name; unlisted
-    ///   windows default to `None` (auto-named) on restore.
     /// - `pane <id> <command>` — one per pane with a known command; unlisted
     ///   panes default to `None` on restore.
+    /// - `wname <idx> <name>` — legacy (workspace naming was removed): never
+    ///   written, but accepted and dropped by [`Session::restore`] so
+    ///   snapshots persisted by older rosters keep restoring. Do not delete
+    ///   the parse branch as dead code.
     pub fn snapshot(&self) -> String {
         let mut out = String::from("v1\n");
         for window in &self.windows {
@@ -296,11 +261,6 @@ impl Session {
             out.push('\n');
         }
         out.push_str(&format!("active {}\n", self.active));
-        for (index, window) in self.windows.iter().enumerate() {
-            if let Some(name) = &window.name {
-                out.push_str(&format!("wname {index} {}\n", name.replace('\n', " ")));
-            }
-        }
         let mut ids: Vec<&PaneId> = self.panes.keys().collect();
         ids.sort();
         for id in ids {
@@ -336,17 +296,13 @@ impl Session {
                 if !tokens.is_empty() || !root.leaves().contains(&focused) {
                     return None;
                 }
-                session.windows.push(Window {
-                    root,
-                    focused,
-                    name: None,
-                });
+                session.windows.push(Window { root, focused });
             } else if let Some(rest) = line.strip_prefix("active ") {
                 session.active = rest.parse().ok()?;
-            } else if let Some(rest) = line.strip_prefix("wname ") {
-                let (index, name) = rest.split_once(' ')?;
-                let index: usize = index.parse().ok()?;
-                session.windows.get_mut(index)?.name = Some(name.to_string());
+            } else if line.starts_with("wname ") {
+                // Workspace naming was removed; tolerate (and drop) `wname`
+                // lines so sessions persisted by an older roster still
+                // restore instead of failing the unknown-line guard below.
             } else if let Some(rest) = line.strip_prefix("pane ") {
                 let (id, command) = rest.split_once(' ')?;
                 let id = PaneId(id.parse().ok()?);
@@ -396,14 +352,7 @@ impl Session {
                 } else {
                     window.focused
                 };
-                self.windows.insert(
-                    window_idx,
-                    Window {
-                        root,
-                        focused,
-                        name: window.name,
-                    },
-                );
+                self.windows.insert(window_idx, Window { root, focused });
             }
             RemoveOutcome::LastLeaf => {
                 // `windows.remove` already ran, so every index at or after
@@ -802,29 +751,19 @@ mod tests {
     }
 
     #[test]
-    fn window_names_set_clear_and_round_trip() {
-        let mut s = Session::new();
-        let a = s.focused().unwrap();
-        s.pane_mut(a).unwrap().command = Some("claude".into());
-        s.new_window();
-        assert_eq!(s.window_name(0), None);
-        assert!(s.set_window_name(0, Some("fix auth bug".into())));
-        assert!(s.set_window_name(1, Some("  ".into())), "blank clears");
-        assert_eq!(s.window_name(0), Some("fix auth bug"));
-        assert_eq!(s.window_name(1), None);
-        assert!(!s.set_window_name(9, Some("x".into())));
-
-        let restored = Session::restore(&s.snapshot()).expect("restore");
-        assert_eq!(restored.window_name(0), Some("fix auth bug"));
-        assert_eq!(restored.window_name(1), None);
-
-        // Closing a pane inside the window keeps the name.
-        let b = s.split(a, SplitDirection::Horizontal).unwrap();
-        s.close(b);
-        assert_eq!(s.window_name(0), Some("fix auth bug"));
-
-        assert!(s.set_window_name(0, None));
-        assert_eq!(s.window_name(0), None);
+    fn restore_tolerates_legacy_wname_lines() {
+        // Workspace naming was removed, but a session persisted by an older
+        // roster carries `wname` lines. The reader must drop them, not trip
+        // the unknown-line guard and fail the whole restore.
+        let blob = "v1\nwindow focused=1 (l 1)\nactive 0\nwname 0 fix auth bug\npane 1 claude\n";
+        let restored = Session::restore(blob).expect("legacy snapshot still restores");
+        assert_eq!(restored.window_count(), 1);
+        assert_eq!(
+            restored.pane(PaneId(1)).unwrap().command.as_deref(),
+            Some("claude")
+        );
+        // A fresh snapshot no longer emits the line.
+        assert!(!restored.snapshot().contains("wname"));
     }
 
     #[test]
@@ -870,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn window_cycling_wraps_both_ways_and_activates_by_index() {
+    fn window_cycling_wraps_both_ways() {
         let mut s = Session::new();
         s.new_window();
         s.new_window();
@@ -881,10 +820,6 @@ mod tests {
         assert_eq!(s.active_window(), Some(2));
         s.prev_window();
         assert_eq!(s.active_window(), Some(1));
-        assert!(s.activate_window(0));
-        assert_eq!(s.active_window(), Some(0));
-        assert!(!s.activate_window(3));
-        assert_eq!(s.active_window(), Some(0));
     }
 
     #[test]
