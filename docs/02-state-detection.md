@@ -33,6 +33,8 @@ For every agent pane, detection produces a `StateReading { state, reason, teleme
 4. Extract the reason from the matched region (e.g. the captured prompt line).
 5. Pass the raw reading to the debouncer (below) before it becomes the committed state.
 
+When no `blocked`/`working` pattern matches, a change in the grid since the last frame still reads as `working` — output is moving even if nothing recognizable is on screen. That change fingerprint deliberately skips blank rows and any row matching the agent's `activity.ignore` patterns: the composer echoes every keystroke of an *unsent* prompt and status chrome toggles on its own, and none of that is the agent doing work. Without the exclusion, a human typing reads as 🟡 working and stamps fake activity into the done-window bookkeeping.
+
 `history` carries the last few readings + timestamps, needed for the done/idle recency call and for debouncing.
 
 ## Debouncing — the trust feature
@@ -58,6 +60,8 @@ idle    = ['│\s*>\s*$']                                     # empty prompt lin
 # where to pull the human-readable reason from, per state
 reason.blocked = "matched_line"   # use the line that matched `blocked`
 reason.working = "last_nonempty"  # last non-empty output line
+# rows whose changes are not agent activity (composer echo, status chrome)
+activity.ignore = ['^\s*❯', '^\s+●']
 done.after_activity_secs = 8      # idle prompt within 8s of activity => done
 ```
 

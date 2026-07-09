@@ -67,6 +67,11 @@ pub struct AgentConfig {
     /// interrupt hints, shortcut legends) and skipped when a `last_nonempty`
     /// reason is chosen, so the reason is real content rather than framing.
     pub reason_ignore: Vec<Regex>,
+    /// Lines matching any of these are excluded from the change fingerprint
+    /// that reads "screen moved" as working: rows that change without the
+    /// agent doing anything — the composer echoing keystrokes, a status bar
+    /// toggling — must not count as activity.
+    pub activity_ignore: Vec<Regex>,
     /// An idle prompt appearing within this window after activity reads as
     /// `done` rather than `idle`.
     pub done_after_activity: Duration,
@@ -138,6 +143,8 @@ struct RawAgent {
     #[serde(default)]
     reason: RawReason,
     #[serde(default)]
+    activity: RawActivity,
+    #[serde(default)]
     done: RawDone,
 }
 
@@ -146,6 +153,13 @@ struct RawAgent {
 struct RawReason {
     blocked: Option<String>,
     working: Option<String>,
+    #[serde(default)]
+    ignore: Vec<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct RawActivity {
     #[serde(default)]
     ignore: Vec<String>,
 }
@@ -179,6 +193,7 @@ fn compile_agent(name: String, raw: RawAgent) -> Result<AgentConfig, ConfigError
         working: compile_patterns(&name, raw.working)?,
         idle: compile_patterns(&name, raw.idle)?,
         reason_ignore: compile_patterns(&name, raw.reason.ignore)?,
+        activity_ignore: compile_patterns(&name, raw.activity.ignore)?,
         match_command: raw.match_command,
         launch_command: raw.launch_command,
         reason_blocked,

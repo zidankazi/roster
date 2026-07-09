@@ -9,9 +9,11 @@
 # See docs/02-state-detection.md.
 #
 # The claude-code patterns are tuned against Claude Code 2.1 captured live
-# (see crates/roster/examples/capture.rs; latest capture 2.1.204). Its
+# (see crates/roster/examples/capture.rs; latest capture 2.1.205). Its
 # permission prompts show "Do you want to proceed?" over a "❯ 1. Yes" menu;
-# while working it shows "esc to interrupt"; at rest the input line is "❯"
+# while working it shows a spinner status line ("✻ Crunching…", a random
+# verb) — 2.1.205 no longer reliably shows "esc to interrupt" with it, so
+# the spinner line itself is a working signal; at rest the input line is "❯"
 # between horizontal rules (not a box-bordered "> "). When a backgrounded
 # task is running it shows "✳ Waiting for N background agent(s) to finish"
 # above the prompt, with the background-task tray ("Enter to view · x to
@@ -32,13 +34,37 @@ blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d+\. Yes']
 # background task reports — a confusing done↔working flicker. working
 # outranks idle, so this pins the pane to working until the wait is actually
 # over.
-working = ['esc to interrupt', '(?i)ctrl\+c to interrupt', 'Waiting for \d+ background agent']
+#
+# The last pattern is the spinner status line itself ("✻ Sautéing…",
+# "✻ Crunching… (4s · thinking with high effort)"): since 2.1.205 a working
+# screen can show no interrupt hint at all, leaving the spinner as the only
+# on-screen working signal. The glyph class is the captured flower frames
+# (✻ ✢ ✶ live in 2.1.20x, ✳ from earlier flourish captures) and nothing
+# looser: a bare "*" or "·" would match markdown bullets in settled
+# responses ("* Loading…"), and a static false working never clears. The
+# braille spinner ("⠹ Reticulating…") stays out for the same reason — every
+# braille capture so far came with an interrupt hint that already matches.
+# The "…" right after the verb keeps the completion flourish
+# ("✻ Brewed for 5s") and response lines from matching.
+working = ['esc to interrupt', '(?i)ctrl\+c to interrupt', 'Waiting for \d+ background agent', '^\s*[✻✢✳✶] \w+…']
 idle    = ['^❯']                                              # input prompt line
 reason.blocked = "matched_line"
 reason.working = "last_nonempty"
 # Skip UI chrome so a working/done reason is real content (e.g. the last
 # result line), not the model status bar, the input prompt, the
 # interrupt/shortcut hints, the mode indicator, or the completion flourish
-# ("✻ Cogitated for 2s" — a random verb, so the word is a wildcard).
-reason.ignore = ['^\s*●', 'to interrupt', '\? for shortcuts', '^\s*⎿', '^\s*❯', '^\s*▎', '^\s*[✻✳*] ?\w+ for \d+s$', '^\s*⏸', '^\s*Enter to view']
+# ("✻ Cogitated for 2s" — a random verb, so the word is a wildcard; the
+# glyph class must cover the same frames as the working spinner class,
+# since the flourish freezes on whichever frame was showing).
+reason.ignore = ['^\s*●', 'to interrupt', '\? for shortcuts', '^\s*⎿', '^\s*❯', '^\s*▎', '^\s*[✻✢✳✶*] ?\w+ for \d+s$', '^\s*⏸', '^\s*Enter to view']
+# Rows excluded from the change fingerprint (the "screen moved" working
+# signal): the composer/prompt rows echo every keystroke of an unsent
+# prompt and rotate their placeholder suggestion, and the "● model ·
+# /effort" status chip toggles with focus — none of that is the agent
+# doing work. Without this, typing a prompt into an idle pane reads as
+# 🟡 working and stamps fake activity that widens the done window
+# (issue #1). The chip pattern requires leading indentation: the chip is
+# right-aligned, while genuine "● Task(…)" output rows sit at column 0
+# and must keep counting as activity.
+activity.ignore = ['^\s*❯', '^\s+●']
 done.after_activity_secs = 8

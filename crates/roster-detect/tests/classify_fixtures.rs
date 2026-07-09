@@ -34,7 +34,12 @@ fn classify_after_activity(agent: &str, command: &str, name: &str, secs_ago: u64
     let grid = fixture(agent, name);
     let t0 = Instant::now();
     let mut history = History::new();
-    history.record(AgentState::Working, &grid, t0);
+    history.record(
+        AgentState::Working,
+        &grid,
+        &detector.agent(kind).activity_ignore,
+        t0,
+    );
     detector.classify(kind, &grid, &history, t0 + Duration::from_secs(secs_ago))
 }
 
@@ -122,6 +127,138 @@ fn claude_idle_at_rest() {
         AgentState::Idle,
         None,
     );
+}
+
+#[test]
+fn claude_composing_prompt_reads_idle() {
+    // Captured from Claude Code 2.1.205 while typing an unsent prompt: no
+    // spinner, no interrupt hint — the agent has done nothing, so the pane
+    // is idle (issue #1). A working pattern matching this screen would have
+    // no debounce protection: the match is static, so it would never clear.
+    assert_reading(
+        classify_fresh("claude-code", "claude", "composing_prompt.txt"),
+        AgentState::Idle,
+        None,
+    );
+    assert_reading(
+        classify_fresh("claude-code", "claude", "composing_prompt_grown.txt"),
+        AgentState::Idle,
+        None,
+    );
+}
+
+#[test]
+fn claude_working_from_spinner_without_interrupt_hint() {
+    // Captured from Claude Code 2.1.205: a genuinely working screen whose
+    // only working signal is the spinner status line — no "esc to
+    // interrupt" anywhere. The spinner pattern must carry the state on its
+    // own, with the spinner line as the reason.
+    assert_reading(
+        classify_fresh("claude-code", "claude", "working_spinner_only.txt"),
+        AgentState::Working,
+        Some("✻ Sautéing…"),
+    );
+    assert_reading(
+        classify_fresh("claude-code", "claude", "working_spinner_thinking.txt"),
+        AgentState::Working,
+        Some("✻ Crunching… (4s · thinking with high effort)"),
+    );
+    // A second live frame of the same spinner (the glyph rotates), so the
+    // class covers more than the one frame a single sample happened to hit.
+    assert_reading(
+        classify_fresh("claude-code", "claude", "working_spinner_alt_frame.txt"),
+        AgentState::Working,
+        Some("✢ Sautéing…"),
+    );
+}
+
+#[test]
+fn claude_done_shortly_after_spinner_work() {
+    // The settled screen from the same 2.1.205 run the spinner fixtures
+    // came from: within the done window it reads done, with the response —
+    // not the "✻ Brewed for 5s" flourish — as the reason.
+    assert_reading(
+        classify_after_activity("claude-code", "claude", "done_after_spinner_work.txt", 3),
+        AgentState::Done,
+        Some("⏺ pumpernickel"),
+    );
+}
+
+/// The reported repro of issue #1, frame by frame from one live capture:
+/// an idle pane, then keystrokes landing in the composer. Only the composer
+/// echo and the "● model · /effort" chip change, so the pane stays idle
+/// through the typing — and stays idle after it pauses, because composing
+/// stamped no activity for the done window to feed on.
+#[test]
+fn typing_an_unsent_prompt_stays_idle() {
+    let detector = Detector::builtin();
+    let kind = detector.identify("claude").expect("claude identifies");
+    let mut tracker = PaneTracker::new();
+    let t0 = Instant::now();
+    let at = |secs: u64| t0 + Duration::from_secs(secs);
+
+    let resting = fixture("claude-code", "idle_placeholder_prompt.txt");
+    let typing = fixture("claude-code", "composing_prompt.txt");
+    let grown = fixture("claude-code", "composing_prompt_grown.txt");
+
+    let frames: [(u64, &Grid); 6] = [
+        (0, &resting),
+        (1, &typing),
+        (2, &grown),
+        // Typing pauses: a false working above would surface a false done
+        // here, inside the 8s window.
+        (3, &grown),
+        (4, &grown),
+        (10, &grown),
+    ];
+    for (secs, grid) in frames {
+        let seen = tracker.update(&detector, kind, grid, at(secs));
+        assert_eq!(seen.state, AgentState::Idle, "at {secs}s");
+        assert_eq!(seen.reason, None, "at {secs}s");
+    }
+}
+
+/// The follow-up on issue #1: submit, work, finish — the settled screen
+/// must surface done for the done window, not skip straight to idle. All
+/// frames are live 2.1.205 captures, where no interrupt hint shows while
+/// working.
+#[test]
+fn submitted_prompt_completing_reads_done_not_idle() {
+    let detector = Detector::builtin();
+    let kind = detector.identify("claude").expect("claude identifies");
+    let mut tracker = PaneTracker::new();
+    let t0 = Instant::now();
+    let at = |secs: u64| t0 + Duration::from_secs(secs);
+
+    let composing = fixture("claude-code", "composing_prompt.txt");
+    let thinking = fixture("claude-code", "working_spinner_only.txt");
+    let responding = fixture("claude-code", "working_spinner_thinking.txt");
+    let done = fixture("claude-code", "done_after_spinner_work.txt");
+
+    // Composing: idle (the parent bug would read this as working).
+    tracker.update(&detector, kind, &composing, at(0));
+    let seen = tracker.update(&detector, kind, &composing, at(1));
+    assert_eq!(seen.state, AgentState::Idle);
+
+    // Submitted: the spinner alone reads working, with the usual lag.
+    tracker.update(&detector, kind, &thinking, at(2));
+    let seen = tracker.update(&detector, kind, &responding, at(3));
+    assert_eq!(seen.state, AgentState::Working);
+
+    // Finished: the changed frame still reads working, then the settled
+    // prompt commits done — the "just completed, look here" window.
+    tracker.update(&detector, kind, &done, at(4));
+    tracker.update(&detector, kind, &done, at(5));
+    let seen = tracker.update(&detector, kind, &done, at(6));
+    assert_eq!(seen.state, AgentState::Done);
+    assert_eq!(seen.reason.as_deref(), Some("⏺ pumpernickel"));
+
+    // And past the window it decays to idle.
+    let seen = tracker.update(&detector, kind, &done, at(20));
+    assert_eq!(seen.state, AgentState::Done);
+    let seen = tracker.update(&detector, kind, &done, at(21));
+    assert_eq!(seen.state, AgentState::Idle);
+    assert_eq!(seen.reason, None);
 }
 
 #[test]

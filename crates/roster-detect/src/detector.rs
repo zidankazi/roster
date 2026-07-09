@@ -125,7 +125,7 @@ impl Detector {
                 reason_from(config.reason_working, &found, &lines, &config.reason_ignore),
             );
         }
-        if history.content_changed(grid) == Some(true) {
+        if history.content_changed(grid, &config.activity_ignore) == Some(true) {
             return scraped(
                 AgentState::Working,
                 last_worded_line(&lines, &config.reason_ignore),
@@ -305,7 +305,12 @@ mod tests {
         let t0 = Instant::now();
         let mut history = History::new();
         let before = Grid::from_text("compiling roster-core v0.1.0");
-        history.record(AgentState::Idle, &before, t0);
+        history.record(
+            AgentState::Idle,
+            &before,
+            &detector.agent(kind).activity_ignore,
+            t0,
+        );
         let after = Grid::from_text("compiling roster-core v0.1.0\ncompiling roster-detect v0.1.0");
         let reading = detector.classify(kind, &after, &history, t0);
         assert_eq!(reading.state, AgentState::Working);
@@ -322,7 +327,12 @@ mod tests {
         let t0 = Instant::now();
         let mut history = History::new();
         let grid = Grid::from_text("plain output\nnothing recognizable");
-        history.record(AgentState::Idle, &grid, t0);
+        history.record(
+            AgentState::Idle,
+            &grid,
+            &detector.agent(kind).activity_ignore,
+            t0,
+        );
         let reading = detector.classify(kind, &grid, &history, t0);
         assert_eq!(reading.state, AgentState::Idle);
         assert_eq!(reading.reason, None);
@@ -341,6 +351,39 @@ mod tests {
             let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
             assert_eq!(reading.state, AgentState::Working, "hint {hint}");
         }
+    }
+
+    #[test]
+    fn spinner_lookalike_bullets_do_not_read_working() {
+        // A settled response containing a bullet or quoted spinner-shaped
+        // text must not match the spinner working pattern: a static false
+        // working never clears. The flower glyphs are reserved enough to
+        // risk; '*' and '·' bullets are not, so they stay out of the class.
+        let detector = Detector::builtin();
+        let kind = detector.identify("claude").unwrap();
+        for line in ["* Loading… see the logs", "  * Retrying…", "· Updating…"] {
+            let grid = Grid::from_text(&format!("⏺ answer\n{line}\n❯"));
+            let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
+            assert_eq!(reading.state, AgentState::Idle, "line {line}");
+        }
+    }
+
+    #[test]
+    fn task_header_rows_still_count_as_activity() {
+        // activity.ignore's chip pattern requires indentation: flush-left
+        // "● Task(…)" rows are real output, and their changes must keep
+        // feeding the change fingerprint even though the right-aligned
+        // "● high · /effort" chip is excluded.
+        let detector = Detector::builtin();
+        let kind = detector.identify("claude").unwrap();
+        let t0 = Instant::now();
+        let mut history = History::new();
+        let ignore = &detector.agent(kind).activity_ignore;
+        let before = Grid::from_text("● Explore(map the sidebar)\n❯");
+        let after = Grid::from_text("● Explore(map the sidebar, done)\n❯");
+        history.record(AgentState::Idle, &before, ignore, t0);
+        let reading = detector.classify(kind, &after, &history, t0);
+        assert_eq!(reading.state, AgentState::Working);
     }
 
     #[test]
