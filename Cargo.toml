@@ -9,7 +9,7 @@ members = ["crates/roster",
 [workspace.package]
 version = "0.0.6"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0-only"
 repository = "https://github.com/zidankazi/roster"
 
 [workspace.lints.rust]
