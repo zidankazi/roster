@@ -1,8 +1,21 @@
 # roster
 
-A terminal multiplexer for Claude Code. Run several Claude Code agents in
-real terminal panes and see at a glance which one is 🔴 blocked, 🟡 working,
-🔵 done, or 🟢 idle, **plus what each one is waiting on**.
+[![latest release](https://img.shields.io/github/v/release/zidankazi/roster?label=release&color=c0392b)](https://github.com/zidankazi/roster/releases)
+[![downloads](https://img.shields.io/github/downloads/zidankazi/roster/total?color=555)](https://github.com/zidankazi/roster/releases)
+[![license: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+
+a terminal multiplexer for Claude Code. run several agents in real terminal
+panes and see which one is blocked, working, done, or idle, plus the exact
+prompt each one is waiting on.
+
+[install](#install) · [quick start](#quick-start) · [built for Claude Code](#built-for-claude-code) · [docs](docs)
+
+<!-- TODO: capture a real screenshot/gif and drop it here:
+![roster](docs/assets/hero.png)
+-->
+
+<details>
+<summary>text preview of the sidebar (until the screenshot lands)</summary>
 
 ```
  agents               1 blocked │ ⠼ claude-code      ✕ │▎ ◉ claude-code       ✕
@@ -15,92 +28,121 @@ real terminal panes and see at a glance which one is 🔴 blocked, 🟡 working,
  + new agent                    │                      │
 ```
 
-The sidebar rolls every agent up to a colored glyph — cards are triaged by
-who needs you first: blocked (longest-waiting leading), then done, then idle,
-with working agents at the bottom — and, unlike a bare status dot, shows
-**the reason**: the exact prompt an agent is blocked on. Every pane
-gets a title bar with its agent's live state; the focused pane is highlighted.
+</details>
 
-**Use it like an app — no hotkeys to learn.** Every action is a visible click
-target: click a pane to focus it, a sidebar card to jump to that agent, the
-card's **`auto`** chip to auto-approve that agent's permission asks, the
-pinned **+ new agent** button to open the launcher, a title bar's **✕** to
-close that pane (closing a live agent asks first, in a real dialog — a stray
-click won't kill it). Drag the dividers to resize. An exited pane shows a
-card with **restart** and **close** buttons; launch failures arrive as
-dismissable toasts, not buried status text. Closing the last pane quits.
+a status dot only tells you an agent stopped. roster tells you it stopped on
+`Approve command?`, the verbatim prompt, so you know which pane to jump to
+without reading every screen.
 
-**A real terminal underneath.** Every pane keeps 10,000 lines of scrollback —
-wheel-scroll any pane to read history (an `↑ n` chip shows how far back you
-are; typing snaps back to live). Full-screen TUIs still get their arrow keys.
-Drag across pane text to select it; release copies it to your clipboard via
-OSC 52, which works over ssh too. Pastes arrive bracketed, so multi-line
-prompts don't self-execute line by line.
+- **every agent at a glance.** one colored glyph per agent, triaged so
+  whoever's been blocked longest sits on top, each card showing why.
+- **a real terminal, not a wrapped interpretation.** 10k lines of scrollback
+  per pane, full-screen TUIs keep their keys, drag to select and copy (OSC 52,
+  works over ssh), bracketed paste for multi-line prompts.
+- **mouse and keyboard, both first-class.** click a pane, drag a divider, hit
+  the `+ new agent` button, or drive all of it with tmux-style `ctrl-b` keys.
+- **detach, agents keep running.** every pane lives in a background server.
+  close the lid, reattach later, even over ssh. sessions survive the UI.
+- **reads Claude Code's own hooks.** exact permission asks and state straight
+  from Claude, not screen-scraping. auto-approve per agent or across the whole
+  fleet, without giving up visibility.
+- **one Rust binary, under 4 MB.** no Electron, runs in whatever terminal you
+  already use.
 
-**Two layouts.** The grid tiles every pane; **solo** shows one agent at a
-time, full size, with the sidebar as the switcher — click cards on the left
-to flip between agents. Switch layouts with the `grid · solo` control at the
-bottom of the sidebar (it appears once there's more than one pane), or
-double-click any pane's title bar to toggle solo, like maximizing a window.
+## install
 
-Start bare — `roster` opens a welcome screen: the wordmark over an agent
-picker. Click a row (or type to filter and press enter) and that agent takes
-over the window. Type `claude` (or any command — it's a real terminal) and
-enter runs it in a pane. Claude Code gets a named card and live state
-detection; anything else just runs.
+```sh
+curl -fsSL https://raw.githubusercontent.com/zidankazi/roster/main/install.sh | sh
+```
 
-Each agent launched from the **+ new agent** button opens in its own
-workspace window rather than splitting the current pane. The sidebar groups
-cards by workspace: a workspace running several agents — or a shell-only
-window with none — gets a header you can click to jump there. A workspace
-with a single agent skips the header; its card already names the agent, so a
-header would only repeat it. Click the `⧉ 2/3` indicator in the status bar
-or press `ctrl-b n`/`p` to cycle.
+or `brew install zidankazi/roster/roster` · `cargo install --git https://github.com/zidankazi/roster roster` · [prebuilt binaries](https://github.com/zidankazi/roster/releases)
 
-**Group by workspace, or rank by who needs you.** With more than one
-workspace the sidebar carries a `by space · by need` switcher (or `ctrl-b
-t`). *By space* is the default above — cards grouped under their workspace
-headers. *By need* drops the grouping and ranks every agent in one flat
-list across all workspaces, most-blocked first, each card tagged `⧉N` with
-its home workspace — so the one agent waiting on you rises to the top no
-matter which workspace it's in.
+prebuilt for macOS (arm64/x86_64) and Linux (x86_64/arm64), checksum-verified,
+installs to `~/.local/bin`. the installer takes `ROSTER_VERSION=vX.Y.Z` to pin
+a version and `ROSTER_BINDIR=…` to change where it lands.
 
-**Workspaces name themselves after the task.** A card picks up the terminal
-title the agent broadcasts — Claude Code sets it to what it's working on —
-so the sidebar reads `fix auth bug`, not `claude-code`. Press `ctrl-b ,`
-(or double-click a workspace header, where one is shown) to set your own
-name; a named workspace always keeps its header, and an empty rename goes
-back to automatic. Manual names persist across detach/reattach.
+## quick start
 
-Keyboard equivalents exist for everything (`ctrl-b` is the prefix — `c` new
-agent, `n`/`p` windows, `z` solo, `t` triage (by space / by need), `j` jump,
-`o` focus, `x` close, `d` detach, `q` quit); in jump mode, `a` toggles
-auto-approve on the selected agent. The status bar keeps the hints on
-screen.
+```sh
+roster                # launcher; add agents as you go
+roster claude claude  # or launch a couple up front
+```
 
-## Persistent sessions
+run bare and roster opens a welcome screen: pick an agent, or type any command
+(it's a real terminal) and hit enter. Claude Code gets a named card with live
+state, anything else just runs.
 
-Agents shouldn't die because a terminal window closed. Run roster inside a
-named session and every pane lives in a background server that survives the
-UI — detach, close the laptop lid, reattach later; the agents kept working
-and the sidebar rebuilds itself, states and all:
+the sidebar rolls every agent into a colored glyph and triages by who needs
+you first: blocked (longest wait leading), then done, then idle, working at the
+bottom. two layouts: grid tiles every pane, solo shows one full size with the
+sidebar as the switcher. toggle from the sidebar or by double-clicking a title
+bar. `ctrl-b` is the prefix; the status bar keeps the hints on screen, and
+`roster --help` lists them all.
+
+## workspaces
+
+each agent from `+ new agent` opens its own workspace window instead of
+splitting the current pane; cycle them with `ctrl-b n`/`p`. with more than one
+workspace, the sidebar's `by space · by need` switcher (`ctrl-b t`) either
+groups cards under their workspace or flattens everything into one list ranked
+most-blocked-first, so the agent waiting on you rises to the top no matter
+where it lives. workspaces name themselves after the task Claude Code is
+working on (`fix auth bug`, not `claude-code`); rename with `ctrl-b ,`, and the
+name sticks across detach/reattach.
+
+## persistent sessions
+
+agents shouldn't die because a window closed. run roster inside a named session
+and the panes live in a background server that outlives the UI:
 
 ```sh
 roster -s work claude    # run claude in the persistent session "work"
-# … ctrl-b d to detach (or just quit — quitting a session detaches) …
+# ctrl-b d to detach, or just quit (quitting a session detaches)
 roster ls                # sessions still running
 roster attach work       # back where you left off, layout restored
 roster kill work         # end the session and every agent in it
 ```
 
-Attach from another machine over plain ssh — roster runs a thin stdio proxy
-on the remote side, so the session server never touches the network:
+attach from another machine over plain ssh. roster runs a thin stdio proxy on
+the remote side, so the session server never touches the network:
 
 ```sh
 roster attach user@devbox:work   # needs roster installed on devbox
 ```
 
-## How it compares
+## built for Claude Code
+
+roster is built for Claude Code and ships detection for it alone. it doesn't
+just watch the screen, it reads Claude Code's own state. register the hooks
+(and, optionally, the telemetry feed) once:
+
+```sh
+roster --print-hooks        # merge into ~/.claude/settings.json
+roster --print-statusline   # same file; model / context left / cost / rate-limit
+```
+
+now every pane reports its permission asks directly. the moment Claude wants a
+tool, the sidebar shows the verbatim ask, `blocked · Bash: cargo test`,
+straight from the `PermissionRequest` hook, and approving clears it just as
+precisely. the hooks are silent no-ops for any Claude running outside roster,
+so registering them costs nothing; screen detection keeps running underneath
+and reconciles if a signal ever goes missing.
+
+because the hook is two-way, roster can answer for you. each card has an `auto`
+chip: flip it (click, or `ctrl-b j` then `a`) and roster approves that pane's
+next asks, so it runs uninterrupted but stays observable. that's the difference
+from `--dangerously-skip-permissions`, which hides the asks entirely. the
+sidebar header's `auto-yes` toggle arms the whole fleet at once, and per-card
+chips still win, so one sensitive agent can stay manual. with the statusline
+feed on, each card also carries a quiet telemetry line: model, context
+remaining (it turns yellow, then red as the agent nears a compaction), session
+cost, and the busiest rate-limit window.
+
+this is the first slice of a Claude-native attention layer;
+[`docs/05-claude-native-attention.md`](docs/05-claude-native-attention.md) is
+the spec and roadmap.
+
+## how it compares
 
 |                        | tmux | GUI managers | roster |
 |------------------------|------|--------------|--------|
@@ -110,161 +152,36 @@ roster attach user@devbox:work   # needs roster installed on devbox
 | lives in your terminal | ✓    | —            | ✓      |
 | real terminal views    | ✓    | —            | ✓      |
 | mouse-native           | —    | ✓            | ✓      |
-| lightweight binary     | ✓    | —            | ✓ (~4 MB) |
+| lightweight binary     | ✓    | —            | ✓ (under 4 MB) |
 | persistent sessions    | ✓    | —            | ✓      |
 | detach / reattach      | ✓    | —            | ✓      |
 | remote attach over ssh | ✓ (by hand) | —     | ✓ (built in) |
 
-## Built for Claude Code
+## configuration
 
-roster is built exclusively for Claude Code — it's the only agent it ships
-detection for. And it doesn't just read Claude's screen: it can read Claude
-Code's own state. Register roster's hooks (and, optionally, its telemetry
-feed) once:
+detection is tuned against **Claude Code 2.1** and verified against live
+sessions. rules live in
+[`crates/roster-detect/agents.toml`](crates/roster-detect/agents.toml),
+overridable at `~/.config/roster/agents.toml`; start from the built-in with
+`roster --print-config > ~/.config/roster/agents.toml`. set `launch_command` on
+an agent to control exactly what the launcher runs, or press **tab** in the
+launcher to edit the flags for a one-off (anything you type runs verbatim, so
+`claude --continue` works too).
 
-```sh
-roster --print-hooks        # merge the output into ~/.claude/settings.json
-roster --print-statusline   # same file; feeds model/context/cost/rate-limit
-                            # telemetry (statusLine is a single slot — this
-                            # replaces an existing custom statusline)
-```
+## building from source
 
-and every Claude Code pane reports its permission asks directly. The moment
-Claude wants to run a tool, the sidebar shows **the verbatim ask** —
-`blocked · Bash: cargo test` — instantly, from Claude Code's own
-`PermissionRequest` hook rather than a screen pattern; approving releases it
-just as exactly (the approved tool's `PreToolUse`, or `Stop` at end of turn).
-The hooks are silent no-ops for any claude running outside roster, so
-registering them costs nothing. Screen-based detection keeps running
-underneath and reconciles: if a clear ever goes missing (say, you interrupt
-at the prompt), the settled screen wins and the stale ask drops off.
-
-Because the hook is a two-way channel, roster can also *answer* an ask. Every
-card carries an **`auto` chip** at the right edge of its detail row — muted
-while off, lit in the accent red while on. Click it (or select the agent with
-`ctrl-b j` and press `a`) to toggle **auto-approve** on that pane: roster says
-yes to its permission asks for you, so it runs uninterrupted — but stays
-observable. Unlike launching with `--dangerously-skip-permissions` (which
-turns Claude's own gate off, so roster never sees the asks at all),
-auto-approve keeps roster in the loop: the chip shows it's on, the pane isn't
-yanked to the top as 🔴 blocked, and you can flip it off mid-session without
-relaunching. It's per-pane and forward-looking — it approves the pane's
-*next* asks (including any its subagents make), not a prompt already waiting
-for you.
-
-For a whole trusted run, the sidebar header carries an **`auto-yes`** fleet
-toggle: one click arms auto-approve for every agent at once, and — when the
-whole fleet is already armed — one click disarms them all. The per-card
-chips still work underneath it, so one sensitive agent can stay manual while
-the rest run free.
-
-With the statusline feed registered, each Claude card also carries a quiet
-telemetry line — model, **context remaining** (colored like the state dots as
-it runs low: yellow at warn, bold red when the agent is about to compact and
-lose the thread), session cost, and the most-used rate-limit window. Panes
-without the feed keep the plain two-line card, and a feed that goes quiet
-ages out instead of freezing stale numbers.
-
-This is the first slice of the Claude-native attention layer — reading hooks
-and statusline for exact state, context-left, and cost;
-[`docs/05-claude-native-attention.md`](docs/05-claude-native-attention.md) is
-the spec and roadmap. (Any command still runs in a pane — roster is a real
-terminal — but Claude Code is what it detects and is built for.)
-
-## Two toolchains, one repo
-
-This repo holds two independent build systems that do not share a package manager:
-
-- **Cargo** owns everything under [`crates/`](crates). The workspace root
-  `Cargo.toml` lists the members.
-- **Bun** owns [`website/`](website) only — the Next.js landing page, with its
-  own `package.json` and lockfile.
-
-They stay isolated. Cargo never sees `node_modules`; Bun never sees `target/`.
-If the site ever needs data from the Rust side, the Rust build emits a JSON
-artifact the site reads at build time — that is the only bridge.
-
-## Crates
-
-| Crate | Role |
-|---|---|
-| `roster-pty` | PTY allocation + agent child-process spawn |
-| `roster-term` | Byte stream → screen grid + scrollback (via `alacritty_terminal`) |
-| `roster-core` | Panes, layout tree, session state + snapshot/restore |
-| `roster-detect` | Agent identification + state heuristics + config |
-| `roster-proto` | Framed client/server protocol for persistent sessions |
-| `roster-tui` | ratatui rendering: panes, sidebar, dialogs, toasts |
-| `roster` | The binary; the event loop, and the session server |
-
-Architecture docs live in [`docs/`](docs) — start with
-[`docs/00-architecture.md`](docs/00-architecture.md), the map that links out
-to the per-crate, detection, build-order, website, and direction docs.
-
-## Install
-
-One line, prebuilt binary, no toolchain needed (macOS arm64/x86_64, Linux
-x86_64/arm64 — checksum-verified, installs to `~/.local/bin`):
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/zidankazi/roster/main/install.sh | sh
-```
-
-Homebrew:
-
-```sh
-brew install zidankazi/roster/roster
-```
-
-Cargo:
-
-```sh
-cargo install --git https://github.com/zidankazi/roster roster
-```
-
-Prebuilt tarballs are attached to each
-[release](https://github.com/zidankazi/roster/releases); the installer takes
-`ROSTER_VERSION=vX.Y.Z` to pin one and `ROSTER_BINDIR=…` to change the
-destination.
-
-## Use
-
-```sh
-roster                # start with the launcher, add agents as you go
-roster claude claude  # or launch several Claude Code agents up front
-```
-
-The sidebar shows who's blocked / working / done / idle and why. Keys are
-tmux-flavored with a `ctrl-b` prefix — `roster --help` lists them. The
-sidebar sits on the left by default (`--sidebar right` to flip it). Agent
-detection rules live in
-[`crates/roster-detect/agents.toml`](crates/roster-detect/agents.toml) and can
-be overridden at `~/.config/roster/agents.toml`.
-
-Detection is tuned against **Claude Code 2.1** and verified against live
-sessions. To customize — or add your own agent for a pane — start from the
-built-in config:
-
-```sh
-roster --print-config > ~/.config/roster/agents.toml
-```
-
-**Launching with flags.** Set `launch_command` on an agent to control
-exactly what the launcher runs — flags included:
-
-```toml
-[claude-code]
-match_command = ["claude"]
-launch_command = "claude --dangerously-skip-permissions"
-```
-
-For a one-off, press **tab** in the launcher: it expands the selected
-agent's command into the input so you can edit flags before hitting enter.
-(Anything you type in the launcher runs verbatim, so `claude --continue`
-always works too.)
-
-## Building from source
+two toolchains share the repo and never mix: Cargo owns `crates/`, Bun owns the
+`website/` landing page, bridged only by a build-time JSON artifact.
 
 ```sh
 cargo build
 cargo test
 ```
+
+architecture docs are in [`docs/`](docs); start with
+[`docs/00-architecture.md`](docs/00-architecture.md).
+
+## license
+
+[GPL-3.0-only](LICENSE). free to use, study, share, and modify. any distributed
+derivative stays under the GPL.
