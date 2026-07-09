@@ -15,9 +15,9 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::{Duration, Instant};
 
-use regex::Regex;
 use roster_core::{AgentState, Grid, Telemetry};
 
+use crate::config::AgentConfig;
 use crate::detector::StateReading;
 
 /// How many consecutive readings a new state needs before it is committed.
@@ -37,22 +37,44 @@ const DEFAULT_BLOCKED_COMMIT_AFTER: u32 = 1;
 const TELEMETRY_STALE_AFTER: Duration = Duration::from_secs(30);
 
 /// Hash of the grid rows that count as agent output. Rows matching any
-/// `ignore` pattern are excluded: the composer echoing keystrokes and
-/// status chrome toggling change the screen without the agent doing
+/// `activity.ignore` pattern are excluded: the composer echoing keystrokes
+/// and status chrome toggling change the screen without the agent doing
 /// anything, and counting those rows as activity reads a human typing an
 /// unsent prompt as working. Blank rows are excluded too — chrome that
 /// vanishes leaves a blank behind, and a blank is not readable content.
-/// The remaining rows hash with their row index, so real content merely
-/// *moving* (output scrolling, a blank line pushed into the middle) still
-/// registers as activity.
-fn activity_fingerprint(grid: &Grid, ignore: &[Regex]) -> u64 {
+/// When `activity.ignore_region` is set, the rows from the bottom-most
+/// start match through the first following end match (the composer box:
+/// prompt row, wrapped continuation rows, closing border) are excluded
+/// wholesale — but rows *below* the region (a background-task tray) still
+/// count. The remaining rows hash with their row index, so real content
+/// merely *moving* (output scrolling, a blank line pushed into the middle)
+/// still registers as activity.
+fn activity_fingerprint(grid: &Grid, config: &AgentConfig) -> u64 {
+    let lines = grid.lines();
+    let region = config
+        .activity_ignore_region
+        .as_ref()
+        .and_then(|(start, end)| {
+            let first = lines.iter().rposition(|line| start.is_match(line))?;
+            let last = lines[first + 1..]
+                .iter()
+                .position(|line| end.is_match(line))
+                .map(|offset| first + 1 + offset)
+                .unwrap_or(lines.len() - 1);
+            Some(first..=last)
+        });
     let mut hasher = DefaultHasher::new();
-    for (row, line) in grid
-        .lines()
+    for (row, line) in lines
         .iter()
         .enumerate()
+        .filter(|(row, _)| !region.as_ref().is_some_and(|region| region.contains(row)))
         .filter(|(_, line)| !line.is_empty())
-        .filter(|(_, line)| !ignore.iter().any(|pattern| pattern.is_match(line)))
+        .filter(|(_, line)| {
+            !config
+                .activity_ignore
+                .iter()
+                .any(|pattern| pattern.is_match(line))
+        })
     {
         (row, line).hash(&mut hasher);
     }
@@ -73,11 +95,11 @@ impl History {
     }
 
     /// Record a frame: the raw reading it produced and the grid it was read
-    /// from. `ignore` is the agent's `activity.ignore` set; pass the same
-    /// set to [`History::content_changed`], or the fingerprints are not
-    /// comparable.
-    pub fn record(&mut self, state: AgentState, grid: &Grid, ignore: &[Regex], at: Instant) {
-        self.last_fingerprint = Some(activity_fingerprint(grid, ignore));
+    /// from. `config` supplies the agent's activity filters; pass the same
+    /// agent's config to [`History::content_changed`], or the fingerprints
+    /// are not comparable.
+    pub fn record(&mut self, state: AgentState, grid: &Grid, config: &AgentConfig, at: Instant) {
+        self.last_fingerprint = Some(activity_fingerprint(grid, config));
         if state == AgentState::Working {
             self.last_activity_at = Some(at);
         }
@@ -85,11 +107,11 @@ impl History {
 
     /// Whether `grid`'s activity rows differ from the previously recorded
     /// frame's. `None` until a frame has been recorded — a first frame is
-    /// not evidence of activity. `ignore` must match what
-    /// [`History::record`] was given.
-    pub fn content_changed(&self, grid: &Grid, ignore: &[Regex]) -> Option<bool> {
+    /// not evidence of activity. `config` must be the same agent's config
+    /// that [`History::record`] was given.
+    pub fn content_changed(&self, grid: &Grid, config: &AgentConfig) -> Option<bool> {
         self.last_fingerprint
-            .map(|prev| prev != activity_fingerprint(grid, ignore))
+            .map(|prev| prev != activity_fingerprint(grid, config))
     }
 
     /// When the agent last produced a `working` reading.
@@ -215,7 +237,7 @@ impl PaneTracker {
     ) -> StateReading {
         let raw = detector.classify(kind, grid, &self.history, at);
         self.history
-            .record(raw.state, grid, &detector.agent(kind).activity_ignore, at);
+            .record(raw.state, grid, detector.agent(kind), at);
         let mut reading = self.debouncer.observe(raw);
         // A payload past the staleness window stops being asserted instead
         // of freezing its last numbers; a held one supersedes the scrape's
@@ -280,15 +302,29 @@ mod tests {
         }
     }
 
+    /// A one-agent config compiled from the given `agents.toml` body, for
+    /// driving [`History`] with specific activity filters.
+    fn agent_config(toml: &str) -> AgentConfig {
+        crate::config::parse_agents(toml)
+            .expect("test agents.toml parses")
+            .remove(0)
+    }
+
+    /// A config with no activity filters at all — every row counts.
+    fn bare_config() -> AgentConfig {
+        agent_config("[bare]\nmatch_command = [\"bare\"]")
+    }
+
     #[test]
     fn history_reports_content_changes() {
+        let bare = bare_config();
         let mut history = History::new();
         let a = Grid::from_text("one");
         let b = Grid::from_text("two");
-        assert_eq!(history.content_changed(&a, &[]), None);
-        history.record(AgentState::Idle, &a, &[], Instant::now());
-        assert_eq!(history.content_changed(&a, &[]), Some(false));
-        assert_eq!(history.content_changed(&b, &[]), Some(true));
+        assert_eq!(history.content_changed(&a, &bare), None);
+        history.record(AgentState::Idle, &a, &bare, Instant::now());
+        assert_eq!(history.content_changed(&a, &bare), Some(false));
+        assert_eq!(history.content_changed(&b, &bare), Some(true));
     }
 
     #[test]
@@ -296,14 +332,55 @@ mod tests {
         // The composer row echoes keystrokes; excluding it from the
         // fingerprint keeps a human typing from reading as activity, while
         // a change on any other row still registers.
-        let ignore = [Regex::new("^❯").expect("pattern compiles")];
+        let config = agent_config(
+            r#"
+            [ta]
+            match_command = ["ta"]
+            activity.ignore = ['^❯']
+            "#,
+        );
         let mut history = History::new();
         let resting = Grid::from_text("output\n❯");
         let typing = Grid::from_text("output\n❯ how do I");
         let more_output = Grid::from_text("more output\n❯ how do I");
-        history.record(AgentState::Idle, &resting, &ignore, Instant::now());
-        assert_eq!(history.content_changed(&typing, &ignore), Some(false));
-        assert_eq!(history.content_changed(&more_output, &ignore), Some(true));
+        history.record(AgentState::Idle, &resting, &config, Instant::now());
+        assert_eq!(history.content_changed(&typing, &config), Some(false));
+        assert_eq!(history.content_changed(&more_output, &config), Some(true));
+    }
+
+    #[test]
+    fn composer_region_rows_do_not_count_as_change() {
+        // ignore_region excludes the bottom-most prompt row through the
+        // next border row: wrapped continuation rows of an unsent prompt
+        // change with every keystroke but carry no prompt glyph of their
+        // own. Content above the region still counts, a prompt row higher
+        // up (a transcript echo) does not anchor the region, and rows
+        // *below* the border (a background-task tray) still count.
+        let config = agent_config(
+            r#"
+            [ta]
+            match_command = ["ta"]
+            activity.ignore_region = ['^❯', '^─+$']
+            "#,
+        );
+        let grid = |above: &str, wrapped: &str, tray: &str| {
+            Grid::from_text(&format!(
+                "❯ old echo\n{above}\n❯ typing a very long\n{wrapped}\n─────\n{tray}"
+            ))
+        };
+        let mut history = History::new();
+        history.record(
+            AgentState::Idle,
+            &grid("output", "  wrapped", "tray idle"),
+            &config,
+            Instant::now(),
+        );
+        let typing_more = grid("output", "  wrapped more", "tray idle");
+        assert_eq!(history.content_changed(&typing_more, &config), Some(false));
+        let new_output = grid("fresh", "  wrapped", "tray idle");
+        assert_eq!(history.content_changed(&new_output, &config), Some(true));
+        let tray_tick = grid("output", "  wrapped", "tray BUSY");
+        assert_eq!(history.content_changed(&tray_tick, &config), Some(true));
     }
 
     #[test]
@@ -311,26 +388,33 @@ mod tests {
         // Rows hash with their position: the same non-blank lines shifted
         // down a row (output scrolling, a blank pushed into the middle) is
         // real screen movement, not a no-op.
+        let bare = bare_config();
         let mut history = History::new();
         let before = Grid::from_text("phase one\n\nphase two");
         let shifted = Grid::from_text("\nphase one\n\nphase two");
-        history.record(AgentState::Idle, &before, &[], Instant::now());
-        assert_eq!(history.content_changed(&shifted, &[]), Some(true));
+        history.record(AgentState::Idle, &before, &bare, Instant::now());
+        assert_eq!(history.content_changed(&shifted, &bare), Some(true));
     }
 
     #[test]
     fn history_records_activity_only_for_working() {
+        let bare = bare_config();
         let mut history = History::new();
         let grid = Grid::from_text("x");
         let t0 = Instant::now();
-        history.record(AgentState::Blocked, &grid, &[], t0);
+        history.record(AgentState::Blocked, &grid, &bare, t0);
         assert_eq!(history.last_activity_at(), None);
-        history.record(AgentState::Working, &grid, &[], t0 + Duration::from_secs(1));
+        history.record(
+            AgentState::Working,
+            &grid,
+            &bare,
+            t0 + Duration::from_secs(1),
+        );
         assert_eq!(
             history.last_activity_at(),
             Some(t0 + Duration::from_secs(1))
         );
-        history.record(AgentState::Idle, &grid, &[], t0 + Duration::from_secs(2));
+        history.record(AgentState::Idle, &grid, &bare, t0 + Duration::from_secs(2));
         assert_eq!(
             history.last_activity_at(),
             Some(t0 + Duration::from_secs(1))

@@ -42,10 +42,12 @@ blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d+\. Yes']
 # (✻ ✢ ✶ live in 2.1.20x, ✳ from earlier flourish captures) and nothing
 # looser: a bare "*" or "·" would match markdown bullets in settled
 # responses ("* Loading…"), and a static false working never clears. The
-# braille spinner ("⠹ Reticulating…") stays out for the same reason — every
-# braille capture so far came with an interrupt hint that already matches.
-# The "…" right after the verb keeps the completion flourish
-# ("✻ Brewed for 5s") and response lines from matching.
+# braille livery ("⠹ Reticulating…") stays out for the same reason — its
+# glyphs are the stock cli-spinner set, so settled output quoting any
+# npm-style tool (or this repo's own fixtures) would pin a false working,
+# while every braille capture so far came with an interrupt hint that
+# already matches. The "…" right after the verb keeps the completion
+# flourish ("✻ Brewed for 5s") and response lines from matching.
 working = ['esc to interrupt', '(?i)ctrl\+c to interrupt', 'Waiting for \d+ background agent', '^\s*[✻✢✳✶] \w+…']
 idle    = ['^❯']                                              # input prompt line
 reason.blocked = "matched_line"
@@ -59,12 +61,24 @@ reason.working = "last_nonempty"
 reason.ignore = ['^\s*●', 'to interrupt', '\? for shortcuts', '^\s*⎿', '^\s*❯', '^\s*▎', '^\s*[✻✢✳✶*] ?\w+ for \d+s$', '^\s*⏸', '^\s*Enter to view']
 # Rows excluded from the change fingerprint (the "screen moved" working
 # signal): the composer/prompt rows echo every keystroke of an unsent
-# prompt and rotate their placeholder suggestion, and the "● model ·
-# /effort" status chip toggles with focus — none of that is the agent
-# doing work. Without this, typing a prompt into an idle pane reads as
-# 🟡 working and stamps fake activity that widens the done window
+# prompt and rotate their placeholder suggestion, the "● model · /effort"
+# status chip toggles with focus, the horizontal rules bounding the
+# composer shift a row when it grows — and the mode/hint/tray-hint lines
+# ("⏸ manual mode on", "? for shortcuts", "Enter to view · x to stop")
+# shift with it while their text never carries progress. None of that is
+# the agent doing work; without this, typing a prompt into an idle pane
+# reads as 🟡 working and stamps fake activity that widens the done window
 # (issue #1). The chip pattern requires leading indentation: the chip is
-# right-aligned, while genuine "● Task(…)" output rows sit at column 0
-# and must keep counting as activity.
-activity.ignore = ['^\s*❯', '^\s+●']
+# right-aligned, while genuine "● Task(…)" output rows sit at column 0 and
+# must keep counting as activity — including the background-task tray's
+# progress row below the composer.
+activity.ignore = ['^\s*❯', '^\s+●', '^─+$', '^\s*⏸', '\? for shortcuts', 'Enter to view']
+# The composer box proper: the bottom-most prompt row through the next
+# rule — wrapped continuation rows of a long unsent prompt live in
+# between, carry no ❯ of their own, and change on every keystroke, so a
+# per-row pattern can't exclude them; the bottom-most ❯ anchors the region
+# instead. Transcript echoes ("❯ old prompt") higher up never anchor it
+# (the live composer row always sits below them), and rows *below* the box
+# — the background-task tray — keep counting as activity.
+activity.ignore_region = ['^\s*❯', '^─+$']
 done.after_activity_secs = 8

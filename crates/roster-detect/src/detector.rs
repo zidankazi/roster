@@ -125,7 +125,7 @@ impl Detector {
                 reason_from(config.reason_working, &found, &lines, &config.reason_ignore),
             );
         }
-        if history.content_changed(grid, &config.activity_ignore) == Some(true) {
+        if history.content_changed(grid, config) == Some(true) {
             return scraped(
                 AgentState::Working,
                 last_worded_line(&lines, &config.reason_ignore),
@@ -305,12 +305,7 @@ mod tests {
         let t0 = Instant::now();
         let mut history = History::new();
         let before = Grid::from_text("compiling roster-core v0.1.0");
-        history.record(
-            AgentState::Idle,
-            &before,
-            &detector.agent(kind).activity_ignore,
-            t0,
-        );
+        history.record(AgentState::Idle, &before, detector.agent(kind), t0);
         let after = Grid::from_text("compiling roster-core v0.1.0\ncompiling roster-detect v0.1.0");
         let reading = detector.classify(kind, &after, &history, t0);
         assert_eq!(reading.state, AgentState::Working);
@@ -327,12 +322,7 @@ mod tests {
         let t0 = Instant::now();
         let mut history = History::new();
         let grid = Grid::from_text("plain output\nnothing recognizable");
-        history.record(
-            AgentState::Idle,
-            &grid,
-            &detector.agent(kind).activity_ignore,
-            t0,
-        );
+        history.record(AgentState::Idle, &grid, detector.agent(kind), t0);
         let reading = detector.classify(kind, &grid, &history, t0);
         assert_eq!(reading.state, AgentState::Idle);
         assert_eq!(reading.reason, None);
@@ -378,11 +368,36 @@ mod tests {
         let kind = detector.identify("claude").unwrap();
         let t0 = Instant::now();
         let mut history = History::new();
-        let ignore = &detector.agent(kind).activity_ignore;
         let before = Grid::from_text("● Explore(map the sidebar)\n❯");
         let after = Grid::from_text("● Explore(map the sidebar, done)\n❯");
-        history.record(AgentState::Idle, &before, ignore, t0);
+        history.record(AgentState::Idle, &before, detector.agent(kind), t0);
         let reading = detector.classify(kind, &after, &history, t0);
+        assert_eq!(reading.state, AgentState::Working);
+    }
+
+    #[test]
+    fn tray_progress_below_the_composer_counts_as_activity() {
+        // The background-task tray sits BELOW the composer box (layout as
+        // captured in working_background_wait.txt): the ignore_region must
+        // end at the box's closing rule so the tray's ticking progress row
+        // keeps feeding the change fingerprint. Only the composer is the
+        // human's surface; the tray is the agent's.
+        let detector = Detector::builtin();
+        let kind = detector.identify("claude").unwrap();
+        let t0 = Instant::now();
+        let mut history = History::new();
+        let screen = |uses: u32| {
+            Grid::from_text(&format!(
+                "⏺ kicked off the mapping\n\
+                 ────────\n\
+                 ❯\n\
+                 ────────\n\
+                 \x20\x20Enter to view · x to stop\n\
+                 ● Explore(mapping · {uses} tool uses)"
+            ))
+        };
+        history.record(AgentState::Idle, &screen(3), detector.agent(kind), t0);
+        let reading = detector.classify(kind, &screen(4), &history, t0);
         assert_eq!(reading.state, AgentState::Working);
     }
 

@@ -33,7 +33,7 @@ For every agent pane, detection produces a `StateReading { state, reason, teleme
 4. Extract the reason from the matched region (e.g. the captured prompt line).
 5. Pass the raw reading to the debouncer (below) before it becomes the committed state.
 
-When no `blocked`/`working` pattern matches, a change in the grid since the last frame still reads as `working` — output is moving even if nothing recognizable is on screen. That change fingerprint deliberately skips blank rows and any row matching the agent's `activity.ignore` patterns: the composer echoes every keystroke of an *unsent* prompt and status chrome toggles on its own, and none of that is the agent doing work. Without the exclusion, a human typing reads as 🟡 working and stamps fake activity into the done-window bookkeeping.
+When no `blocked`/`working` pattern matches, a change in the grid since the last frame still reads as `working` — output is moving even if nothing recognizable is on screen. That change fingerprint deliberately skips blank rows, any row matching the agent's `activity.ignore` patterns, and — when `activity.ignore_region` is set — the composer box: the bottom-most row matching the region's start pattern through the next row matching its end pattern (wrapped continuation rows of a long unsent prompt carry no prompt glyph of their own). Rows *below* the box, like the background-task tray, still count. The composer echoes every keystroke of an *unsent* prompt and status chrome toggles on its own, and none of that is the agent doing work. Without the exclusions, a human typing reads as 🟡 working and stamps fake activity into the done-window bookkeeping.
 
 `history` carries the last few readings + timestamps, needed for the done/idle recency call and for debouncing.
 
@@ -61,7 +61,9 @@ idle    = ['│\s*>\s*$']                                     # empty prompt lin
 reason.blocked = "matched_line"   # use the line that matched `blocked`
 reason.working = "last_nonempty"  # last non-empty output line
 # rows whose changes are not agent activity (composer echo, status chrome)
-activity.ignore = ['^\s*❯', '^\s+●']
+activity.ignore = ['^\s*❯', '^\s+●', '^─+$']
+# the composer box: bottom-most prompt row through its closing border
+activity.ignore_region = ['^\s*❯', '^─+$']
 done.after_activity_secs = 8      # idle prompt within 8s of activity => done
 ```
 

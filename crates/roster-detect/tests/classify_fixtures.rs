@@ -34,12 +34,7 @@ fn classify_after_activity(agent: &str, command: &str, name: &str, secs_ago: u64
     let grid = fixture(agent, name);
     let t0 = Instant::now();
     let mut history = History::new();
-    history.record(
-        AgentState::Working,
-        &grid,
-        &detector.agent(kind).activity_ignore,
-        t0,
-    );
+    history.record(AgentState::Working, &grid, detector.agent(kind), t0);
     detector.classify(kind, &grid, &history, t0 + Duration::from_secs(secs_ago))
 }
 
@@ -216,6 +211,51 @@ fn typing_an_unsent_prompt_stays_idle() {
         assert_eq!(seen.state, AgentState::Idle, "at {secs}s");
         assert_eq!(seen.reason, None, "at {secs}s");
     }
+}
+
+/// The wrapped-composer variant of issue #1, frame by frame from one live
+/// capture: a prompt long enough to wrap renders continuation rows with no
+/// ❯ of their own, and growing it shifts the composer's bounding rules and
+/// the status chip. `activity.ignore_region` excludes the whole composer
+/// box, so the pane stays idle through all of it — while typing, while the
+/// box grows, and after the typing pauses. Known residue: on a pane whose
+/// transcript fills the screen, the box growing a row scrolls the
+/// transcript itself, and that shift is indistinguishable from output — a
+/// single changed frame per wrap boundary (never enough consecutive frames
+/// to commit working, but it can stamp activity). Only the hook bridge
+/// (docs/05) can see past the screen there.
+#[test]
+fn typing_a_wrapped_prompt_stays_idle() {
+    let detector = Detector::builtin();
+    let kind = detector.identify("claude").expect("claude identifies");
+    let mut tracker = PaneTracker::new();
+    let t0 = Instant::now();
+    let at = |secs: u64| t0 + Duration::from_secs(secs);
+
+    let wrapped = fixture("claude-code", "composing_wrapped_prompt.txt");
+    let grown = fixture("claude-code", "composing_wrapped_grown.txt");
+
+    let frames: [(u64, &Grid); 5] = [
+        (0, &wrapped),
+        (1, &grown),
+        (2, &grown),
+        (3, &grown),
+        (10, &grown),
+    ];
+    for (secs, grid) in frames {
+        let seen = tracker.update(&detector, kind, grid, at(secs));
+        assert_eq!(seen.state, AgentState::Idle, "at {secs}s");
+        assert_eq!(seen.reason, None, "at {secs}s");
+    }
+}
+
+#[test]
+fn claude_wrapped_composing_reads_idle() {
+    assert_reading(
+        classify_fresh("claude-code", "claude", "composing_wrapped_prompt.txt"),
+        AgentState::Idle,
+        None,
+    );
 }
 
 /// The follow-up on issue #1: submit, work, finish — the settled screen

@@ -72,6 +72,14 @@ pub struct AgentConfig {
     /// agent doing anything — the composer echoing keystrokes, a status bar
     /// toggling — must not count as activity.
     pub activity_ignore: Vec<Regex>,
+    /// When set, the rows from the bottom-most match of the first pattern
+    /// through the first following match of the second (inclusive) are
+    /// excluded from the change fingerprint. This is how a multi-row
+    /// composer box is expressed: wrapped continuation rows of an unsent
+    /// prompt carry no prompt glyph of their own, but they always sit
+    /// between the prompt row and the box's closing border. Rows below the
+    /// region (e.g. a background-task tray) still count.
+    pub activity_ignore_region: Option<(Regex, Regex)>,
     /// An idle prompt appearing within this window after activity reads as
     /// `done` rather than `idle`.
     pub done_after_activity: Duration,
@@ -162,6 +170,8 @@ struct RawReason {
 struct RawActivity {
     #[serde(default)]
     ignore: Vec<String>,
+    #[serde(default)]
+    ignore_region: Option<(String, String)>,
 }
 
 #[derive(Deserialize, Default)]
@@ -194,6 +204,20 @@ fn compile_agent(name: String, raw: RawAgent) -> Result<AgentConfig, ConfigError
         idle: compile_patterns(&name, raw.idle)?,
         reason_ignore: compile_patterns(&name, raw.reason.ignore)?,
         activity_ignore: compile_patterns(&name, raw.activity.ignore)?,
+        activity_ignore_region: raw
+            .activity
+            .ignore_region
+            .map(|(start, end)| {
+                let compile = |pattern: String| {
+                    Regex::new(&pattern).map_err(|error| ConfigError::Pattern {
+                        agent: name.clone(),
+                        pattern,
+                        error,
+                    })
+                };
+                Ok((compile(start)?, compile(end)?))
+            })
+            .transpose()?,
         match_command: raw.match_command,
         launch_command: raw.launch_command,
         reason_blocked,
