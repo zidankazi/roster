@@ -1,8 +1,8 @@
 //! The agent launcher: a centered modal for starting agents at runtime.
 //!
-//! Lists the configured agents plus a shell, filters as you type, and falls
-//! back to running whatever you typed — so known agents are two keystrokes
-//! and anything else is still one command line away. Selection produces a
+//! Lists the configured agents, filters as you type, and falls back to
+//! running whatever you typed — so known agents are two keystrokes and
+//! anything else is still one command line away. Selection produces a
 //! [`Message`]-style intent; the binary owns the actual spawn.
 
 use ratatui::buffer::Buffer;
@@ -16,7 +16,7 @@ use crate::style::{muted, ACCENT};
 /// One launchable item: a display name and the command it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchItem {
-    /// Display name, e.g. `claude-code` or `shell`.
+    /// Display name, e.g. `claude-code`.
     pub name: String,
     /// The shell command to run.
     pub command: String,
@@ -24,9 +24,10 @@ pub struct LaunchItem {
 
 /// Build the launcher's item list: every configured agent — started with
 /// its `launch_command` when the config sets one (flags included), its
-/// first `match_command` binary otherwise — plus the user's shell.
-pub fn launch_items(detector: &Detector, shell: &str) -> Vec<LaunchItem> {
-    let mut items: Vec<LaunchItem> = detector
+/// first `match_command` binary otherwise. No plain-shell row: a shell can't
+/// own a workspace, so it isn't offered here (free-typed commands still run).
+pub fn launch_items(detector: &Detector) -> Vec<LaunchItem> {
+    detector
         .agents()
         .filter_map(|agent| {
             let command = agent
@@ -38,12 +39,7 @@ pub fn launch_items(detector: &Detector, shell: &str) -> Vec<LaunchItem> {
                 command,
             })
         })
-        .collect();
-    items.push(LaunchItem {
-        name: "shell".to_string(),
-        command: shell.to_string(),
-    });
-    items
+        .collect()
 }
 
 /// Launcher input state: the typed filter and the selected row.
@@ -476,16 +472,15 @@ mod tests {
     use super::*;
 
     fn items() -> Vec<LaunchItem> {
-        launch_items(&Detector::builtin(), "/bin/zsh")
+        launch_items(&Detector::builtin())
     }
 
     #[test]
-    fn items_cover_agents_and_shell() {
+    fn launch_items_lists_agents_only() {
         let items = items();
         let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
-        assert_eq!(names, vec!["claude-code", "shell"]);
+        assert_eq!(names, vec!["claude-code"], "no plain-shell row");
         assert_eq!(items[0].command, "claude");
-        assert_eq!(items[1].command, "/bin/zsh");
     }
 
     #[test]
@@ -501,7 +496,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let items = launch_items(&detector, "/bin/zsh");
+        let items = launch_items(&detector);
         assert_eq!(items[0].name, "claude-code");
         assert_eq!(items[0].command, "claude --dangerously-skip-permissions");
         assert_eq!(items[1].command, "worker", "no override, bare binary");
@@ -566,7 +561,17 @@ mod tests {
 
     #[test]
     fn selection_wraps_and_backspace_refilters() {
-        let items = items();
+        let detector = Detector::from_toml(
+            r#"
+            [claude-code]
+            match_command = ["claude"]
+
+            [worker]
+            match_command = ["worker"]
+            "#,
+        )
+        .unwrap();
+        let items = launch_items(&detector);
         let mut state = LauncherState::new();
         state.select_prev(&items);
         assert_eq!(state.selected(&items), Some(1));

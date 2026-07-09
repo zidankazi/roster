@@ -236,9 +236,9 @@ pub struct App {
     last_area: Rect,
     /// A grabbed split divider, in pane-local coordinates, while dragging.
     dragging: Option<(u16, u16)>,
-    /// The bare-start shell pane, until the user actually uses it. It only
-    /// exists as a backdrop for the launcher, so the first launch replaces
-    /// it instead of splitting it.
+    /// The bare-start shell pane: a backdrop for the launcher only. The
+    /// first launch replaces it unconditionally, so a plain shell never
+    /// survives as its own workspace — it is scenery, not a tenant.
     placeholder: Option<PaneId>,
     /// Attachment counter feeding [`PaneRuntime::generation`].
     next_generation: u64,
@@ -289,7 +289,7 @@ impl App {
         let (output_tx, output_rx) = mpsc::channel();
         let auto_approve: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
         let hook_sock = start_hook_listener(output_tx.clone(), Arc::clone(&auto_approve));
-        let launchables = launch_items(&detector, &default_shell());
+        let launchables = launch_items(&detector);
         let mut app = App {
             session: Session::new(),
             runtimes: HashMap::new(),
@@ -460,7 +460,7 @@ impl App {
         });
 
         let (output_tx, output_rx) = mpsc::channel();
-        let launchables = launch_items(&detector, &default_shell());
+        let launchables = launch_items(&detector);
         let mut app = App {
             session,
             runtimes: HashMap::new(),
@@ -1783,16 +1783,17 @@ impl App {
         pointer_for(hit)
     }
 
-    /// Start `command` in its own fresh window. A bare start's untouched
-    /// placeholder shell is replaced outright — the user asked for an
-    /// agent, not an extra terminal.
+    /// Start `command` in its own fresh window. The bare-start backdrop
+    /// shell, if one exists, is replaced by this first launch regardless of
+    /// focus or whether the user typed into it — a plain shell never
+    /// survives as its own workspace.
     fn launch(&mut self, command: &str) {
         // In a session the server spawns; the pane lands when PaneOpened
-        // comes back, replacing an untouched placeholder if focused.
+        // comes back, replacing the backdrop placeholder if there is one.
         if self.remote.is_some() {
             let placement = match self.placeholder {
-                Some(id) if self.session.focused() == Some(id) => Placement::Replace(id),
-                _ => Placement::Window,
+                Some(id) => Placement::Replace(id),
+                None => Placement::Window,
             };
             if let Some(remote) = &mut self.remote {
                 remote.pending.push_back(placement);
@@ -1803,20 +1804,18 @@ impl App {
             return;
         }
         if let Some(id) = self.placeholder.take() {
-            if self.session.focused() == Some(id) {
-                // Spawn first: a failed launch keeps the shell running.
-                let old = self.runtimes.remove(&id);
-                match self.attach(id, command) {
-                    Ok(()) => {} // dropping the old runtime kills the shell
-                    Err(error) => {
-                        if let Some(rt) = old {
-                            self.runtimes.insert(id, rt);
-                        }
-                        self.toast(format!("launch failed: {error}"), ToastLevel::Error);
+            // Spawn first: a failed launch keeps the shell running.
+            let old = self.runtimes.remove(&id);
+            match self.attach(id, command) {
+                Ok(()) => {} // dropping the old runtime kills the shell
+                Err(error) => {
+                    if let Some(rt) = old {
+                        self.runtimes.insert(id, rt);
                     }
+                    self.toast(format!("launch failed: {error}"), ToastLevel::Error);
                 }
-                return;
             }
+            return;
         }
         let id = self.session.new_window();
         if let Err(error) = self.attach(id, command) {
@@ -1909,10 +1908,6 @@ impl App {
         let Some(id) = self.session.focused() else {
             return;
         };
-        // Pasting into the placeholder shell claims it, like typing does.
-        if self.placeholder == Some(id) {
-            self.placeholder = None;
-        }
         let Some(rt) = self.runtimes.get_mut(&id) else {
             return;
         };
@@ -1939,10 +1934,6 @@ impl App {
         let Some(id) = self.session.focused() else {
             return;
         };
-        // Typing into the placeholder shell claims it as a real pane.
-        if self.placeholder == Some(id) {
-            self.placeholder = None;
-        }
         // Typing drops the selection and snaps back to live output.
         self.selection = None;
         let Some(rt) = self.runtimes.get_mut(&id) else {

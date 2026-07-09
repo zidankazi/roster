@@ -349,7 +349,7 @@ fn launcher_modal_overlays_the_frame() {
     let detector = Detector::builtin();
     let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
-    let items = launch_items(&detector, "/bin/zsh");
+    let items = launch_items(&detector);
     let state = LauncherState::new();
     let scrolled = HashMap::new();
     let view = View {
@@ -381,7 +381,6 @@ fn launcher_modal_overlays_the_frame() {
         .collect();
     assert!(all.contains("new agent"), "missing modal title:\n{all}");
     assert!(all.contains("claude-code"), "missing item:\n{all}");
-    assert!(all.contains("shell"), "missing shell item:\n{all}");
 }
 
 #[test]
@@ -393,7 +392,7 @@ fn welcome_screen_shows_wordmark_picker_and_command_hint() {
 
     let detector = Detector::builtin();
     let exited = HashMap::new();
-    let items = launch_items(&detector, "/bin/zsh");
+    let items = launch_items(&detector);
     let state = LauncherState::new();
     let scrolled = HashMap::new();
     let view = View {
@@ -449,7 +448,7 @@ fn welcome_wordmark_reveals_with_the_tick() {
     grids.insert(only, Grid::from_text(""));
     let detector = Detector::builtin();
     let exited = HashMap::new();
-    let items = launch_items(&detector, "/bin/zsh");
+    let items = launch_items(&detector);
     let state = LauncherState::new();
 
     let draw = |tick: u64| -> String {

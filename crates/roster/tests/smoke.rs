@@ -271,10 +271,10 @@ fn mouse_clicks_focus_launch_and_jump() {
     );
 
     // The sidebar's pinned + new agent button (bottom sidebar row, 0-based
-    // y 28 → 1-based 29) opens the launcher; click the claude-code row to
-    // launch it. Modal at 120x30: width 44 → x 38..82; height 8 → y 7..15
-    // (0-based); items start at y 9, claude-code is the second row → y 10
-    // → 1-based 11.
+    // y 28 → 1-based 29) opens the launcher; click the sole claude-code row
+    // to launch it. Modal at 120x30: width 44 → x 38..82; height 5 → y 8..13
+    // (0-based); the input sits at y 9, the claude-code row at y 10 → 1-based
+    // 11.
     pty.write(&click(5, 29)).expect("click + new agent");
     assert!(
         drain_while(&mut screen, "new agent", true, &rx),
@@ -449,8 +449,11 @@ fn fake_agent_dir() -> PathBuf {
     dir
 }
 
-#[test]
-fn bare_start_first_launch_replaces_the_placeholder_shell() {
+/// A bare `roster` at 120x30 with a fake `claude` on `PATH` and the
+/// placeholder shell pinned to `/bin/sh` (host-independent), drained until
+/// the welcome screen's run-a-command hint is up. Returns the fake-agent
+/// dir (caller removes it), the pty, its pump channel, and the screen.
+fn bare_start() -> (PathBuf, Pty, mpsc::Receiver<Vec<u8>>, Screen) {
     let dir = fake_agent_dir();
     let path = format!(
         "{}:{}",
@@ -458,22 +461,24 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
         std::env::var("PATH").unwrap_or_default()
     );
     std::env::set_var("PATH", &path);
-    // Pin the placeholder shell so the test is host-independent.
     std::env::set_var("SHELL", "/bin/sh");
 
     let (cols, rows) = (120u16, 30u16);
-    let mut pty = Pty::spawn(&format!("'{}'", bin()), cols, rows).expect("spawn roster");
+    let pty = Pty::spawn(&format!("'{}'", bin()), cols, rows).expect("spawn roster");
     let rx = pump(&pty);
-
     let mut screen = Screen::new(cols, rows);
-
-    // Bare `roster` opens the welcome screen: wordmark + picker + the
-    // run-a-command hint.
     assert!(
         drain_while(&mut screen, "run a command", true, &rx),
         "welcome screen never appeared:\n{}",
         screen.grid().lines().join("\n")
     );
+    (dir, pty, rx, screen)
+}
+
+#[test]
+fn bare_start_first_launch_replaces_the_placeholder_shell() {
+    let (dir, mut pty, rx, mut screen) = bare_start();
+
     // The wordmark sweeps in over ~1s; wait for its leading glyphs.
     assert!(
         drain_while(&mut screen, "7Mb,od8", true, &rx),
@@ -500,6 +505,66 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
         "placeholder shell still titled:\n{}",
         lines.join("\n")
     );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn typing_into_the_backdrop_shell_does_not_save_it() {
+    let (dir, mut pty, rx, mut screen) = bare_start();
+
+    // Dismiss the launcher and let it flush as a lone Esc (a following byte
+    // would coalesce into an Alt-chord) before typing into the backdrop
+    // shell. Typing used to "claim" the shell into a durable pane; it must
+    // not anymore, so the launch below still replaces it rather than leaving
+    // it beside the agent.
+    pty.write(b"\x1b").expect("close launcher");
+    assert!(
+        drain_while(&mut screen, "run a command", false, &rx),
+        "launcher never closed:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    // No trailing newline: the marker echoes on the shell's input line
+    // without running a command, so the shell stays alive as the backdrop.
+    pty.write(b"roster-mark").expect("type into shell");
+    assert!(
+        drain_while(&mut screen, "roster-mark", true, &rx),
+        "backdrop shell never echoed the typed marker:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Reopen the launcher and launch the agent.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"c").expect("open launcher");
+    assert!(
+        drain_while(&mut screen, "7Mb,od8", true, &rx),
+        "launcher never reopened:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    pty.write(b"cla").expect("filter");
+    pty.write(b"\r").expect("launch");
+    assert!(
+        drain_while(&mut screen, "blocked · Do y", true, &rx),
+        "launched agent never showed blocked:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    let lines = screen.grid().lines();
+    // One window only: a `⧉` workspace tag renders only with more than one
+    // window, so its absence proves the typed-into shell did not survive as
+    // its own workspace. A content row also holds just the single sidebar
+    // rule — a stray split would add an interior separator.
+    assert!(
+        !lines.iter().any(|l| l.contains('⧉')),
+        "a stray shell workspace survived (⧉ tag present):\n{}",
+        lines.join("\n")
+    );
+    let rules = lines[5].matches('│').count();
+    assert_eq!(rules, 1, "expected one rule, screen:\n{}", lines.join("\n"));
 
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"q").expect("quit");

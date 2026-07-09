@@ -161,7 +161,7 @@ What that unlocks, roughly in dependency order:
   Phase 3, widened.
 - **Claude-only, staged** — shells stop being a tenant roster offers, in
   three deliberate steps, each gated on the previous one landing:
-  1. *Shells can't own a workspace* (near-term): the launcher stops offering
+  1. *Shells can't own a workspace* (implemented): the launcher stops offering
      a `shell` row, and the bare-start placeholder is always replaced by the
      first launch. Shells survive only as splits beside an agent.
   2. *Verification moves in-product*: the diff view and ship actions above —
