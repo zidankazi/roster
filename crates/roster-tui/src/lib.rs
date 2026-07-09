@@ -85,9 +85,9 @@ pub struct View<'a> {
     pub sidebar_view: SidebarView,
     /// The agent launcher, when open: its items and input state.
     pub launcher: Option<(&'a [LaunchItem], &'a LauncherState)>,
-    /// The close-confirmation dialog, when open: the threatened agent's
-    /// name and the button under the pointer.
-    pub confirm: Option<(&'a str, Option<ConfirmButton>)>,
+    /// The close-confirmation dialog, when open: the button under the
+    /// pointer, if any.
+    pub confirm: Option<Option<ConfirmButton>>,
     /// Live toasts, newest first.
     pub toasts: &'a [(&'a str, ToastLevel)],
     /// An in-progress or finished text selection: the pane and its two
@@ -521,8 +521,8 @@ pub fn render(frame: &mut Frame, view: &View) {
         frame.render_widget(launcher, area);
     }
 
-    if let Some((name, hover)) = view.confirm {
-        frame.render_widget(Confirm::new(name).hover(hover), area);
+    if let Some(hover) = view.confirm {
+        frame.render_widget(Confirm::new().hover(hover), area);
     }
 
     if let Some((window, input)) = view.rename {

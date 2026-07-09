@@ -726,12 +726,11 @@ impl App {
                 _ => None,
             };
             let confirm = match &self.mode {
-                Mode::ConfirmClose(id) => {
-                    let name = self.pane_name(*id);
+                Mode::ConfirmClose(_) => {
                     let hover = self
                         .last_mouse
                         .and_then(|(x, y)| confirm_button_at(self.last_area, x, y));
-                    Some((name, hover))
+                    Some(hover)
                 }
                 _ => None,
             };
@@ -764,9 +763,7 @@ impl App {
                 side: self.side,
                 sidebar_view: self.sidebar_view,
                 launcher,
-                confirm: confirm
-                    .as_ref()
-                    .map(|(name, hover)| (name.as_str(), *hover)),
+                confirm,
                 toasts: &toast_view,
                 selection: self.selection,
                 scrolled: &scrolled,

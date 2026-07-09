@@ -533,7 +533,7 @@ fn closing_a_live_agent_asks_first() {
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"x").expect("close");
     assert!(
-        drain_while(&mut screen, "still running", true, &rx),
+        drain_while(&mut screen, "no undo", true, &rx),
         "no close confirmation:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -541,7 +541,7 @@ fn closing_a_live_agent_asks_first() {
     // Esc cancels: the prompt clears and the agent pane survives.
     pty.write(b"\x1b").expect("cancel");
     assert!(
-        drain_while(&mut screen, "still running", false, &rx),
+        drain_while(&mut screen, "no undo", false, &rx),
         "confirmation never cleared:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -555,7 +555,7 @@ fn closing_a_live_agent_asks_first() {
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"x").expect("close");
     assert!(
-        drain_while(&mut screen, "still running", true, &rx),
+        drain_while(&mut screen, "no undo", true, &rx),
         "no second confirmation:\n{}",
         screen.grid().lines().join("\n")
     );

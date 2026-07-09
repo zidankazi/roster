@@ -74,16 +74,16 @@ pub fn confirm_button_at(area: Rect, x: u16, y: u16) -> Option<ConfirmButton> {
     }
 }
 
-/// The dialog widget: a message naming the agent, and cancel/close buttons.
-pub struct Confirm<'a> {
-    name: &'a str,
+/// The dialog widget: a fixed confirmation message and cancel/close buttons.
+#[derive(Default)]
+pub struct Confirm {
     hover: Option<ConfirmButton>,
 }
 
-impl<'a> Confirm<'a> {
-    /// A dialog about closing the agent called `name`.
-    pub fn new(name: &'a str) -> Self {
-        Confirm { name, hover: None }
+impl Confirm {
+    /// A fresh close-confirmation dialog with no button hovered.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Which button the pointer is over, for hover highlighting.
@@ -93,7 +93,7 @@ impl<'a> Confirm<'a> {
     }
 }
 
-impl Widget for Confirm<'_> {
+impl Widget for Confirm {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let modal = confirm_rect(area);
         if modal.width < 20 || modal.height < 5 {
@@ -102,12 +102,12 @@ impl Widget for Confirm<'_> {
         fill(buf, modal);
         frame(buf, modal, " close agent? ");
 
-        let message = format!("{} is still running.", self.name);
+        let message = "This ends the session. There's no undo.";
         let msg_x = modal.x + (modal.width.saturating_sub(message.chars().count() as u16)) / 2;
         buf.set_stringn(
             msg_x.max(modal.x + 2),
             modal.y + 2,
-            &message,
+            message,
             usize::from(modal.width.saturating_sub(4)),
             Style::default().add_modifier(Modifier::BOLD),
         );
@@ -136,7 +136,7 @@ mod tests {
     fn dialog_renders_message_and_buttons() {
         let area = Rect::new(0, 0, 80, 24);
         let mut buf = Buffer::empty(area);
-        Confirm::new("claude-code").render(area, &mut buf);
+        Confirm::new().render(area, &mut buf);
         let all: String = (0..24u16)
             .map(|y| {
                 (0..80u16)
@@ -147,7 +147,7 @@ mod tests {
             .collect();
         assert!(all.contains("close agent?"), "missing title:\n{all}");
         assert!(
-            all.contains("claude-code is still running."),
+            all.contains("This ends the session. There's no undo."),
             "missing message:\n{all}"
         );
         assert!(all.contains("cancel"), "missing cancel button:\n{all}");
