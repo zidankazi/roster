@@ -11,9 +11,11 @@ Four states, defined by what they mean for the human:
 | 🔴 blocked | It needs you now | A prompt/approval/question awaiting input is on screen |
 | 🟡 working | It's making progress | Output actively changing; spinner / "esc to interrupt" indicators |
 | 🔵 done | It just finished — go look | Idle prompt showing *after* recent completion; output settled |
-| 🟢 idle | At rest, nothing pending | Idle prompt, no recent task activity |
+| 🟢 idle | At rest, nothing pending — free for work | Idle prompt, no recent task activity |
 
-**The done-vs-idle split is the subtle, high-value part.** "Done" means *go look now*; "idle" means *ignore*. The signal that separates them is recency: a pane that reached its idle prompt within the last N seconds after a burst of activity is `done`; one that's been sitting at the prompt is `idle`. If this proves hard in v1, collapse them and ship — but do it as a deliberate, documented decision, not an accident.
+**The done-vs-idle split is the subtle, high-value part.** "Done" means *go look now*; "idle" means *ignore — this agent is free*. The signal that separates them is recency: a pane that reached its idle prompt within the last N seconds after a burst of activity is `done`; one that's been sitting at the prompt is `idle`. If this proves hard in v1, collapse them and ship — but do it as a deliberate, documented decision, not an accident.
+
+The N-second window is when the **detector** reports `done`. The app layer then extends it for a pane the human wasn't watching: if a pane turns done while it is *not* the focused pane, roster keeps 🔵 done displayed until the human focuses it — focus is the acknowledgment — rather than letting it expire on the timer while nobody looked. A pane that finished *while focused* keeps the pure timed decay (the human watched it happen). This latch is app/session-layer state (`Pane::unseen`, `Session::mark_seen`), not a detector concern — `roster-detect` is untouched.
 
 ## Two things to extract, always
 

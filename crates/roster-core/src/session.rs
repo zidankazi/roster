@@ -68,6 +68,12 @@ pub struct Pane {
     /// CLIs put their current task there. Best-effort and display-only,
     /// never a detection signal.
     pub title: Option<String>,
+    /// Whether the pane holds a completed result the human has not looked at
+    /// yet. Set when the pane turns done while unfocused; cleared by
+    /// [`Session::mark_seen`]. While set, [`Session::set_reading`] refuses
+    /// the done→idle decay, so 🔵 done sticks until the human visits the pane
+    /// instead of expiring on a timer.
+    pub unseen: bool,
 }
 
 impl Pane {
@@ -80,6 +86,7 @@ impl Pane {
             last_change: None,
             telemetry: None,
             title: None,
+            unseen: false,
         }
     }
 }
@@ -438,9 +445,21 @@ impl Session {
         all
     }
 
-    /// Record a detection reading for a pane. The reason is always updated;
-    /// `last_change` moves only when the state actually changes value.
-    /// Returns `false` if the pane does not exist.
+    /// Record a detection reading for a pane. `last_change` moves only when
+    /// the state actually changes value.
+    ///
+    /// The reason is *usually* updated — the one exception is a suppressed
+    /// reading: when the pane is holding an unseen done result (see
+    /// [`Pane::unseen`]) and the incoming reading is the detector's idle
+    /// decay, the reading is refused wholesale — state, `last_change`, and
+    /// reason are all left untouched, so the card keeps showing the
+    /// completion line. The human clears done by looking (see
+    /// [`Session::mark_seen`]), not by time passing — that is the attention
+    /// semantics the latch buys.
+    ///
+    /// A transition *into* [`AgentState::Done`] arms the latch iff the pane
+    /// is not the focused one; a focused pane watched its own completion and
+    /// keeps the timed decay. Returns `false` if the pane does not exist.
     pub fn set_reading(
         &mut self,
         target: PaneId,
@@ -448,15 +467,41 @@ impl Session {
         reason: Option<String>,
         at: Instant,
     ) -> bool {
+        // Borrow `focused` before the mutable pane borrow — `focused()` reads
+        // `self`, which the `get_mut` below borrows exclusively.
+        let focused = self.focused();
         let Some(pane) = self.panes.get_mut(&target) else {
             return false;
         };
+        // Turning done while unfocused arms the latch; while focused clears
+        // it — the human is already watching, so the timed decay is right.
+        if pane.state != AgentState::Done && state == AgentState::Done {
+            pane.unseen = focused != Some(target);
+        }
+        // A latched done refuses the idle decay wholesale: state,
+        // last_change (the done age counts from the real completion, feeding
+        // the sidebar ordering), and reason all stay — the card must keep
+        // the completion line no matter what an idle reading carries.
+        if state == AgentState::Idle && pane.state == AgentState::Done && pane.unseen {
+            return true;
+        }
         if pane.state != state {
             pane.state = state;
             pane.last_change = Some(at);
         }
         pane.reason = reason;
         true
+    }
+
+    /// Mark `target`'s completed result as seen, releasing the done latch:
+    /// the next idle reading may decay the pane to 🟢. Called by the app for
+    /// the focused pane every detection tick — focusing a pane IS the
+    /// acknowledgment — and when a pane's child exits (death is its own
+    /// signal; a stale done must not outrank it). A no-op for unknown panes.
+    pub fn mark_seen(&mut self, target: PaneId) {
+        if let Some(pane) = self.panes.get_mut(&target) {
+            pane.unseen = false;
+        }
     }
 
     /// Record a pane's live telemetry — `None` clears it (the feed went
@@ -853,6 +898,160 @@ mod tests {
         let t2 = t0 + Duration::from_secs(2);
         assert!(s.set_reading(id, AgentState::Blocked, Some("Allow edit?".into()), t2));
         assert_eq!(s.pane(id).unwrap().last_change, Some(t2));
+    }
+
+    #[test]
+    fn done_while_unfocused_sticks_past_the_idle_decay() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        // Split focuses the new pane, leaving `a` unfocused.
+        let _b = s.split(a, SplitDirection::Horizontal).unwrap();
+        assert_ne!(s.focused(), Some(a));
+
+        let t0 = Instant::now();
+        assert!(s.set_reading(a, AgentState::Done, Some("⏺ pumpernickel".into()), t0));
+        assert!(s.pane(a).unwrap().unseen, "unfocused done arms the latch");
+
+        // The detector's later idle reading carries None; the latch refuses
+        // the decay and keeps both the done state and the result line.
+        let t1 = t0 + Duration::from_secs(20);
+        assert!(s.set_reading(a, AgentState::Idle, None, t1));
+        assert_eq!(s.pane(a).unwrap().state, AgentState::Done);
+        assert_eq!(s.pane(a).unwrap().reason.as_deref(), Some("⏺ pumpernickel"));
+    }
+
+    #[test]
+    fn suppressed_decay_does_not_move_last_change() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        s.split(a, SplitDirection::Horizontal).unwrap();
+
+        let t0 = Instant::now();
+        assert!(s.set_reading(a, AgentState::Done, Some("⏺ done".into()), t0));
+        assert_eq!(s.pane(a).unwrap().last_change, Some(t0));
+
+        // The refused idle decay must leave last_change at the real
+        // completion — the done age keeps counting for sidebar ordering.
+        let t1 = t0 + Duration::from_secs(30);
+        assert!(s.set_reading(a, AgentState::Idle, None, t1));
+        assert_eq!(s.pane(a).unwrap().last_change, Some(t0));
+    }
+
+    #[test]
+    fn done_while_focused_decays_to_idle_as_before() {
+        let mut s = Session::new();
+        let id = s.focused().unwrap();
+
+        let t0 = Instant::now();
+        assert!(s.set_reading(id, AgentState::Done, Some("⏺ done".into()), t0));
+        assert!(
+            !s.pane(id).unwrap().unseen,
+            "focused done leaves the latch off"
+        );
+
+        let t1 = t0 + Duration::from_secs(10);
+        assert!(s.set_reading(id, AgentState::Idle, None, t1));
+        assert_eq!(s.pane(id).unwrap().state, AgentState::Idle);
+        assert_eq!(s.pane(id).unwrap().reason, None);
+        assert_eq!(s.pane(id).unwrap().last_change, Some(t1));
+    }
+
+    #[test]
+    fn mark_seen_releases_the_latch() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        s.split(a, SplitDirection::Horizontal).unwrap();
+
+        let t0 = Instant::now();
+        assert!(s.set_reading(a, AgentState::Done, Some("⏺ done".into()), t0));
+        assert!(s.pane(a).unwrap().unseen);
+
+        s.mark_seen(a);
+        assert!(!s.pane(a).unwrap().unseen);
+
+        // With the latch released the idle reading decays normally, reason
+        // and all.
+        let t1 = t0 + Duration::from_secs(10);
+        assert!(s.set_reading(a, AgentState::Idle, None, t1));
+        assert_eq!(s.pane(a).unwrap().state, AgentState::Idle);
+        assert_eq!(s.pane(a).unwrap().reason, None);
+        assert_eq!(s.pane(a).unwrap().last_change, Some(t1));
+    }
+
+    #[test]
+    fn latched_pane_shows_working_then_relatches_on_next_completion() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        s.split(a, SplitDirection::Horizontal).unwrap();
+
+        let t0 = Instant::now();
+        assert!(s.set_reading(a, AgentState::Done, Some("⏺ first".into()), t0));
+        assert!(s.pane(a).unwrap().unseen);
+
+        // A re-run: working is never suppressed, even with the latch armed.
+        let t1 = t0 + Duration::from_secs(1);
+        assert!(s.set_reading(a, AgentState::Working, Some("compiling".into()), t1));
+        assert_eq!(s.pane(a).unwrap().state, AgentState::Working);
+        assert_eq!(s.pane(a).unwrap().reason.as_deref(), Some("compiling"));
+
+        // Its next completion, still unfocused, re-arms the latch.
+        let t2 = t0 + Duration::from_secs(2);
+        assert!(s.set_reading(a, AgentState::Done, Some("⏺ second".into()), t2));
+        assert!(s.pane(a).unwrap().unseen);
+        let t3 = t0 + Duration::from_secs(20);
+        assert!(s.set_reading(a, AgentState::Idle, None, t3));
+        assert_eq!(s.pane(a).unwrap().state, AgentState::Done);
+        assert_eq!(s.pane(a).unwrap().reason.as_deref(), Some("⏺ second"));
+    }
+
+    #[test]
+    fn done_reading_on_a_latched_pane_refreshes_the_reason() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        s.split(a, SplitDirection::Horizontal).unwrap();
+
+        let t0 = Instant::now();
+        assert!(s.set_reading(a, AgentState::Done, Some("⏺ first line".into()), t0));
+        assert!(s.pane(a).unwrap().unseen);
+
+        // A Done→Done reading is not the idle decay: the reason refreshes
+        // through the normal path, last_change stays at the real completion,
+        // and the latch stays armed.
+        let t1 = t0 + Duration::from_secs(3);
+        assert!(s.set_reading(a, AgentState::Done, Some("⏺ fuller line".into()), t1));
+        assert_eq!(s.pane(a).unwrap().state, AgentState::Done);
+        assert_eq!(s.pane(a).unwrap().reason.as_deref(), Some("⏺ fuller line"));
+        assert_eq!(s.pane(a).unwrap().last_change, Some(t0));
+        assert!(s.pane(a).unwrap().unseen);
+
+        // Still latched: the later idle decay is refused, fresh reason kept.
+        let t2 = t0 + Duration::from_secs(20);
+        assert!(s.set_reading(a, AgentState::Idle, None, t2));
+        assert_eq!(s.pane(a).unwrap().state, AgentState::Done);
+        assert_eq!(s.pane(a).unwrap().reason.as_deref(), Some("⏺ fuller line"));
+    }
+
+    #[test]
+    fn transitions_into_blocked_are_never_suppressed() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        s.split(a, SplitDirection::Horizontal).unwrap();
+
+        let t0 = Instant::now();
+        assert!(s.set_reading(a, AgentState::Done, Some("⏺ done".into()), t0));
+        assert!(s.pane(a).unwrap().unseen);
+
+        let t1 = t0 + Duration::from_secs(1);
+        assert!(s.set_reading(a, AgentState::Blocked, Some("Allow edit?".into()), t1));
+        assert_eq!(s.pane(a).unwrap().state, AgentState::Blocked);
+        assert_eq!(s.pane(a).unwrap().reason.as_deref(), Some("Allow edit?"));
+        assert_eq!(s.pane(a).unwrap().last_change, Some(t1));
+    }
+
+    #[test]
+    fn mark_seen_unknown_pane_is_a_no_op() {
+        let mut s = Session::new();
+        s.mark_seen(PaneId::from_raw(999));
     }
 
     #[test]

@@ -962,6 +962,105 @@ fn full_pipeline_shows_blocked_agent_and_quits() {
 }
 
 #[test]
+fn unfocused_done_pane_stays_done_until_visited() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A fake claude that works briefly (a real working pattern, so activity
+    // is on record), then clears to a settled result line over an idle
+    // prompt. A custom agents.toml shrinks done.after_activity_secs to 2 so
+    // the test proves the latch holds PAST the window without sleeping
+    // through the shipped 8 seconds. The script is launched by absolute
+    // path — the basename still identifies as claude-code and no PATH
+    // mutation can race other tests.
+    let dir = std::env::temp_dir().join(format!("roster-done-smoke-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create fake agent dir");
+    let script = dir.join("claude");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\nprintf 'esc to interrupt\\n'\nsleep 2\n\
+         printf '\\033[2J\\033[H'\nprintf 'pumpernickel ready\\n'\nprintf '❯\\n'\nsleep 300\n",
+    )
+    .expect("write fake agent");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod fake agent");
+    let config = dir.join("agents.toml");
+    std::fs::write(
+        &config,
+        "[claude-code]\nmatch_command = [\"claude\"]\n\
+         working = ['esc to interrupt']\nidle = ['^❯']\ndone.after_activity_secs = 2\n",
+    )
+    .expect("write config");
+
+    // Two panes: the fake claude first, then the split that takes focus —
+    // the pane under test finishes while it is NOT the focused one.
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty = Pty::spawn(
+        &format!(
+            "'{}' --config '{}' '{}' 'sleep 300'",
+            bin(),
+            config.display(),
+            script.display()
+        ),
+        cols,
+        rows,
+    )
+    .expect("spawn roster");
+    let rx = pump(&pty);
+    let mut screen = Screen::new(cols, rows);
+
+    // The unfocused pane settles and its card turns done with the result
+    // line as the reason.
+    assert!(
+        drain_while(&mut screen, "done · pumpe", true, &rx),
+        "sidebar never showed done:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Sit well past the 2s window plus debounce: the timed decay must be
+    // refused while the pane stays unfocused. The wait is a fixed 4s by
+    // construction; done cannot flicker back once decayed (the screen is
+    // static, nothing re-arms it), so the end-state assertion is exact.
+    let settle = Instant::now();
+    while settle.elapsed() < Duration::from_secs(4) {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    assert!(
+        screen
+            .grid()
+            .lines()
+            .iter()
+            .any(|l| l.contains("done · pumpe")),
+        "done decayed while unfocused:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Visit the pane (prefix-o cycles focus onto it): focus is the
+    // acknowledgment, and the card decays to idle.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"o").expect("focus next");
+    assert!(
+        drain_while(&mut screen, "done · pumpe", false, &rx),
+        "done never decayed after focusing the pane:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert!(
+        drain_while(&mut screen, "idle", true, &rx),
+        "card never reached idle:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "roster exited with failure: {status:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn hook_bridge_pins_blocked_and_clears_end_to_end() {
     use std::os::unix::fs::PermissionsExt;
 

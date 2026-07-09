@@ -1163,6 +1163,10 @@ impl App {
         }
         rt.exited = Some(code);
         rt.kind = None;
+        // Release any done latch first: an exit is its own signal, so the
+        // exited reason/state must land instead of being masked by a stale
+        // 🔵 done the human never looked at.
+        self.session.mark_seen(id);
         self.session.set_reading(
             id,
             AgentState::Idle,
@@ -1215,6 +1219,12 @@ impl App {
             return;
         }
         self.last_detect = now;
+        // Focusing a pane is the acknowledgment that clears its done latch;
+        // polled here because focus changes in many places and this is the
+        // one tick everything flows through.
+        if let Some(focused) = self.session.focused() {
+            self.session.mark_seen(focused);
+        }
         for (id, rt) in &mut self.runtimes {
             let Some(kind) = rt.kind else {
                 continue;
