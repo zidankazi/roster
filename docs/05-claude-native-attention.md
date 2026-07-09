@@ -1,6 +1,21 @@
-# 05 — the Claude-native attention layer
+# 05 — the direction: an engineering-native Claude cockpit
 
 *The strategic direction for roster after persistence. Read this to understand **what we are building next and why it is the differentiator**. Everything in docs 00–04 describes the multiplexer; this describes the bet that makes the multiplexer worth choosing. If you are an agent picking up work on roster, this is the north star — align changes to it.*
+
+The direction has two pillars, built in order:
+
+1. **The Claude-native attention layer** — read Claude Code's own structured
+   state (hooks, statusline) instead of scraping pixels, and spend that signal
+   on a UI ranked by who needs you and why. Most of this doc specifies it; it
+   is in build (Phases 1–4 below).
+2. **The instance model** — a workspace stops being "a window with panes" and
+   becomes an **instance**: one agent, its branch, its work product. View the
+   agent's diff, push its branch, judge its work — without leaving roster.
+   Direction committed, design pass pending; see
+   [Pillar 2](#pillar-2--the-instance-model-engineering-native) below.
+
+Pillar 1 answers *who needs me and for what*. Pillar 2 answers *what did they
+make and is it good*. Together: glance → judge → ship, in one tool.
 
 ## Why this is the differentiator: read Claude's state, don't scrape pixels
 
@@ -117,16 +132,71 @@ Raw material for a later phase, surfaced while re-checking this doc against the 
 - **PR review state on cards.** Statusline exposes `pr.number` / `pr.review_state` (draft/approved/changes_requested) when a pane's worktree is tied to a PR. Could answer "which of my agents' work is actually mergeable" without leaving roster.
 - **Stop-failure reason taxonomy.** `StopFailure` apparently has matchers per failure type (`rate_limit`, `overloaded`, `billing_error`, `authentication_failed`, `server_error`, …). Worth surfacing distinctly per type rather than one generic "failed" state — especially useful for spotting "several agents just hit the same rate limit and went silent" as a fleet-wide event, not five separate mysteries.
 
+## Pillar 2 — the instance model (engineering-native)
+
+*Direction committed 2026-07; no feature below is designed or scheduled yet.
+Each needs its own design pass before it becomes a build-sequence phase. This
+section exists so agents build **toward** it and stop treating "no diff/review
+UI" as a standing non-goal — that non-goal is deliberately reversed.*
+
+The observation: a person running a Claude fleet doesn't just need to know
+*who is blocked* — after an agent finishes, they need to judge the work and
+ship it. Today that loop leaves roster (a separate terminal for `git diff`,
+`git push`, PR creation). The instance model brings it in-product:
+
+> **A workspace is an instance: one agent, its branch, its work product.**
+
+What that unlocks, roughly in dependency order:
+
+- **Per-workspace diff view** — see what the agent changed against its base,
+  in-product, without focusing the pane or leaving roster. The statusline feed
+  already carries sanctioned inputs (`worktree.*`, `cost.total_lines_added` /
+  `_removed`); the diff itself comes from git, not from any Claude surface.
+- **Ship actions** — push the instance's branch, open/submit the PR, from the
+  workspace. `pr.number` / `pr.review_state` on the statusline feed (see
+  "Future ideas") close the loop: which instances are mergeable, at a glance.
+- **The UI signal pass** — with workspaces carrying real identity (task,
+  branch, diff stat), the chrome gets re-judged for signal-over-noise: every
+  visible element must earn its place. This is the same taste milestone as
+  Phase 3, widened.
+- **Claude-only, staged** — shells stop being a tenant roster offers, in
+  three deliberate steps, each gated on the previous one landing:
+  1. *Shells can't own a workspace* (near-term): the launcher stops offering
+     a `shell` row, and the bare-start placeholder is always replaced by the
+     first launch. Shells survive only as splits beside an agent.
+  2. *Verification moves in-product*: the diff view and ship actions above —
+     the reasons a shell-next-to-the-agent exists today.
+  3. *Shells removed entirely*: once step 2 covers the verify loop, panes run
+     configured agents only. **Do not jump to step 3 early** — removing
+     shells before in-product verification exists trades a real workflow for
+     nothing. The "any command runs in a pane" README claim is retired in the
+     same change as step 3, not before.
+
+What pillar 2 is **not**: it is not a wrapper. The agent keeps running in a
+real PTY pane — full TUI, real keys, scrollback. Structured agent-session
+managers put the agent behind a preview widget; roster's terminal fidelity is
+the moat, and the instance chrome (diff, ship) wraps *around* the real pane,
+never replaces it. And it is still a human watching agents: the
+orchestration-API non-goal below survives pillar 2 unchanged.
+
 ## Non-goals and honesty
 
 - **Not an agent-orchestration API.** Letting agents drive the multiplexer — spawn helpers, split panes — over a socket is a different product: agents watching agents. Ours is the opposite: a human watching agents. Do not drift into building that. If we ever want an API, it is a separate, later decision.
 - **Do not break the screen-based path.** Every change here is additive behind `Option`/fallback. A user who declines the hook install — or runs a non-Claude command in a pane — must see exactly today's screen-based behavior.
 - **The moat is only as deep as we go.** A shallow "we have a Claude integration too" is not a moat — anyone can ship one. The defensibility is specifically the **permission-decision loop + statusline telemetry wired into an attention UI** — answering the actual permission request and ranking a fleet by who needs you, not just mirroring a status dot. That is Claude-specific depth a breadth-first, any-agent design will not chase. If we stop at a shallow status echo, we have differentiated nothing.
 - **This narrows the story.** "The Claude Code cockpit" is a smaller target than "multiplex any agent." That is the intended trade. State it plainly in positioning rather than straddling.
+- **One non-goal was reversed, on purpose.** Earlier versions of docs/00 and
+  this doc listed "no git worktrees, no diff/review UI" as deliberate scope
+  cuts. Pillar 2 reverses that (decided 2026-07): diff/review/ship UI is now
+  committed direction. The reversal is recorded here so no agent "fixes" the
+  docs back toward the old scope. The orchestration-API non-goal is **not**
+  reversed and never was in question.
 
 ## The bar
 
-A person running six Claude Code agents glances at roster and, without touching a pane, knows: who is blocked and on exactly what, who is about to do something they should stop, who is burning context, and who actually finished. A plain status tool can show them six colored dots. That gap is the product.
+A person running six Claude Code agents glances at roster and, without touching a pane, knows: who is blocked and on exactly what, who is about to do something they should stop, who is burning context, and who actually finished. A plain status tool can show them six colored dots. That gap is pillar 1.
+
+Then, for the agent that finished: they open its diff, judge it, and push its branch — without leaving roster. That closing of the loop is pillar 2, and the two together are the product.
 
 ## Open questions (resolve before/while building)
 

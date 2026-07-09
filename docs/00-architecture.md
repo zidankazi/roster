@@ -8,7 +8,7 @@
 
 **Is:** a multiplexer for Claude Code — panes running Claude Code (or any command), a live explainable-state sidebar that shows the reason each agent is blocked, jump-to-pane, and persistent sessions you can detach from and re-attach to over ssh. Detection is screen-based today; reading Claude Code's own hooks and statusline is the committed direction ([`05-claude-native-attention.md`](05-claude-native-attention.md)).
 
-**Is not:** no git worktrees, no diff/review UI, and — deliberately — no agent-orchestration socket API for agents to drive the multiplexer. That last one is a different product — agents watching agents; keeping the human in the cockpit is ours (see docs/05). Not a security boundary: it spawns your already-logged-in agents as child processes, exactly as tmux would.
+**Is not (yet):** no git worktrees and no diff/review/ship UI today — but those are now committed direction, not scope cuts: the instance model in [`05-claude-native-attention.md`](05-claude-native-attention.md) (Pillar 2) plans them. **Is not, permanently:** an agent-orchestration socket API for agents to drive the multiplexer — that is a different product, agents watching agents; keeping the human in the cockpit is ours (see docs/05). Not a security boundary: it spawns your already-logged-in agents as child processes, exactly as tmux would.
 
 Agents launched from **+ new agent** open in their own workspace window
 rather than splitting the current pane; the sidebar is one flat list ranked
