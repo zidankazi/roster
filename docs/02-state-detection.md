@@ -37,6 +37,11 @@ For every agent pane, detection produces a `StateReading { state, reason, teleme
 
 When no `blocked`/`working` pattern matches, a change in the grid since the last frame still reads as `working` — output is moving even if nothing recognizable is on screen. That change fingerprint deliberately skips blank rows, any row matching the agent's `activity.ignore` patterns, and — when `activity.ignore_region` is set — the composer box: the bottom-most row matching the region's start pattern through the next row matching its end pattern (wrapped continuation rows of a long unsent prompt carry no prompt glyph of their own). Rows *below* the box, like the background-task tray, still count. The composer echoes every keystroke of an *unsent* prompt and status chrome toggles on its own, and none of that is the agent doing work. Without the exclusions, a human typing reads as 🟡 working and stamps fake activity into the done-window bookkeeping.
 
+Two further guards keep a fresh pane's startup chrome out of the done window (the observed failure: a spawned Claude Code paints its banner and prompt, sits quiet, then appends an MCP-authentication notice seconds later — and the pane read 🔵 done without ever being asked anything):
+
+- **The change signal is gated on the screen having settled once** — two consecutive frames with the same *non-blank* fingerprint. Until then, every differing frame is the program painting its initial UI, and matching blank frames prove nothing painted, not that the screen held still. Pattern-matched `working` (the spinner) is not gated.
+- **Activity is stamped from the committed state, not the raw frame.** A single changed frame (the late MCP notice; a wrapped composer shifting the transcript one row) reads as raw `working` but never survives the debouncer, so it can never arm the done window. Real work commits `working` within two polls and stamps from then on — so an agent launched straight into a task still reads done when it finishes. The trade-off: work that starts and finishes inside a single poll interval never commits and its completion reads idle, not done; the hook bridge (docs/05) owns that case.
+
 `history` carries the last few readings + timestamps, needed for the done/idle recency call and for debouncing.
 
 ## Debouncing — the trust feature

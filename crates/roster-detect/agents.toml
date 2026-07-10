@@ -9,7 +9,7 @@
 # See docs/02-state-detection.md.
 #
 # The claude-code patterns are tuned against Claude Code 2.1 captured live
-# (see crates/roster/examples/capture.rs; latest capture 2.1.205). Its
+# (see crates/roster/examples/capture.rs; latest capture 2.1.206). Its
 # permission prompts show "Do you want to proceed?" over a "❯ 1. Yes" menu;
 # while working it shows a spinner status line ("✻ Crunching…", a random
 # verb) — 2.1.205 no longer reliably shows "esc to interrupt" with it, so

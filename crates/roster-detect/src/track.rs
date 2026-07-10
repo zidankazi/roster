@@ -81,11 +81,24 @@ fn activity_fingerprint(grid: &Grid, config: &AgentConfig) -> u64 {
     hasher.finish()
 }
 
+/// The fingerprint of a screen with no countable rows. A blank grid — or
+/// one that is all ignored chrome — hashes to this constant, and two such
+/// frames matching means "nothing painted yet", never "the screen held
+/// still", so the settle latch must not open on it.
+fn empty_fingerprint() -> u64 {
+    DefaultHasher::new().finish()
+}
+
 /// What detection remembers about a pane between frames.
+///
+/// A `History` must not outlive its pane's child process: the settle latch
+/// is per-child, and the binary keeps this true by building a fresh
+/// [`PaneTracker`] on attach and restart.
 #[derive(Debug, Default)]
 pub struct History {
     last_fingerprint: Option<u64>,
     last_activity_at: Option<Instant>,
+    settled: bool,
 }
 
 impl History {
@@ -94,12 +107,21 @@ impl History {
         History::default()
     }
 
-    /// Record a frame: the raw reading it produced and the grid it was read
+    /// Record a frame: the reading to bookkeep and the grid it was read
     /// from. `config` supplies the agent's activity filters; pass the same
     /// agent's config to [`History::content_changed`], or the fingerprints
     /// are not comparable.
+    ///
+    /// `state` feeds the activity stamp behind the done-vs-idle call.
+    /// [`PaneTracker::update`] passes the *committed* (post-debounce) state,
+    /// so one noisy frame can never arm the done window — the same
+    /// don't-trust-one-frame contract the debouncer gives committed state.
     pub fn record(&mut self, state: AgentState, grid: &Grid, config: &AgentConfig, at: Instant) {
-        self.last_fingerprint = Some(activity_fingerprint(grid, config));
+        let fingerprint = activity_fingerprint(grid, config);
+        if self.last_fingerprint == Some(fingerprint) && fingerprint != empty_fingerprint() {
+            self.settled = true;
+        }
+        self.last_fingerprint = Some(fingerprint);
         if state == AgentState::Working {
             self.last_activity_at = Some(at);
         }
@@ -112,6 +134,18 @@ impl History {
     pub fn content_changed(&self, grid: &Grid, config: &AgentConfig) -> Option<bool> {
         self.last_fingerprint
             .map(|prev| prev != activity_fingerprint(grid, config))
+    }
+
+    /// Whether two consecutive recorded frames have ever matched with
+    /// content on screen — the pane has painted something and held it still
+    /// for at least one poll. Until then, every frame differs from the last
+    /// because the program is painting its initial UI (or nothing has
+    /// painted yet — blank frames match each other but prove nothing), and
+    /// those changes are not evidence of work: without this gate a freshly
+    /// spawned agent's own banner paint reads as working, and the prompt
+    /// that follows reads as done instead of idle.
+    pub fn has_settled(&self) -> bool {
+        self.settled
     }
 
     /// When the agent last produced a `working` reading.
@@ -226,8 +260,9 @@ impl PaneTracker {
         self.telemetry = Some((telemetry, at));
     }
 
-    /// Run one detection step: classify the grid, record the frame, debounce,
-    /// attach the pane's live telemetry, and return the committed reading.
+    /// Run one detection step: classify the grid, debounce, record the frame
+    /// under the committed state, attach the pane's live telemetry, and
+    /// return the committed reading.
     pub fn update(
         &mut self,
         detector: &crate::detector::Detector,
@@ -236,9 +271,15 @@ impl PaneTracker {
         at: Instant,
     ) -> StateReading {
         let raw = detector.classify(kind, grid, &self.history, at);
-        self.history
-            .record(raw.state, grid, detector.agent(kind), at);
         let mut reading = self.debouncer.observe(raw);
+        // The committed state — not the raw frame — feeds the activity
+        // stamp: startup chrome landing seconds after the prompt (the MCP
+        // notice), or a wrapped composer shifting the transcript a row,
+        // is one changed frame, and one frame must never arm the done
+        // window. Real work commits working within two polls and stamps
+        // from then on.
+        self.history
+            .record(reading.state, grid, detector.agent(kind), at);
         // A payload past the staleness window stops being asserted instead
         // of freezing its last numbers; a held one supersedes the scrape's
         // `None`. The reading's telemetry always equals the post-purge slot.
@@ -394,6 +435,91 @@ mod tests {
         let shifted = Grid::from_text("\nphase one\n\nphase two");
         history.record(AgentState::Idle, &before, &bare, Instant::now());
         assert_eq!(history.content_changed(&shifted, &bare), Some(true));
+    }
+
+    #[test]
+    fn history_settles_only_after_a_repeated_content_frame() {
+        let bare = bare_config();
+        let mut history = History::new();
+        let t0 = Instant::now();
+        assert!(!history.has_settled());
+        // Blank frames match each other, but a screen nothing has painted
+        // on is not a settle — a slow-starting child must not open the
+        // gate before its first output.
+        history.record(AgentState::Idle, &Grid::new(80, 24), &bare, t0);
+        history.record(AgentState::Idle, &Grid::new(80, 24), &bare, t0);
+        assert!(!history.has_settled(), "blank frames are not a settle");
+        history.record(AgentState::Idle, &Grid::from_text("one"), &bare, t0);
+        assert!(!history.has_settled());
+        history.record(AgentState::Idle, &Grid::from_text("two"), &bare, t0);
+        assert!(
+            !history.has_settled(),
+            "frames that keep differing are a paint, not a settle"
+        );
+        history.record(AgentState::Idle, &Grid::from_text("two"), &bare, t0);
+        assert!(history.has_settled());
+        // Settling is one-way: later movement does not close the gate.
+        history.record(AgentState::Working, &Grid::from_text("three"), &bare, t0);
+        assert!(history.has_settled());
+    }
+
+    /// A detector with an idle prompt pattern and no working patterns, for
+    /// driving the change-signal path end to end through [`PaneTracker`].
+    fn prompt_only_detector() -> (crate::detector::Detector, crate::detector::AgentKind) {
+        let detector = crate::detector::Detector::from_toml(
+            r#"
+            [ta]
+            match_command = ["ta"]
+            idle = ['^>']
+            "#,
+        )
+        .expect("test agents.toml parses");
+        let kind = detector.identify("ta").expect("ta identifies");
+        (detector, kind)
+    }
+
+    #[test]
+    fn a_single_changed_frame_does_not_stamp_activity() {
+        // One changed frame — startup chrome landing after the prompt, a
+        // wrap-boundary transcript shift — reads as raw working but never
+        // commits, and activity stamps from the committed state: the
+        // settled prompt that follows must read idle, not done.
+        let (detector, kind) = prompt_only_detector();
+        let mut tracker = PaneTracker::new();
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+        let resting = Grid::from_text("banner\n>");
+        tracker.update(&detector, kind, &resting, at(0));
+        tracker.update(&detector, kind, &resting, at(1));
+        let notice = Grid::from_text("banner\nnotice\n>");
+        let seen = tracker.update(&detector, kind, &notice, at(2));
+        assert_eq!(seen.state, AgentState::Idle);
+        let seen = tracker.update(&detector, kind, &notice, at(3));
+        assert_eq!(seen.state, AgentState::Idle, "no activity was stamped");
+        let seen = tracker.update(&detector, kind, &notice, at(4));
+        assert_eq!(seen.state, AgentState::Idle);
+    }
+
+    #[test]
+    fn sustained_change_still_stamps_and_reads_done() {
+        // The counterpart: output moving across consecutive polls commits
+        // working, stamps activity, and the prompt that follows reads done.
+        let (detector, kind) = prompt_only_detector();
+        let mut tracker = PaneTracker::new();
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + Duration::from_secs(secs);
+        let resting = Grid::from_text("banner\n>");
+        tracker.update(&detector, kind, &resting, at(0));
+        tracker.update(&detector, kind, &resting, at(1));
+        let out = |line: &str| Grid::from_text(&format!("banner\n{line}\n>"));
+        tracker.update(&detector, kind, &out("step one"), at(2));
+        let seen = tracker.update(&detector, kind, &out("step two"), at(3));
+        assert_eq!(seen.state, AgentState::Working);
+        let seen = tracker.update(&detector, kind, &out("finished"), at(4));
+        assert_eq!(seen.state, AgentState::Working);
+        tracker.update(&detector, kind, &out("finished"), at(5));
+        let seen = tracker.update(&detector, kind, &out("finished"), at(6));
+        assert_eq!(seen.state, AgentState::Done);
     }
 
     #[test]

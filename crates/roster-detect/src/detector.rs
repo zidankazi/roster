@@ -93,7 +93,12 @@ impl Detector {
     /// 1. a blocked pattern on screen — the agent needs the human;
     /// 2. a working pattern on screen;
     /// 3. screen content changed since the last recorded frame (output is
-    ///    actively moving, even if no pattern shows);
+    ///    actively moving, even if no pattern shows) — but only once the
+    ///    screen has settled at least once ([`History::has_settled`]):
+    ///    before that, changes are the program painting its initial UI
+    ///    (blank frames never settle — nothing painted proves nothing),
+    ///    and counting them would read a freshly spawned agent as done
+    ///    the moment its prompt appears;
     /// 4. an idle-prompt pattern — read as `done` when the agent was working
     ///    within its `done.after_activity_secs` window, `idle` otherwise;
     /// 5. nothing recognizable — `idle`.
@@ -125,7 +130,7 @@ impl Detector {
                 reason_from(config.reason_working, &found, &lines, &config.reason_ignore),
             );
         }
-        if history.content_changed(grid, config) == Some(true) {
+        if history.has_settled() && history.content_changed(grid, config) == Some(true) {
             return scraped(
                 AgentState::Working,
                 last_worded_line(&lines, &config.reason_ignore),
@@ -305,6 +310,9 @@ mod tests {
         let t0 = Instant::now();
         let mut history = History::new();
         let before = Grid::from_text("compiling roster-core v0.1.0");
+        // Recorded twice: the change gate opens only once the screen has
+        // settled (see startup_paint_never_reads_done_or_working).
+        history.record(AgentState::Idle, &before, detector.agent(kind), t0);
         history.record(AgentState::Idle, &before, detector.agent(kind), t0);
         let after = Grid::from_text("compiling roster-core v0.1.0\ncompiling roster-detect v0.1.0");
         let reading = detector.classify(kind, &after, &history, t0);
@@ -313,6 +321,57 @@ mod tests {
             reading.reason.as_deref(),
             Some("compiling roster-detect v0.1.0")
         );
+    }
+
+    #[test]
+    fn startup_paint_never_reads_done_or_working() {
+        // A freshly spawned agent paints its banner over several frames,
+        // then shows its prompt. Every frame differs from the last, but
+        // none of that is task activity: with the settle gate, no frame
+        // reads working, no activity is stamped, and the prompt reads idle
+        // — not done. Without the gate, the paint read as working and the
+        // prompt that followed landed inside the done window.
+        let detector = Detector::builtin();
+        let kind = detector.identify("claude").unwrap();
+        let t0 = Instant::now();
+        let at = |secs: u64| t0 + std::time::Duration::from_secs(secs);
+        let mut history = History::new();
+        // The blank polls before the child's first output must not settle
+        // the gate — matching blank frames prove nothing painted, not that
+        // the screen held still.
+        let paint = [
+            "",
+            "",
+            "✻ Welcome to Claude Code",
+            "✻ Welcome to Claude Code\n\n  /help for help, /status for your current setup",
+            "✻ Welcome to Claude Code\n\n  /help for help, /status for your current setup\n\n❯ Try \"fix lint errors\"",
+        ];
+        for (i, text) in paint.iter().enumerate() {
+            let grid = Grid::from_text(text);
+            let reading = detector.classify(kind, &grid, &history, at(i as u64));
+            assert_eq!(reading.state, AgentState::Idle, "paint frame {i}");
+            history.record(reading.state, &grid, detector.agent(kind), at(i as u64));
+        }
+        // The prompt holds still: settled now, and still idle — the paint
+        // stamped no activity for the done window to feed on.
+        let settled = Grid::from_text(paint[4]);
+        let reading = detector.classify(kind, &settled, &history, at(5));
+        assert_eq!(reading.state, AgentState::Idle);
+        history.record(reading.state, &settled, detector.agent(kind), at(5));
+        assert_eq!(history.last_activity_at(), None);
+
+        // The gate is open after the settle: output moving reads working
+        // again, so a real task's completion still reads done.
+        let output = Grid::from_text("❯ fix the tests\nrunning cargo test");
+        let reading = detector.classify(kind, &output, &history, at(6));
+        assert_eq!(reading.state, AgentState::Working);
+        history.record(reading.state, &output, detector.agent(kind), at(6));
+        let finished = Grid::from_text("⏺ all tests pass\n❯");
+        let reading = detector.classify(kind, &finished, &history, at(7));
+        assert_eq!(reading.state, AgentState::Working, "still-moving frame");
+        history.record(reading.state, &finished, detector.agent(kind), at(7));
+        let reading = detector.classify(kind, &finished, &history, at(8));
+        assert_eq!(reading.state, AgentState::Done);
     }
 
     #[test]
@@ -370,6 +429,8 @@ mod tests {
         let mut history = History::new();
         let before = Grid::from_text("● Explore(map the sidebar)\n❯");
         let after = Grid::from_text("● Explore(map the sidebar, done)\n❯");
+        // Recorded twice: the change gate needs a settled screen first.
+        history.record(AgentState::Idle, &before, detector.agent(kind), t0);
         history.record(AgentState::Idle, &before, detector.agent(kind), t0);
         let reading = detector.classify(kind, &after, &history, t0);
         assert_eq!(reading.state, AgentState::Working);
@@ -396,6 +457,8 @@ mod tests {
                  ● Explore(mapping · {uses} tool uses)"
             ))
         };
+        // Recorded twice: the change gate needs a settled screen first.
+        history.record(AgentState::Idle, &screen(3), detector.agent(kind), t0);
         history.record(AgentState::Idle, &screen(3), detector.agent(kind), t0);
         let reading = detector.classify(kind, &screen(4), &history, t0);
         assert_eq!(reading.state, AgentState::Working);

@@ -218,12 +218,12 @@ fn typing_an_unsent_prompt_stays_idle() {
 /// ❯ of their own, and growing it shifts the composer's bounding rules and
 /// the status chip. `activity.ignore_region` excludes the whole composer
 /// box, so the pane stays idle through all of it — while typing, while the
-/// box grows, and after the typing pauses. Known residue: on a pane whose
-/// transcript fills the screen, the box growing a row scrolls the
-/// transcript itself, and that shift is indistinguishable from output — a
-/// single changed frame per wrap boundary (never enough consecutive frames
-/// to commit working, but it can stamp activity). Only the hook bridge
-/// (docs/05) can see past the screen there.
+/// box grows, and after the typing pauses. On a pane whose transcript
+/// fills the screen, the box growing a row scrolls the transcript itself,
+/// and that shift is indistinguishable from output — but it is a single
+/// changed frame per wrap boundary: never enough consecutive frames to
+/// commit working, and activity stamps only from the committed state, so
+/// it cannot arm the done window either.
 #[test]
 fn typing_a_wrapped_prompt_stays_idle() {
     let detector = Detector::builtin();
@@ -246,6 +246,45 @@ fn typing_a_wrapped_prompt_stays_idle() {
         let seen = tracker.update(&detector, kind, grid, at(secs));
         assert_eq!(seen.state, AgentState::Idle, "at {secs}s");
         assert_eq!(seen.reason, None, "at {secs}s");
+    }
+}
+
+/// The reported "fresh instance defaults to done" bug, frame by frame from
+/// a live 2.1.206 spawn capture at the real 400ms detect cadence: the pane
+/// is blank until the first paint lands (~1s in), the banner and prompt
+/// arrive together and sit quiet, then Claude Code appends its
+/// MCP-authentication notice seconds later. None of that is the agent
+/// doing work — every frame must read idle, never done and never working.
+/// Two guards carry it: blank frames don't settle the change gate, and the
+/// late notice is a single changed frame, which never commits working and
+/// so never stamps activity for the done window.
+#[test]
+fn fresh_spawn_startup_chrome_reads_idle_never_done() {
+    let detector = Detector::builtin();
+    let kind = detector.identify("claude").expect("claude identifies");
+    let mut tracker = PaneTracker::new();
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+
+    let blank = Grid::new(100, 30);
+    let banner = fixture("claude-code", "startup_banner.txt");
+    let notice = fixture("claude-code", "startup_banner_mcp_notice.txt");
+
+    let frames: [(u64, &Grid); 9] = [
+        (400, &blank),
+        (800, &blank),
+        (1200, &banner),
+        (1600, &banner),
+        (2000, &banner),
+        (2400, &notice),
+        (2800, &notice),
+        (3200, &notice),
+        (11000, &notice),
+    ];
+    for (ms, grid) in frames {
+        let seen = tracker.update(&detector, kind, grid, at(ms));
+        assert_eq!(seen.state, AgentState::Idle, "at {ms}ms");
+        assert_eq!(seen.reason, None, "at {ms}ms");
     }
 }
 
