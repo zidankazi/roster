@@ -36,8 +36,8 @@ without reading every screen.
 
 - **every agent at a glance.** one colored glyph per agent, triaged so
   whoever's been blocked longest sits on top, each card showing why. a
-  finished agent's check pulses until you look, and the card you're on
-  carries an accent bar down its edge.
+  finished agent's check pulses until you look, and the card you're on is
+  the one inverted card in the stack — light fill, dark text.
 - **a real terminal, not a wrapped interpretation.** 10k lines of scrollback
   per pane, full-screen TUIs keep their keys, drag to select and copy (OSC 52,
   works over ssh), bracketed paste for multi-line prompts.
@@ -49,7 +49,8 @@ without reading every screen.
   from Claude, not screen-scraping. auto-approve per agent or across the whole
   fleet, without giving up visibility.
 - **one Rust binary, under 4 MB.** no Electron, runs in whatever terminal you
-  already use.
+  already use. designed for dark terminals: the chrome pins its grays and
+  accent from the fixed 256-color ramp, so your theme can't wash it out.
 
 ## install
 

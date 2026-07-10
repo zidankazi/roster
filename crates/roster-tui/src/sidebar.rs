@@ -10,9 +10,11 @@
 //! ranked globally by `roster_core::attention` — blocked, done, idle, then
 //! working at the bottom — so the agents that need you are always at the
 //! top, regardless of which workspace they live in. With more than one
-//! workspace each card carries a `⧉N` tag naming its home. The card whose
-//! pane holds focus carries an accent bar down its left edge, so the
-//! sidebar always answers "which agent am I looking at".
+//! workspace each card carries a `⧉N` tag naming its home. Cards sit as
+//! raised surfaces on the panel's base canvas; the card whose pane holds
+//! focus is the one *inverted* card — light fill, dark text, plus the
+//! accent bar down its left edge — so the sidebar always answers "which
+//! agent am I looking at" from across the room.
 
 use std::time::{Duration, Instant};
 
@@ -24,7 +26,10 @@ use ratatui::widgets::Widget;
 use roster_core::{AgentState, AttentionItem, PaneId, Session, Telemetry};
 use roster_detect::Detector;
 
-use crate::style::{chip, muted, state_color, state_glyph, state_glyph_style, state_label};
+use crate::style::{
+    bright, chip, muted, normal, selected, selected_muted, state_color, state_glyph,
+    state_glyph_style, state_glyph_style_selected, state_label, SURFACE_BASE, SURFACE_RAISED,
+};
 use crate::telemetry::{context_badge, telemetry_line, telemetry_row_visible};
 
 /// One sidebar row: an agent pane and everything shown about it.
@@ -361,6 +366,11 @@ impl Widget for Sidebar<'_> {
         if area.width < 8 || area.height == 0 {
             return;
         }
+        // The panel canvas: every cell sits on the base surface, so the
+        // raised cards have something to stand on. (The frame renderer
+        // fills the whole sidebar region too — this keeps the widget
+        // self-contained for direct rendering in tests.)
+        buf.set_style(area, Style::default().bg(SURFACE_BASE));
         let width = usize::from(area.width);
         let bottom = area.y + area.height;
         let mut y = area.y;
@@ -395,41 +405,109 @@ impl Widget for Sidebar<'_> {
                 area.x + cols.start,
                 y,
                 AUTO_ALL,
-                chip(all_on, self.hovered_auto_all),
+                chip(all_on, self.hovered_auto_all, false),
             );
         }
         y += 2;
+
+        // The empty panel invites instead of gaping: a quiet centered
+        // hint, its launch key in the same key-accent, label-muted
+        // vocabulary as the status bar's hints. The pinned `+ new agent`
+        // button below stays the mouse-first way in.
+        if self.entries.is_empty() {
+            let hint = "no agents yet";
+            let hint_y = (area.y + area.height / 2).saturating_sub(1).max(y);
+            if hint_y < bottom {
+                let x = area.x + area.width.saturating_sub(hint.chars().count() as u16) / 2;
+                buf.set_stringn(x, hint_y, hint, usize::from(area.right() - x), normal());
+            }
+            let (key, label) = ("c", " new agent");
+            let keys_y = hint_y + 2;
+            if keys_y < bottom {
+                let drawn = (key.chars().count() + label.chars().count()) as u16;
+                let x = area.x + area.width.saturating_sub(drawn) / 2;
+                let key_style = Style::default()
+                    .fg(crate::style::ACCENT)
+                    .add_modifier(Modifier::BOLD);
+                buf.set_stringn(x, keys_y, key, usize::from(area.right() - x), key_style);
+                let after = x + key.chars().count() as u16;
+                if after < area.right() {
+                    buf.set_stringn(
+                        after,
+                        keys_y,
+                        label,
+                        usize::from(area.right() - after),
+                        muted(),
+                    );
+                }
+            }
+            return;
+        }
 
         for row in sidebar_rows(self.entries, self.focused) {
             if y >= bottom {
                 break;
             }
+            // The card's surface, resolved once per row: raised off the
+            // base canvas — or, on the focused card, the light selected
+            // fill. The inversion, not the edge bar alone, is what carries
+            // "you are here". Every arm below keys its text off `inverted`
+            // and `sub` (the quiet tier matching the surface), so a card
+            // can't end up light-filled with dark-surface text.
+            let inverted = match row {
+                SidebarRow::EntryName(index)
+                | SidebarRow::EntryDetail(index)
+                | SidebarRow::EntryTelemetry(index) => {
+                    let inverted = self.focused == Some(index);
+                    let fill = if inverted {
+                        selected()
+                    } else {
+                        Style::default().bg(SURFACE_RAISED)
+                    };
+                    buf.set_style(Rect::new(area.x, y, area.width, 1), fill);
+                    inverted
+                }
+                SidebarRow::Blank => false,
+            };
+            let sub = if inverted { selected_muted() } else { muted() };
             match row {
                 SidebarRow::EntryName(index) => {
                     let entry = &self.entries[index];
-                    let selected = self.selected == Some(index);
+                    let is_selected = self.selected == Some(index);
+                    // The jump marker keeps the raw accent even on the
+                    // light fill: lavender clears it by hue, not
+                    // luminance, and the moving cursor must look the same
+                    // on every card it lands on.
                     let marker_style = Style::default().fg(crate::style::ACCENT);
-                    if selected {
+                    if is_selected {
                         buf.set_string(area.x, y, "❯", marker_style);
                     } else if self.hovered == Some(index) {
                         // Hover affordance: a quiet marker where selection's
                         // ❯ goes.
-                        buf.set_string(area.x, y, "❯", muted());
-                    } else if self.focused == Some(index) {
+                        buf.set_string(area.x, y, "❯", sub);
+                    } else if inverted {
                         // The focus bar's top cell; the transient jump and
                         // hover markers outrank it on this row — the bar
                         // still reads from the rows below.
                         Self::draw_focus_bar(buf, area.x, y);
                     }
 
-                    // Glyph + agent name (bold; accented when selected), age
-                    // right-aligned and dim. The glyph's style is
-                    // tick-animated: done pulses to pull the eye.
+                    // Glyph + agent name (bold), age right-aligned and
+                    // quiet. The glyph's style is tick-animated: done
+                    // pulses to pull the eye. The inverted card gets the
+                    // selected-surface variant — blocked red and done
+                    // azure keep their hues, working/idle drop to dark
+                    // text (see `state_glyph_style_selected`).
+                    let glyph_style = if inverted {
+                        state_glyph_style_selected(entry.state, self.tick)
+                    } else {
+                        state_glyph_style(entry.state, self.tick)
+                    };
                     buf.set_string(
                         area.x + 2,
                         y,
                         state_glyph(entry.state, self.tick),
-                        state_glyph_style(entry.state, self.tick),
+                        glyph_style,
                     );
                     // The right block: an optional `⧉N` workspace tag —
                     // shown once there is more than one workspace, since the
@@ -446,7 +524,7 @@ impl Widget for Sidebar<'_> {
                     let mut block_left = area.x + area.width - 1;
                     if !age.is_empty() {
                         block_left = block_left.saturating_sub(age.chars().count() as u16);
-                        buf.set_string(block_left, y, &age, muted());
+                        buf.set_string(block_left, y, &age, sub);
                     }
                     if !tag.is_empty() {
                         // A one-column gap sets the tag off from the age.
@@ -457,17 +535,22 @@ impl Widget for Sidebar<'_> {
                         // instead, like the reason yields to the `auto` chip.
                         if start >= name_start {
                             block_left = start;
-                            buf.set_string(block_left, y, &tag, muted());
+                            buf.set_string(block_left, y, &tag, sub);
                         }
                     }
-                    // The name fills from its indent up to the right block.
+                    // The name fills from its indent up to the right block:
+                    // the bright tier, accented while jump-selected, dark
+                    // on the inverted card (accent-on-light has no
+                    // contrast; the inversion already marks the card).
                     let name_width = usize::from(block_left.saturating_sub(name_start));
-                    let name_style = if selected {
+                    let name_style = if inverted {
+                        selected().add_modifier(Modifier::BOLD)
+                    } else if is_selected {
                         Style::default()
                             .fg(crate::style::ACCENT)
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().add_modifier(Modifier::BOLD)
+                        bright().add_modifier(Modifier::BOLD)
                     };
                     // The live task title beats the config name — every
                     // card saying `claude-code` says nothing.
@@ -484,7 +567,7 @@ impl Widget for Sidebar<'_> {
                     // card, or the focused one — eight unarmed chips on
                     // eight at-rest cards is wallpaper, not affordance.
                     let entry = &self.entries[index];
-                    if self.focused == Some(index) {
+                    if inverted {
                         Self::draw_focus_bar(buf, area.x, y);
                     }
                     let chip_cols = auto_chip_cols(area.width);
@@ -499,12 +582,15 @@ impl Widget for Sidebar<'_> {
                     });
                     let budget = end.saturating_sub(usize::from(CARD_INDENT));
                     if budget > 0 {
+                        // The reason is the signal: the normal tier, a step
+                        // above the muted ages and hints around it.
+                        let reason_style = if inverted { selected() } else { normal() };
                         buf.set_stringn(
                             area.x + CARD_INDENT,
                             y,
                             truncate(reason, budget),
                             budget,
-                            muted(),
+                            reason_style,
                         );
                     }
                     if let Some(cols) = chip_cols {
@@ -518,7 +604,11 @@ impl Widget for Sidebar<'_> {
                                 area.x + cols.start,
                                 y,
                                 AUTO_CHIP,
-                                chip(entry.auto_approve, self.hovered_auto == Some(index)),
+                                chip(
+                                    entry.auto_approve,
+                                    self.hovered_auto == Some(index),
+                                    inverted,
+                                ),
                             );
                         }
                     }
@@ -530,7 +620,7 @@ impl Widget for Sidebar<'_> {
                     // whose context alert escalated, and shows just that
                     // badge (see `telemetry_row_visible`).
                     let entry = &self.entries[index];
-                    if self.focused == Some(index) {
+                    if inverted {
                         Self::draw_focus_bar(buf, area.x, y);
                     }
                     if let Some(telemetry) = &entry.telemetry {
@@ -538,14 +628,20 @@ impl Widget for Sidebar<'_> {
                         // rows above. An unfocused row exists only because
                         // its context alert escalated (the row plan and
                         // this content decision share telemetry_row_visible),
-                        // so the lone badge is always present.
+                        // so the lone badge is always present. The full
+                        // line renders only on the focused — inverted —
+                        // card, and telemetry.rs owns the re-key for it.
                         let budget = width.saturating_sub(4).saturating_sub(1);
-                        let line = if self.focused == Some(index) {
-                            telemetry_line(telemetry)
+                        let line = if inverted {
+                            telemetry_line(telemetry, true)
                         } else {
-                            Line::from(context_badge(telemetry).into_iter().collect::<Vec<_>>())
+                            Line::from(
+                                context_badge(telemetry, false)
+                                    .into_iter()
+                                    .collect::<Vec<_>>(),
+                            )
                         };
-                        let line = truncate_line(line, budget);
+                        let line = truncate_line(line, budget, sub);
                         buf.set_line(area.x + 4, y, &line, area.width.saturating_sub(4));
                     }
                 }
@@ -579,13 +675,14 @@ fn truncate(text: &str, width: usize) -> String {
 }
 
 /// [`truncate`] for a styled line, keeping each span's style: a cut is
-/// marked with the same trailing `…` as the plain-text rows. A hard clip
-/// would leave a badge reading as a smaller number than it is
+/// marked with the same trailing `…` as the plain-text rows, in the
+/// caller's quiet tier (`ellipsis`) so it matches the row's surface. A
+/// hard clip would leave a badge reading as a smaller number than it is
 /// (`$12.34` → `$12`), which misleads instead of signalling "narrow".
 /// Budgets by display cells, not chars — the buffer clips by cells, and a
 /// double-width char (the feed copies `display_name` verbatim) must not
 /// push the `…` off the edge.
-fn truncate_line(line: Line<'static>, width: usize) -> Line<'static> {
+fn truncate_line(line: Line<'static>, width: usize, ellipsis: Style) -> Line<'static> {
     if line.width() <= width {
         return line;
     }
@@ -616,7 +713,7 @@ fn truncate_line(line: Line<'static>, width: usize) -> Line<'static> {
             budget = 0;
         }
     }
-    spans.push(Span::styled("…", muted()));
+    spans.push(Span::styled("…", ellipsis));
     Line::from(spans)
 }
 
@@ -916,9 +1013,11 @@ mod tests {
             buffer_row(&buf, 6)
         );
 
-        // The reason is quiet muted chrome — the state color lives on the
-        // glyph, not spelled out twice per card.
-        assert_eq!(buf.cell((4, 3)).unwrap().style().fg, muted().fg);
+        // The reason is the signal, so it takes the normal tier — a step
+        // above the muted ages, below the bright name. The state color
+        // lives on the glyph, not spelled out twice per card.
+        assert_eq!(buf.cell((4, 3)).unwrap().style().fg, normal().fg);
+        assert_eq!(buf.cell((4, 2)).unwrap().style().fg, bright().fg);
     }
 
     #[test]
@@ -1320,8 +1419,10 @@ mod tests {
         // The badge line sits under the focused card's detail row, at the
         // card indent, with the muted separators.
         assert_eq!(buffer_row(&buf, 4), "▍   Opus · 62% context · $1.23");
-        // Muted chrome for the model badge; the healthy context badge too.
-        assert_eq!(buf.cell((4, 4)).unwrap().style().fg, muted().fg);
+        // The focused card is the inverted surface, so its quiet badges
+        // take the selected surface's dark-muted tier — the healthy
+        // context badge too.
+        assert_eq!(buf.cell((4, 4)).unwrap().style().fg, selected_muted().fg);
         // The next card starts after one blank, one row lower than before.
         assert_eq!(buffer_row(&buf, 5), "");
         assert!(
@@ -1462,6 +1563,200 @@ mod tests {
             !rows.iter().any(|r| r.trim().starts_with("workspace")),
             "the flat list draws no workspace headers, rows: {rows:#?}"
         );
+    }
+
+    #[test]
+    fn cards_sit_on_raised_surfaces_over_the_base_canvas() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        // The header row sits on the base canvas.
+        assert_eq!(buf.cell((5, 0)).unwrap().style().bg, Some(SURFACE_BASE));
+        // Card rows are raised, edge to edge — marker column and right
+        // margin included, so the card reads as one block.
+        for (x, y) in [(0, 2), (5, 2), (31, 2), (5, 3)] {
+            assert_eq!(
+                buf.cell((x, y)).unwrap().style().bg,
+                Some(SURFACE_RAISED),
+                "cell ({x},{y})"
+            );
+        }
+        // The blank spacer between cards drops back to the canvas.
+        assert_eq!(buf.cell((5, 4)).unwrap().style().bg, Some(SURFACE_BASE));
+        // Ages stay on the muted tier.
+        assert_eq!(buf.cell((28, 2)).unwrap().style().fg, muted().fg);
+    }
+
+    #[test]
+    fn focused_card_is_a_full_inverted_surface() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        // Focus the done card — entry 1, rows 5 (name) and 6 (detail).
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .focused(Some(1))
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        // The light fill covers both card rows edge to edge…
+        for (x, y) in [(0, 5), (4, 5), (31, 5), (4, 6), (31, 6)] {
+            assert_eq!(
+                buf.cell((x, y)).unwrap().style().bg,
+                selected().bg,
+                "cell ({x},{y})"
+            );
+        }
+        // …with dark text on it: the bold name and the reason, the age on
+        // the dark-muted tier. The done glyph keeps its azure — a hue that
+        // clears the light fill — so the state color survives inversion.
+        let name = buf.cell((4, 5)).unwrap().style();
+        assert_eq!(name.fg, selected().fg);
+        assert!(name.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(buf.cell((4, 6)).unwrap().style().fg, selected().fg);
+        assert_eq!(
+            buf.cell((2, 5)).unwrap().style().fg,
+            Some(state_color(AgentState::Done))
+        );
+        assert_eq!(buf.cell((29, 5)).unwrap().style().fg, selected_muted().fg);
+        // The done pulse survives the remap: the reversed phase flips the
+        // glyph without ever dropping its foreground.
+        let mut pulse = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 4)
+            .focused(Some(1))
+            .render(Rect::new(0, 0, 32, 14), &mut pulse);
+        let glyph = pulse.cell((2, 5)).unwrap().style();
+        assert!(glyph.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(glyph.fg, Some(state_color(AgentState::Done)));
+        // The unfocused cards keep the raised surface and bright names.
+        assert_eq!(buf.cell((4, 2)).unwrap().style().bg, Some(SURFACE_RAISED));
+        assert_eq!(buf.cell((4, 2)).unwrap().style().fg, bright().fg);
+    }
+
+    #[test]
+    fn focused_card_keeps_blocked_red_but_drops_the_unreadable_hues() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // Focus the blocked card (entry 0, glyph at (2,2)): a block must
+        // stay red even on the one card you're parked on.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .focused(Some(0))
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        let glyph = buf.cell((2, 2)).unwrap().style();
+        assert_eq!(glyph.fg, Some(state_color(AgentState::Blocked)));
+        assert_eq!(glyph.bg, selected().bg);
+        // Focus the working card (entry 2, glyph at (2,8)): yellow has no
+        // contrast on the light fill, so the glyph drops to dark text and
+        // its spinner motion carries the state.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .focused(Some(2))
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        assert_eq!(buf.cell((2, 8)).unwrap().style().fg, selected().fg);
+    }
+
+    #[test]
+    fn focused_card_auto_chip_pins_both_sides_on_the_light_fill() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let cols = auto_chip_cols(40).unwrap();
+        // The focused card always reveals its chip; unarmed it must be the
+        // dark pill (explicit fg AND bg — the reversal trick has nothing
+        // dark to swap in on the light fill).
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .focused(Some(0))
+            .render(Rect::new(0, 0, 40, 14), &mut buf);
+        let rest = buf.cell((cols.start, 3)).unwrap().style();
+        assert_eq!(rest.fg, selected().bg, "dark pill, light label");
+        assert_eq!(rest.bg, selected().fg);
+        // Armed, the accent is the pill's background with dark text.
+        entries[0].auto_approve = true;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .focused(Some(0))
+            .render(Rect::new(0, 0, 40, 14), &mut buf);
+        let armed = buf.cell((cols.start, 3)).unwrap().style();
+        assert_eq!(armed.bg, Some(crate::style::ACCENT));
+        assert_eq!(armed.fg, selected().fg);
+        assert!(armed.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn focused_card_badges_keep_their_signal_on_the_light_fill() {
+        let now = Instant::now();
+        let (mut session, ids) = populated_session(now);
+        session.set_telemetry(
+            ids[1],
+            Some(Telemetry {
+                model: Some("Opus".into()),
+                context_pct: Some(5.0),
+                cost_usd: Some(1.23),
+                rate_limit: None,
+            }),
+        );
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 16));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .focused(Some(0))
+            .render(Rect::new(0, 0, 40, 16), &mut buf);
+        let row = buffer_row(&buf, 4);
+        assert!(row.contains("5% context"), "badge row: {row}");
+        // Quiet badges take the dark-muted tier, on the light fill.
+        let model = buf.cell((4, 4)).unwrap().style();
+        assert_eq!(model.fg, selected_muted().fg);
+        assert_eq!(model.bg, selected().bg);
+        // The critical context badge stays the blocked red — danger is red
+        // on every surface — bold, on the light fill. (Column arithmetic
+        // counts chars, not bytes: the row leads with the 3-byte '▍'.)
+        let x = row[..row.find("5%").unwrap()].chars().count() as u16;
+        let badge = buf.cell((x, 4)).unwrap().style();
+        assert_eq!(badge.fg, Some(state_color(AgentState::Blocked)));
+        assert_eq!(badge.bg, selected().bg);
+        assert!(badge.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn empty_sidebar_shows_a_quiet_centered_hint() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&[], None, None, 1, 0).render(Rect::new(0, 0, 32, 14), &mut buf);
+        // The hint centers on the panel — "no agents yet" is 13 chars on a
+        // 32-column panel, so it starts at column 9.
+        let hint_row = buffer_row(&buf, 6);
+        assert_eq!(hint_row.trim(), "no agents yet");
+        assert_eq!(buf.cell((9, 6)).unwrap().symbol(), "n");
+        assert_eq!(buf.cell((9, 6)).unwrap().style().fg, normal().fg);
+        // The launch key below, in the hint grammar: key accented, label
+        // muted, never red.
+        let keys_row = buffer_row(&buf, 8);
+        assert_eq!(keys_row.trim(), "c new agent");
+        assert_eq!(buf.cell((10, 8)).unwrap().symbol(), "c");
+        assert_eq!(
+            buf.cell((10, 8)).unwrap().style().fg,
+            Some(crate::style::ACCENT)
+        );
+        assert_eq!(buf.cell((12, 8)).unwrap().style().fg, muted().fg);
+        // The hint sits on the base canvas, and the header stays.
+        assert_eq!(buf.cell((9, 6)).unwrap().style().bg, Some(SURFACE_BASE));
+        assert!(buffer_row(&buf, 0).starts_with(" agents"));
+    }
+
+    #[test]
+    fn tiny_sidebars_render_without_panicking() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        for (w, h) in [(0, 0), (1, 1), (7, 20), (8, 1), (8, 2), (9, 3), (32, 1)] {
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            Sidebar::new(&entries, None, None, 1, 0).render(area, &mut buf);
+            let mut buf = Buffer::empty(area);
+            Sidebar::new(&[], None, None, 1, 0).render(area, &mut buf);
+        }
     }
 
     #[test]

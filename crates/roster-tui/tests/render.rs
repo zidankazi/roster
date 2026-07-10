@@ -11,7 +11,8 @@ use ratatui::Terminal;
 use roster_core::{AgentState, Grid, Session, SplitDirection};
 use roster_detect::Detector;
 use roster_tui::{
-    launch_items, muted, render, sidebar_entries, Hit, LauncherState, SidebarSide, View, ACCENT,
+    launch_items, muted, render, selected, selected_muted, sidebar_entries, Hit, LauncherState,
+    SidebarSide, View, ACCENT,
 };
 
 fn region_text(buf: &Buffer, x0: u16, x1: u16, y: u16) -> String {
@@ -199,11 +200,13 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
     terminal.draw(|frame| render(frame, &view)).unwrap();
     let buf = terminal.backend().buffer().clone();
 
-    // Every listed element resolves to the muted foreground, never `DIM`.
-    let muted_fg = muted().fg;
-    let assert_muted = |x: u16, y: u16, what: &str| {
+    // Every listed element resolves to an explicit quiet foreground,
+    // never `DIM`. The focused card is the inverted (light) surface, so
+    // its quiet text carries the selected surface's dark tiers — the same
+    // guarantee in the flipped palette.
+    let assert_quiet = |x: u16, y: u16, expected: Option<ratatui::style::Color>, what: &str| {
         let style = buf.cell((x, y)).unwrap().style();
-        assert_eq!(style.fg, muted_fg, "{what} at ({x},{y}) is not muted");
+        assert_eq!(style.fg, expected, "{what} at ({x},{y}) is off-tier");
         assert!(
             !style.add_modifier.contains(Modifier::DIM),
             "{what} at ({x},{y}) still leans on DIM"
@@ -211,21 +214,22 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
     };
     // Sidebar "agents" subtitle (first glyph after the leading space).
     assert_eq!(buf.cell((1, 0)).unwrap().symbol(), "a");
-    assert_muted(1, 0, "sidebar subtitle");
-    // The blocked card leads (12s old): the focus bar on its edge (its
-    // pane holds focus), its right-aligned age column…
+    assert_quiet(1, 0, muted().fg, "sidebar subtitle");
+    // The blocked card leads (12s old) and holds focus — the inverted
+    // card: the focus bar on its edge, its right-aligned age column…
     assert_eq!(
         region_text(&buf, 0, 31, 2),
         "▍ ◉ claude-code            12s"
     );
-    assert_muted(27, 2, "sidebar age");
+    assert_quiet(27, 2, selected_muted().fg, "sidebar age");
     // …and the reason leading the detail row (behind the focus bar's edge
-    // column) — the glyph carries the state, the row carries the why.
+    // column) — the glyph carries the state, the row carries the why, in
+    // the surface's primary dark text.
     assert!(region_text(&buf, 0, 31, 3).starts_with("▍   Approve this"));
-    assert_muted(14, 3, "sidebar state reason");
+    assert_quiet(14, 3, selected().fg, "sidebar state reason");
     // The bottom status hint line spans from the left edge.
     assert_eq!(buf.cell((0, 11)).unwrap().symbol(), "c");
-    assert_muted(0, 11, "status hint");
+    assert_quiet(0, 11, muted().fg, "status hint");
 }
 
 #[test]
@@ -287,10 +291,17 @@ fn hover_lights_up_interactive_chrome() {
     assert!(hovered.add_modifier.contains(Modifier::UNDERLINED));
 
     // Hovering a sidebar card shows a quiet muted marker.
+    let buf = draw(Some(Hit::SidebarEntry(1)));
+    let marker = buf.cell((0, 5)).unwrap();
+    assert_eq!(marker.symbol(), "❯");
+    assert_eq!(marker.style().fg, muted().fg);
+
+    // On the focused — inverted — card the marker keeps the quiet tier in
+    // the flipped palette, so it never washes out on the light fill.
     let buf = draw(Some(Hit::SidebarEntry(0)));
     let marker = buf.cell((0, 2)).unwrap();
     assert_eq!(marker.symbol(), "❯");
-    assert_eq!(marker.style().fg, muted().fg);
+    assert_eq!(marker.style().fg, selected_muted().fg);
 
     // No hover: the ✕ sits muted (not lit red), and no card marker shows.
     let buf = draw(None);
@@ -766,6 +777,26 @@ fn done_pulse_keeps_sidebar_and_title_glyphs_in_step() {
     let (card_on, title_on) = glyph_styles(4);
     assert!(!card_off.add_modifier.contains(Modifier::REVERSED));
     assert!(card_on.add_modifier.contains(Modifier::REVERSED));
-    assert_eq!(card_off, title_off, "steady phase diverged");
-    assert_eq!(card_on, title_on, "reversed phase diverged");
+    // The palettes differ on purpose — the focused card is the inverted
+    // surface, the title sits on the dark chrome — but the pulse *phase*
+    // must flip in step in both places, and neither glyph may ever pass
+    // through a foregroundless frame.
+    assert_eq!(
+        card_off.add_modifier, title_off.add_modifier,
+        "steady phase diverged"
+    );
+    assert_eq!(
+        card_on.add_modifier, title_on.add_modifier,
+        "reversed phase diverged"
+    );
+    for (what, style) in [
+        ("card off", card_off),
+        ("card on", card_on),
+        ("title off", title_off),
+        ("title on", title_on),
+    ] {
+        assert!(style.fg.is_some(), "{what} phase dropped its foreground");
+    }
+    assert_eq!(card_off.fg, card_on.fg, "the card pulse changes color");
+    assert_eq!(title_off.fg, title_on.fg, "the title pulse changes color");
 }

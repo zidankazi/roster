@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use roster_core::{context_alert, AgentState, ContextAlert, Telemetry};
 
 use crate::sidebar::format_age;
-use crate::style::{muted, state_color};
+use crate::style::{muted, selected, selected_muted, state_color, WARN_ON_SELECTED};
 
 /// Whether a card earns its telemetry row: always on the focused card, and
 /// on any card whose context alert escalated — the one reading that must
@@ -27,11 +27,12 @@ pub fn telemetry_row_visible(telemetry: &Telemetry, focused: bool) -> bool {
 /// never reported context. The sidebar draws this alone on an unfocused
 /// card's telemetry row — a row `telemetry_row_visible` only plans when
 /// the alert escalated, so the badge is present whenever such a row is.
-pub(crate) fn context_badge(telemetry: &Telemetry) -> Option<Span<'static>> {
+/// `on_selected` re-keys the colors for the light selected surface.
+pub(crate) fn context_badge(telemetry: &Telemetry, on_selected: bool) -> Option<Span<'static>> {
     let pct = telemetry.context_pct?;
     Some(Span::styled(
         format!("{pct:.0}% context"),
-        context_style(telemetry.context_pct),
+        context_style(telemetry.context_pct, on_selected),
     ))
 }
 
@@ -44,20 +45,30 @@ pub(crate) fn context_badge(telemetry: &Telemetry) -> Option<Span<'static>> {
 /// The model's parenthetical variant suffix is dropped — Claude Code reports
 /// display names like `Opus 4.8 (1M context)`, and on a ~30-column card the
 /// suffix starves the numbers the badge exists to show.
-pub fn telemetry_line(telemetry: &Telemetry) -> Line<'static> {
+///
+/// `on_selected` builds the line for the light selected surface — the
+/// focused card is the only place the full line renders, and it is always
+/// the inverted one. This module owns the re-key so the severity vocabulary
+/// can't be second-guessed from resolved colors at the call site.
+pub fn telemetry_line(telemetry: &Telemetry, on_selected: bool) -> Line<'static> {
+    let quiet = if on_selected {
+        selected_muted()
+    } else {
+        muted()
+    };
     let mut badges: Vec<Span<'static>> = Vec::new();
     if let Some(model) = &telemetry.model {
         let name = match model.find(" (") {
             Some(paren) => &model[..paren],
             None => model.as_str(),
         };
-        badges.push(Span::styled(name.to_string(), muted()));
+        badges.push(Span::styled(name.to_string(), quiet));
     }
-    if let Some(badge) = context_badge(telemetry) {
+    if let Some(badge) = context_badge(telemetry, on_selected) {
         badges.push(badge);
     }
     if let Some(cost) = telemetry.cost_usd {
-        badges.push(Span::styled(format!("${cost:.2}"), muted()));
+        badges.push(Span::styled(format!("${cost:.2}"), quiet));
     }
     // Of the reported windows, badge the most-used one — a nearly spent
     // seven-day limit must not hide behind a fresh five-hour window.
@@ -76,13 +87,13 @@ pub fn telemetry_line(telemetry: &Telemetry) -> Line<'static> {
             Some(resets) => format!("limit {used:.0}% resets {}", format_age(resets)),
             None => format!("limit {used:.0}%"),
         };
-        badges.push(Span::styled(text, muted()));
+        badges.push(Span::styled(text, quiet));
     }
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(badges.len() * 2);
     for badge in badges {
         if !spans.is_empty() {
-            spans.push(Span::styled(" · ", muted()));
+            spans.push(Span::styled(" · ", quiet));
         }
         spans.push(badge);
     }
@@ -94,13 +105,26 @@ pub fn telemetry_line(telemetry: &Telemetry) -> Line<'static> {
 /// the working yellow says look soon, the blocked red (bold) says the agent
 /// is about to compact and lose the thread. Thresholds live in
 /// [`roster_core::context_alert`], never here.
-fn context_style(remaining_pct: Option<f32>) -> Style {
-    match context_alert(remaining_pct) {
-        None => muted(),
-        Some(ContextAlert::Warn) => Style::default().fg(state_color(AgentState::Working)),
-        Some(ContextAlert::Critical) => Style::default()
-            .fg(state_color(AgentState::Blocked))
-            .add_modifier(Modifier::BOLD),
+///
+/// On the selected surface the critical red holds (it clears the light
+/// fill — danger stays red everywhere), while the warn tier swaps the
+/// unreadable-on-light yellow for the fixed dark amber
+/// [`WARN_ON_SELECTED`].
+fn context_style(remaining_pct: Option<f32>, on_selected: bool) -> Style {
+    match (context_alert(remaining_pct), on_selected) {
+        (None, false) => muted(),
+        (None, true) => selected_muted(),
+        (Some(ContextAlert::Warn), false) => Style::default().fg(state_color(AgentState::Working)),
+        (Some(ContextAlert::Warn), true) => selected().fg(WARN_ON_SELECTED),
+        (Some(ContextAlert::Critical), on_selected) => {
+            let mut style = Style::default()
+                .fg(state_color(AgentState::Blocked))
+                .add_modifier(Modifier::BOLD);
+            if on_selected {
+                style = style.bg(selected().bg.expect("selected() always sets a fill"));
+            }
+            style
+        }
     }
 }
 
@@ -135,7 +159,7 @@ mod tests {
     /// Draw the full badge line for `telemetry` on a one-row TestBackend.
     fn draw(telemetry: &Telemetry, width: u16) -> Terminal<TestBackend> {
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
-        let line = telemetry_line(telemetry);
+        let line = telemetry_line(telemetry, false);
         terminal
             .draw(|frame| frame.render_widget(line, frame.area()))
             .unwrap();
@@ -291,10 +315,10 @@ mod tests {
     fn context_badge_carries_the_severity_color_and_skips_absent_readings() {
         // No context reading: no badge — an unfocused card's telemetry row
         // draws this alone, so absence must render nothing.
-        assert!(context_badge(&Telemetry::default()).is_none());
+        assert!(context_badge(&Telemetry::default(), false).is_none());
         let mut telemetry = full_telemetry();
         telemetry.context_pct = Some(5.0);
-        let badge = context_badge(&telemetry).expect("badge for a reading");
+        let badge = context_badge(&telemetry, false).expect("badge for a reading");
         assert_eq!(badge.content, "5% context");
         assert_eq!(badge.style.fg, Some(state_color(AgentState::Blocked)));
     }
@@ -307,6 +331,47 @@ mod tests {
         let mut low = full_telemetry();
         low.context_pct = Some(20.0);
         assert!(telemetry_row_visible(&low, false));
+    }
+
+    #[test]
+    fn on_selected_lines_rekey_quiet_badges_and_keep_the_severity_vocabulary() {
+        // Quiet badges and separators take the selected surface's
+        // dark-muted tier.
+        let line = telemetry_line(&full_telemetry(), true);
+        for span in &line.spans {
+            if span.content.contains("Opus")
+                || span.content.contains('$')
+                || span.content.contains("limit")
+                || span.content.contains('·')
+            {
+                assert_eq!(span.style.fg, selected_muted().fg, "{:?}", span.content);
+                assert_eq!(span.style.bg, selected_muted().bg, "{:?}", span.content);
+            }
+        }
+        // Warn swaps the on-dark yellow for the dark amber — still warm,
+        // still not the critical red.
+        let warn = context_badge(
+            &Telemetry {
+                context_pct: Some(20.0),
+                ..Telemetry::default()
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(warn.style.fg, Some(WARN_ON_SELECTED));
+        // Critical stays the blocked red, bold — danger is red on every
+        // surface — with the light fill pinned behind it.
+        let critical = context_badge(
+            &Telemetry {
+                context_pct: Some(5.0),
+                ..Telemetry::default()
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(critical.style.fg, Some(state_color(AgentState::Blocked)));
+        assert_eq!(critical.style.bg, selected().bg);
+        assert!(critical.style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]

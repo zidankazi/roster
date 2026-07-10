@@ -279,8 +279,9 @@ product.
     stop.*
 16. **Chrome that disappears.** Styling roster's own UI with
     `Modifier::DIM` or theme-dependent ANSI colors (dark navy on a dark
-    terminal). → *roster chrome goes through `style.rs` semantics —
-    `state_color()`, `muted()` (fixed Indexed 243), `ACCENT` — and DIM is
+    terminal). → *roster chrome goes through `style.rs` semantics — the
+    surface fills, the bright/normal/muted foreground ramp (fixed
+    grayscale-ramp indices), `state_color()`, `ACCENT` — and DIM is
     reserved for faithfully rendering guest program output. Two shipped
     fixes exist for exactly this bug, and a regression test guards it —
     extend it, don't fight it.*

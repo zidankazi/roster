@@ -31,7 +31,10 @@ pub use sidebar::{
     auto_all_cols, auto_chip_cols, format_age, sidebar_entries, sidebar_rows, Message, Sidebar,
     SidebarEntry, SidebarRow, SidebarState,
 };
-pub use style::{cell_style, muted, state_color, state_glyph, state_glyph_style, ACCENT};
+pub use style::{
+    cell_style, muted, selected, selected_muted, state_color, state_glyph, state_glyph_style,
+    ACCENT,
+};
 pub use telemetry::telemetry_line;
 pub use toast::{draw_toasts, toast_rects, ToastLevel};
 
@@ -388,6 +391,14 @@ pub fn render(frame: &mut Frame, view: &View) {
 
     // The sidebar, with a full-height rule separating it from the panes.
     let bar = sidebar_area(area, view.side);
+    // The panel's base canvas under the whole region — the widget fills
+    // only the card area; this covers the rule column and the pinned
+    // button row too. The overlap with the widget's own fill is deliberate
+    // and idempotent: both name SURFACE_BASE, and the widget must stay
+    // self-contained for direct rendering in tests.
+    frame
+        .buffer_mut()
+        .set_style(bar, Style::default().bg(style::SURFACE_BASE));
     let bar_inner = sidebar_inner(area, view.side);
     let rule_x = match view.side {
         SidebarSide::Left => bar.x + bar.width.saturating_sub(1),
@@ -408,7 +419,7 @@ pub fn render(frame: &mut Frame, view: &View) {
             button_y,
             " + new agent ",
             usize::from(bar_inner.width.saturating_sub(1)),
-            style::chip(false, view.hover == Some(Hit::SidebarNewAgent)),
+            style::chip(false, view.hover == Some(Hit::SidebarNewAgent), false),
         );
     }
     let hovered_entry = match view.hover {
@@ -585,13 +596,13 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
             grid.x,
             grid.y,
             GRID_PILL,
-            style::chip(!view.zoomed, view.hover == Some(Hit::StatusViewGrid)),
+            style::chip(!view.zoomed, view.hover == Some(Hit::StatusViewGrid), false),
         );
         buf.set_string(
             solo.x,
             solo.y,
             SOLO_PILL,
-            style::chip(view.zoomed, view.hover == Some(Hit::StatusViewSolo)),
+            style::chip(view.zoomed, view.hover == Some(Hit::StatusViewSolo), false),
         );
     }
     if let Some((rect, text)) = span {
