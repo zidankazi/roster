@@ -6,7 +6,9 @@
 //! ranked globally by `roster_core::attention` — blocked, done, idle, then
 //! working at the bottom — so the agents that need you are always at the
 //! top, regardless of which workspace they live in. With more than one
-//! workspace each card carries a `⧉N` tag naming its home.
+//! workspace each card carries a `⧉N` tag naming its home. The card whose
+//! pane holds focus carries an accent bar down its left edge, so the
+//! sidebar always answers "which agent am I looking at".
 
 use std::time::{Duration, Instant};
 
@@ -18,7 +20,7 @@ use ratatui::widgets::Widget;
 use roster_core::{AgentState, AttentionItem, PaneId, Session, Telemetry};
 use roster_detect::Detector;
 
-use crate::style::{muted, state_color, state_glyph, state_label};
+use crate::style::{muted, state_color, state_glyph, state_glyph_style, state_label};
 use crate::telemetry::telemetry_line;
 
 /// One sidebar row: an agent pane and everything shown about it.
@@ -276,6 +278,7 @@ pub struct Sidebar<'a> {
     hovered: Option<usize>,
     hovered_auto: Option<usize>,
     hovered_auto_all: bool,
+    focused: Option<usize>,
     workspaces: usize,
     tick: u64,
 }
@@ -299,9 +302,18 @@ impl<'a> Sidebar<'a> {
             hovered,
             hovered_auto: None,
             hovered_auto_all: false,
+            focused: None,
             workspaces,
             tick,
         }
+    }
+
+    /// The entry index whose pane holds focus, marked with an accent bar
+    /// down the card's left edge — the sidebar's "you are here". Distinct
+    /// from `selected`, which is the transient jump-mode highlight.
+    pub fn focused(mut self, index: Option<usize>) -> Self {
+        self.focused = index;
+        self
     }
 
     /// The entry index whose `auto` chip is under the mouse, for hover
@@ -315,6 +327,13 @@ impl<'a> Sidebar<'a> {
     pub fn hovered_auto_all(mut self, hovered: bool) -> Self {
         self.hovered_auto_all = hovered;
         self
+    }
+
+    /// Draw one cell of the focused card's accent edge bar. One helper for
+    /// the three card rows, so the bar's glyph and color can't drift apart
+    /// between them.
+    fn draw_focus_bar(buf: &mut Buffer, x: u16, y: u16) {
+        buf.set_string(x, y, "▍", Style::default().fg(crate::style::ACCENT));
     }
 
     /// Count of entries currently in the blocked state.
@@ -389,15 +408,21 @@ impl Widget for Sidebar<'_> {
                         // Hover affordance: a quiet marker where selection's
                         // ❯ goes.
                         buf.set_string(area.x, y, "❯", muted());
+                    } else if self.focused == Some(index) {
+                        // The focus bar's top cell; the transient jump and
+                        // hover markers outrank it on this row — the bar
+                        // still reads from the rows below.
+                        Self::draw_focus_bar(buf, area.x, y);
                     }
 
                     // Glyph + agent name (bold; accented when selected), age
-                    // right-aligned and dim.
+                    // right-aligned and dim. The glyph's style is
+                    // tick-animated: done pulses to pull the eye.
                     buf.set_string(
                         area.x + 2,
                         y,
                         state_glyph(entry.state, self.tick),
-                        Style::default().fg(state_color(entry.state)),
+                        state_glyph_style(entry.state, self.tick),
                     );
                     // The right block: an optional `⧉N` workspace tag —
                     // shown once there is more than one workspace, since the
@@ -449,6 +474,9 @@ impl Widget for Sidebar<'_> {
                     // muted until it's on so every card shows where to
                     // click.
                     let entry = &self.entries[index];
+                    if self.focused == Some(index) {
+                        Self::draw_focus_bar(buf, area.x, y);
+                    }
                     let label = state_label(entry.state);
                     buf.set_stringn(
                         area.x + 4,
@@ -500,6 +528,9 @@ impl Widget for Sidebar<'_> {
                     // `telemetry_line` (the context badge escalates through
                     // the state colors as it runs out).
                     let entry = &self.entries[index];
+                    if self.focused == Some(index) {
+                        Self::draw_focus_bar(buf, area.x, y);
+                    }
                     if let Some(telemetry) = &entry.telemetry {
                         // Card indent + one right-margin column, like the
                         // rows above.
@@ -882,6 +913,69 @@ mod tests {
             buf.cell((4, 3)).unwrap().style().fg,
             Some(state_color(AgentState::Blocked))
         );
+    }
+
+    #[test]
+    fn done_glyph_pulses_reversed_across_ticks() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // The done card is second (blocked card at rows 2-3, spacer at 4),
+        // its ✓ glyph at column 2 of row 5.
+        let glyph_at = |tick: u64| {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+            Sidebar::new(&entries, None, None, session.window_count(), tick)
+                .render(Rect::new(0, 0, 32, 14), &mut buf);
+            assert_eq!(buf.cell((2, 5)).unwrap().symbol(), "✓");
+            buf.cell((2, 5)).unwrap().style()
+        };
+        let off = glyph_at(0);
+        let on = glyph_at(4);
+        assert!(!off.add_modifier.contains(Modifier::REVERSED));
+        assert!(on.add_modifier.contains(Modifier::REVERSED));
+        // Both phases keep the explicit done color — the pulse never dims
+        // the glyph or drops its foreground.
+        assert_eq!(off.fg, Some(state_color(AgentState::Done)));
+        assert_eq!(on.fg, Some(state_color(AgentState::Done)));
+    }
+
+    #[test]
+    fn focused_card_carries_an_accent_bar_down_its_edge() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        // Focus the done pane — entry index 1, card rows 5 (name) and 6
+        // (detail).
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .focused(Some(1))
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        for y in [5, 6] {
+            assert_eq!(buf.cell((0, y)).unwrap().symbol(), "▍", "row {y}");
+            assert_eq!(
+                buf.cell((0, y)).unwrap().style().fg,
+                Some(crate::style::ACCENT),
+                "row {y}"
+            );
+        }
+        // The unfocused cards' edge column stays empty.
+        assert_eq!(buf.cell((0, 2)).unwrap().symbol(), " ");
+        assert_eq!(buf.cell((0, 8)).unwrap().symbol(), " ");
+    }
+
+    #[test]
+    fn jump_selection_outranks_the_focus_bar_on_the_name_row() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, Some(1), None, session.window_count(), 0)
+            .focused(Some(1))
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        // Jump mode's ❯ takes the name row's marker cell; the bar still
+        // shows on the detail row below.
+        assert_eq!(buf.cell((0, 5)).unwrap().symbol(), "❯");
+        assert_eq!(buf.cell((0, 6)).unwrap().symbol(), "▍");
     }
 
     #[test]

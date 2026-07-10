@@ -81,6 +81,28 @@ pub fn state_glyph(state: AgentState, tick: u64) -> &'static str {
     }
 }
 
+/// Frame ticks per phase of the done pulse: at the ~125ms frame tick the
+/// glyph flips every ~500ms — slow enough not to strobe, fast enough to
+/// catch an eye sweeping the sidebar.
+const PULSE_TICKS: u64 = 4;
+
+/// The style for a state's status glyph, animated by the frame tick. Done
+/// pulses — plain and reversed in alternating phases — because done means
+/// an agent finished and is waiting for the human to look, and a steady
+/// check among steady dots is exactly what a sweeping eye skips. Both
+/// phases keep the same explicit foreground, so the glyph never dims or
+/// disappears (see [`muted`] for why that matters). The other states
+/// render steady: blocked already leads the triage order, and working's
+/// motion is its spinner.
+pub fn state_glyph_style(state: AgentState, tick: u64) -> Style {
+    let base = Style::default().fg(state_color(state));
+    if state == AgentState::Done && (tick / PULSE_TICKS) % 2 == 1 {
+        base.add_modifier(Modifier::REVERSED)
+    } else {
+        base
+    }
+}
+
 /// Convert a grid cell's style into a ratatui [`Style`].
 pub fn cell_style(style: CellStyle) -> Style {
     let mut out = Style::default().fg(color(style.fg)).bg(color(style.bg));
@@ -161,6 +183,26 @@ mod tests {
             state_glyph(AgentState::Working, 0),
             state_glyph(AgentState::Working, 10)
         );
+    }
+
+    #[test]
+    fn done_glyph_pulses_and_other_states_hold_steady() {
+        let off = state_glyph_style(AgentState::Done, 0);
+        let on = state_glyph_style(AgentState::Done, PULSE_TICKS);
+        assert!(!off.add_modifier.contains(Modifier::REVERSED));
+        assert!(on.add_modifier.contains(Modifier::REVERSED));
+        // Both phases keep the explicit state color — the pulse must never
+        // pass through a dimmed or foregroundless frame.
+        assert_eq!(off.fg, Some(state_color(AgentState::Done)));
+        assert_eq!(on.fg, Some(state_color(AgentState::Done)));
+        // The cycle repeats rather than drifting.
+        assert_eq!(state_glyph_style(AgentState::Done, 2 * PULSE_TICKS), off);
+        for state in [AgentState::Blocked, AgentState::Working, AgentState::Idle] {
+            assert_eq!(
+                state_glyph_style(state, 0),
+                state_glyph_style(state, PULSE_TICKS)
+            );
+        }
     }
 
     #[test]

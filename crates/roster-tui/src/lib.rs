@@ -31,7 +31,9 @@ pub use sidebar::{
     auto_all_cols, auto_chip_cols, format_age, sidebar_entries, sidebar_rows, Message, Sidebar,
     SidebarEntry, SidebarRow, SidebarState,
 };
-pub use style::{cell_style, muted, state_color, state_glyph, state_label, ACCENT};
+pub use style::{
+    cell_style, muted, state_color, state_glyph, state_glyph_style, state_label, ACCENT,
+};
 pub use telemetry::telemetry_line;
 pub use toast::{draw_toasts, toast_rects, ToastLevel};
 
@@ -423,6 +425,10 @@ pub fn render(frame: &mut Frame, view: &View) {
         Some(Hit::SidebarAuto(index)) => Some(index),
         _ => None,
     };
+    // The card whose pane holds focus carries the accent bar. Entries span
+    // every workspace but focus is the active window's, so at most one card
+    // matches.
+    let focused_entry = focused.and_then(|id| view.entries.iter().position(|e| e.pane == id));
     frame.render_widget(
         Sidebar::new(
             view.entries,
@@ -431,6 +437,7 @@ pub fn render(frame: &mut Frame, view: &View) {
             view.session.window_count(),
             view.tick,
         )
+        .focused(focused_entry)
         .hovered_auto(hovered_auto)
         .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll)),
         cards,
@@ -476,9 +483,11 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
     }
     let entry = view.entries.iter().find(|e| e.pane == id);
     let (glyph, glyph_style, label) = match entry {
+        // The shared glyph style keeps the title bar in step with the
+        // sidebar card: the same done pane pulses in both places.
         Some(entry) => (
             state_glyph(entry.state, view.tick),
-            Style::default().fg(state_color(entry.state)),
+            style::state_glyph_style(entry.state, view.tick),
             entry.agent.clone(),
         ),
         None => {

@@ -197,14 +197,16 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
     // Sidebar "agents" subtitle (first glyph after the leading space).
     assert_eq!(buf.cell((1, 0)).unwrap().symbol(), "a");
     assert_muted(1, 0, "sidebar subtitle");
-    // The blocked card leads (12s old): its right-aligned age column…
+    // The blocked card leads (12s old): the focus bar on its edge (its
+    // pane holds focus), its right-aligned age column…
     assert_eq!(
         region_text(&buf, 0, 31, 2),
-        "  ◉ claude-code            12s"
+        "▍ ◉ claude-code            12s"
     );
     assert_muted(27, 2, "sidebar age");
-    // …and the state reason after the colored state word on the detail row.
-    assert!(region_text(&buf, 0, 31, 3).starts_with("    blocked · Approve"));
+    // …and the state reason after the colored state word on the detail row
+    // (behind the focus bar's edge column).
+    assert!(region_text(&buf, 0, 31, 3).starts_with("▍   blocked · Approve"));
     assert_muted(14, 3, "sidebar state reason");
     // The bottom status hint line spans from the left edge.
     assert_eq!(buf.cell((0, 11)).unwrap().symbol(), "c");
@@ -687,4 +689,62 @@ fn sidebar_ranks_globally_across_workspaces_and_tags_cards() {
         !sidebar.contains("by space") && !sidebar.contains("by need"),
         "no triage switcher may render:\n{sidebar}"
     );
+}
+
+#[test]
+fn done_pulse_keeps_sidebar_and_title_glyphs_in_step() {
+    // The pulse is a property of the glyph, not of the sidebar: the same
+    // done pane must flip to reversed — and back — in its sidebar card and
+    // its pane title bar on the same tick.
+    let now = Instant::now();
+    let mut session = Session::new();
+    let pane = session.focused().unwrap();
+    session.pane_mut(pane).unwrap().command = Some("claude".into());
+    session.set_reading(pane, AgentState::Done, Some("finished".into()), now);
+    let mut grids = HashMap::new();
+    grids.insert(pane, Grid::from_text("agent output"));
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+    let exited = HashMap::new();
+    let scrolled = HashMap::new();
+
+    let glyph_styles = |tick: u64| {
+        let view = View {
+            session: &session,
+            grids: &grids,
+            exited: &exited,
+            entries: &entries,
+            selected: None,
+            hover: None,
+            zoomed: false,
+            side: SidebarSide::Left,
+            launcher: None,
+            confirm: None,
+            toasts: &[],
+            selection: None,
+            scrolled: &scrolled,
+            welcome: false,
+            mode_badge: None,
+            status: "",
+            tick,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal.draw(|frame| render(frame, &view)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        // The card glyph sits two columns into the sidebar's first card
+        // row; the title glyph two columns into the pane region (the
+        // sidebar spans 32 columns).
+        assert_eq!(buf.cell((2, 2)).unwrap().symbol(), "✓");
+        assert_eq!(buf.cell((34, 0)).unwrap().symbol(), "✓");
+        (
+            buf.cell((2, 2)).unwrap().style(),
+            buf.cell((34, 0)).unwrap().style(),
+        )
+    };
+    let (card_off, title_off) = glyph_styles(0);
+    let (card_on, title_on) = glyph_styles(4);
+    assert!(!card_off.add_modifier.contains(Modifier::REVERSED));
+    assert!(card_on.add_modifier.contains(Modifier::REVERSED));
+    assert_eq!(card_off, title_off, "steady phase diverged");
+    assert_eq!(card_on, title_on, "reversed phase diverged");
 }

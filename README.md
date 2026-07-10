@@ -35,7 +35,9 @@ a status dot only tells you an agent stopped. roster tells you it stopped on
 without reading every screen.
 
 - **every agent at a glance.** one colored glyph per agent, triaged so
-  whoever's been blocked longest sits on top, each card showing why.
+  whoever's been blocked longest sits on top, each card showing why. a
+  finished agent's check pulses until you look, and the card you're on
+  carries an accent bar down its edge.
 - **a real terminal, not a wrapped interpretation.** 10k lines of scrollback
   per pane, full-screen TUIs keep their keys, drag to select and copy (OSC 52,
   works over ssh), bracketed paste for multi-line prompts.
