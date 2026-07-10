@@ -73,8 +73,10 @@ pub fn danger() -> Color {
 /// cursor. `armed` fills the pill with the accent (bold) for an active
 /// toggle or mode; `hovered` underlines it — underline stays visible
 /// inside a reversed cell where another inversion would cancel out. Every
-/// chip routes through here so rest, hover, and armed can't drift apart
-/// between controls.
+/// sidebar and status-row chip routes through here so rest, hover, and
+/// armed can't drift apart between those controls. The modal dialogs
+/// (confirm, exited) keep their own padded-button treatment — default and
+/// danger fills this accent-only helper doesn't carry.
 pub fn chip(armed: bool, hovered: bool) -> Style {
     let mut style = if armed {
         Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)

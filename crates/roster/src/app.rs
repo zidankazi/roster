@@ -1499,6 +1499,10 @@ impl App {
     /// the pane under the cursor.
     fn handle_mouse(&mut self, mouse: MouseEvent) {
         let (x, y) = (mouse.column, mouse.row);
+        // The position the last drawn frame's hover affordances used. A
+        // click must be judged against what that frame showed — the click
+        // itself must not count as the hover that revealed a control.
+        let previous_mouse = self.last_mouse;
         self.last_mouse = Some((x, y));
 
         // The confirm dialog owns the mouse while open: its buttons decide,
@@ -1595,9 +1599,36 @@ impl App {
                     Hit::SidebarAuto(index) => {
                         // The chip is a button on the card, not the card:
                         // toggle without stealing focus from the pane the
-                        // user is watching.
-                        if let Some(pane) = self.last_entries.get(index).map(|e| e.pane.raw()) {
-                            self.toggle_auto_approve(pane);
+                        // user is watching. But only when the chip was
+                        // actually drawn — armed, or its card hovered,
+                        // selected, or focused (mirroring the sidebar's
+                        // reveal). In a terminal that reports clicks but
+                        // never motion, hover is never set and the chip
+                        // stays hidden: a click there is a click on blank
+                        // card space, and an invisible control must never
+                        // arm auto-approve — it falls through to the
+                        // card's own action, the jump.
+                        if let Some(entry) = self.last_entries.get(index) {
+                            let hovered = previous_mouse
+                                .map(|(px, py)| self.hit_at(px, py))
+                                .is_some_and(|hit| {
+                                    matches!(
+                                        hit,
+                                        Hit::SidebarAuto(i) | Hit::SidebarEntry(i) if i == index
+                                    )
+                                });
+                            let selected = matches!(self.mode, Mode::Jump)
+                                && self.sidebar.selected(&self.last_entries) == Some(index);
+                            let revealed = entry.auto_approve
+                                || hovered
+                                || selected
+                                || self.session.focused() == Some(entry.pane);
+                            let pane = entry.pane;
+                            if revealed {
+                                self.toggle_auto_approve(pane.raw());
+                            } else {
+                                self.session.focus(pane);
+                            }
                         }
                     }
                     Hit::SidebarAutoAll => self.toggle_auto_all(),

@@ -24,8 +24,10 @@ pub fn telemetry_row_visible(telemetry: &Telemetry, focused: bool) -> bool {
 }
 
 /// The `N% context` badge, in its severity color. `None` when the feed
-/// never reported context.
-fn context_badge(telemetry: &Telemetry) -> Option<Span<'static>> {
+/// never reported context. The sidebar draws this alone on an unfocused
+/// card's telemetry row — a row `telemetry_row_visible` only plans when
+/// the alert escalated, so the badge is present whenever such a row is.
+pub(crate) fn context_badge(telemetry: &Telemetry) -> Option<Span<'static>> {
     let pct = telemetry.context_pct?;
     Some(Span::styled(
         format!("{pct:.0}% context"),
@@ -33,28 +35,16 @@ fn context_badge(telemetry: &Telemetry) -> Option<Span<'static>> {
     ))
 }
 
-/// The telemetry badge line for one sidebar card: model, `N% context`,
+/// The full telemetry badge line for the focused card: model, `N% context`,
 /// `$X.XX`, and `limit N%` in that order, joined by muted `·` separators.
 /// Absent readings render nothing — an unreported [`Telemetry`] yields an
 /// empty line. The context badge carries the severity color (see
 /// [`context_style`]); every other badge is quiet chrome.
 ///
-/// Only the focused card gets the `full` line; elsewhere the line is just
-/// the context badge, and only once its alert escalated — the third line
-/// nearly doubles a card, so at-rest cards don't pay it for readings with
-/// no attention value.
-///
 /// The model's parenthetical variant suffix is dropped — Claude Code reports
 /// display names like `Opus 4.8 (1M context)`, and on a ~30-column card the
 /// suffix starves the numbers the badge exists to show.
-pub fn telemetry_line(telemetry: &Telemetry, full: bool) -> Line<'static> {
-    if !full {
-        let badge = context_alert(telemetry.context_pct)
-            .is_some()
-            .then(|| context_badge(telemetry))
-            .flatten();
-        return Line::from(badge.into_iter().collect::<Vec<_>>());
-    }
+pub fn telemetry_line(telemetry: &Telemetry) -> Line<'static> {
     let mut badges: Vec<Span<'static>> = Vec::new();
     if let Some(model) = &telemetry.model {
         let name = match model.find(" (") {
@@ -144,11 +134,8 @@ mod tests {
 
     /// Draw the full badge line for `telemetry` on a one-row TestBackend.
     fn draw(telemetry: &Telemetry, width: u16) -> Terminal<TestBackend> {
-        draw_line(telemetry_line(telemetry, true), width)
-    }
-
-    fn draw_line(line: Line<'static>, width: u16) -> Terminal<TestBackend> {
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+        let line = telemetry_line(telemetry);
         terminal
             .draw(|frame| frame.render_widget(line, frame.area()))
             .unwrap();
@@ -301,19 +288,15 @@ mod tests {
     }
 
     #[test]
-    fn compact_line_keeps_only_the_escalated_context_badge() {
-        // An unfocused card with healthy readings renders nothing — the
-        // model, cost, and rate-limit badges are the focused card's.
-        let terminal = draw_line(telemetry_line(&full_telemetry(), false), 70);
-        assert_eq!(row_text(&terminal), "");
-        // Once the context alert escalates, the badge — and only the
-        // badge — appears, in its severity color.
+    fn context_badge_carries_the_severity_color_and_skips_absent_readings() {
+        // No context reading: no badge — an unfocused card's telemetry row
+        // draws this alone, so absence must render nothing.
+        assert!(context_badge(&Telemetry::default()).is_none());
         let mut telemetry = full_telemetry();
         telemetry.context_pct = Some(5.0);
-        let terminal = draw_line(telemetry_line(&telemetry, false), 70);
-        assert_eq!(row_text(&terminal), "5% context");
-        let style = style_at(&terminal, 0);
-        assert_eq!(style.fg, Some(state_color(AgentState::Blocked)));
+        let badge = context_badge(&telemetry).expect("badge for a reading");
+        assert_eq!(badge.content, "5% context");
+        assert_eq!(badge.style.fg, Some(state_color(AgentState::Blocked)));
     }
 
     #[test]

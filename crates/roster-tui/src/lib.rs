@@ -31,9 +31,7 @@ pub use sidebar::{
     auto_all_cols, auto_chip_cols, format_age, sidebar_entries, sidebar_rows, Message, Sidebar,
     SidebarEntry, SidebarRow, SidebarState,
 };
-pub use style::{
-    cell_style, chip, muted, state_color, state_glyph, state_glyph_style, state_label, ACCENT,
-};
+pub use style::{cell_style, muted, state_color, state_glyph, state_glyph_style, ACCENT};
 pub use telemetry::telemetry_line;
 pub use toast::{draw_toasts, toast_rects, ToastLevel};
 
@@ -189,31 +187,59 @@ pub fn status_windows_span(area: Rect, active: usize, count: usize) -> Option<(R
     })
 }
 
+/// The `grid` layout pill's text — space-padded into the reverse-video
+/// pill `style::chip` draws. `status_view_spans` derives the click-target
+/// width from these consts, so a relabel can't strand the targets.
+const GRID_PILL: &str = " grid ";
+
+/// The `solo` layout pill's text; see [`GRID_PILL`].
+const SOLO_PILL: &str = " solo ";
+
 /// The status row's `grid` / `solo` layout-switcher pills, sitting left of
 /// the workspace indicator (`windows` is its rect, when shown). `None` with
 /// a single pane — the layouts are identical and the control would be
 /// noise — or when the row is too crowded to keep the pills clear of the
-/// key hints. Render draws them and `hit_test` targets them, so the pills
-/// can't drift off their click targets.
-pub fn status_view_spans(
-    area: Rect,
-    windows: Option<&Rect>,
-    multi_pane: bool,
-) -> Option<(Rect, Rect)> {
+/// key hints.
+fn status_view_spans(area: Rect, windows: Option<&Rect>, multi_pane: bool) -> Option<(Rect, Rect)> {
     if !multi_pane || area.height < STATUS_HEIGHT {
         return None;
     }
     let right = windows.map(|rect| rect.x).unwrap_or(area.x + area.width);
     let y = area.y + area.height - STATUS_HEIGHT;
-    // ` grid ` and ` solo ` pills, one gap column apart, one column in
-    // from whatever bounds them on the right.
-    let pill = 6;
-    let total = pill + 1 + pill + 1;
+    // The two pills, one gap column apart, one column in from whatever
+    // bounds them on the right.
+    let grid = GRID_PILL.chars().count() as u16;
+    let solo = SOLO_PILL.chars().count() as u16;
+    let total = grid + 1 + solo + 1;
     ((right - area.x) > total + 24).then(|| {
-        let solo_x = right - 1 - pill;
-        let grid_x = solo_x - 1 - pill;
-        (Rect::new(grid_x, y, pill, 1), Rect::new(solo_x, y, pill, 1))
+        let solo_x = right - 1 - solo;
+        let grid_x = solo_x - 1 - grid;
+        (Rect::new(grid_x, y, grid, 1), Rect::new(solo_x, y, solo, 1))
     })
+}
+
+/// The status row's clickable controls, resolved in one place: render
+/// draws exactly this and `hit_test` targets exactly this, so the drawn
+/// chrome and the click targets can't disagree about geometry.
+pub struct StatusControls {
+    /// The `⧉ N/M` workspace indicator's rect and text, when shown.
+    pub windows: Option<(Rect, String)>,
+    /// The `(grid, solo)` layout-pill rects, when shown.
+    pub views: Option<(Rect, Rect)>,
+}
+
+/// Resolve the status row's clickable controls for a frame (see
+/// [`StatusControls`]).
+pub fn status_controls(area: Rect, side: SidebarSide, session: &Session) -> StatusControls {
+    let windows = status_windows_span(
+        area,
+        session.active_window().unwrap_or(0),
+        session.window_count(),
+    );
+    let panes = panes_area(area, side);
+    let multi_pane = session.layout(panes.width, panes.height).len() > 1;
+    let views = status_view_spans(area, windows.as_ref().map(|(rect, _)| rect), multi_pane);
+    StatusControls { windows, views }
 }
 
 /// The part of a laid-out pane rect its content actually occupies: the top
@@ -396,7 +422,7 @@ pub fn render(frame: &mut Frame, view: &View) {
     // The card whose pane holds focus carries the accent bar. Entries span
     // every workspace but focus is the active window's, so at most one card
     // matches.
-    let focused_entry = focused.and_then(|id| view.entries.iter().position(|e| e.pane == id));
+    let focused_entry = sidebar::focused_entry(view.entries, focused);
     frame.render_widget(
         Sidebar::new(
             view.entries,
@@ -540,14 +566,10 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
     }
     // The workspace indicator claims the right edge, the layout-switcher
     // pills sit left of it; the hint text yields to both.
-    let span = status_windows_span(
-        area,
-        view.session.active_window().unwrap_or(0),
-        view.session.window_count(),
-    );
-    let panes = panes_area(area, view.side);
-    let multi_pane = view.session.layout(panes.width, panes.height).len() > 1;
-    let views = status_view_spans(area, span.as_ref().map(|(rect, _)| rect), multi_pane);
+    let StatusControls {
+        windows: span,
+        views,
+    } = status_controls(area, view.side, view.session);
     let right_edge = views
         .as_ref()
         .map(|(grid, _)| grid.x)
@@ -562,13 +584,13 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
         buf.set_string(
             grid.x,
             grid.y,
-            " grid ",
+            GRID_PILL,
             style::chip(!view.zoomed, view.hover == Some(Hit::StatusViewGrid)),
         );
         buf.set_string(
             solo.x,
             solo.y,
-            " solo ",
+            SOLO_PILL,
             style::chip(view.zoomed, view.hover == Some(Hit::StatusViewSolo)),
         );
     }

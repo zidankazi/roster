@@ -7,10 +7,12 @@
 use ratatui::layout::Rect;
 use roster_core::{PaneId, Session};
 
-use crate::sidebar::{auto_all_cols, auto_chip_cols, sidebar_rows, SidebarEntry, SidebarRow};
+use crate::sidebar::{
+    auto_all_cols, auto_chip_cols, focused_entry, sidebar_rows, SidebarEntry, SidebarRow,
+};
 use crate::{
-    close_button_cols, local_panes, panes_area, sidebar_button_row, sidebar_inner,
-    status_view_spans, status_windows_span, SidebarSide, STATUS_HEIGHT,
+    close_button_cols, local_panes, panes_area, sidebar_button_row, sidebar_inner, status_controls,
+    SidebarSide, StatusControls, STATUS_HEIGHT,
 };
 
 /// What a screen position corresponds to.
@@ -113,24 +115,19 @@ pub fn hit_test(
     if x < area.x || y < area.y || x >= area.x + area.width || y >= area.y + area.height {
         return Hit::Outside;
     }
-    let panes = panes_area(area, side);
-    let multi_pane = session.layout(panes.width, panes.height).len() > 1;
     if area.height >= STATUS_HEIGHT && y >= area.y + area.height - STATUS_HEIGHT {
-        let span = status_windows_span(
-            area,
-            session.active_window().unwrap_or(0),
-            session.window_count(),
-        );
+        // One resolver shared with draw_status, so the targets can't
+        // drift off the drawn controls.
+        let StatusControls {
+            windows: span,
+            views,
+        } = status_controls(area, side, session);
         if let Some((rect, _)) = &span {
             if x >= rect.x && x < rect.x + rect.width {
                 return Hit::StatusWindows;
             }
         }
-        // The layout-switcher pills sit left of the workspace indicator —
-        // mirroring draw_status.
-        if let Some((grid, solo)) =
-            status_view_spans(area, span.as_ref().map(|(rect, _)| rect), multi_pane)
-        {
+        if let Some((grid, solo)) = views {
             if x >= grid.x && x < grid.x + grid.width {
                 return Hit::StatusViewGrid;
             }
@@ -172,11 +169,8 @@ pub fn hit_test(
             return Hit::Sidebar;
         }
         // The row plan needs the focused entry — only its card grows the
-        // full telemetry row — resolved exactly the way render does.
-        let focused = session
-            .focused()
-            .and_then(|id| entries.iter().position(|entry| entry.pane == id));
-        let rows = sidebar_rows(entries, focused);
+        // full telemetry row — resolved by the same helper render uses.
+        let rows = sidebar_rows(entries, focused_entry(entries, session.focused()));
         return match rows.get(usize::from(y - first)) {
             Some(SidebarRow::EntryName(index)) => Hit::SidebarEntry(*index),
             Some(SidebarRow::EntryDetail(index)) => {
@@ -197,6 +191,7 @@ pub fn hit_test(
         };
     }
 
+    let panes = panes_area(area, side);
     if x >= panes.x && x < panes.x + panes.width && y >= panes.y && y < panes.y + panes.height {
         let local = local_panes(panes);
         let (lx, ly) = (x - panes.x, y - panes.y);

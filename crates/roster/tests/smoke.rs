@@ -926,13 +926,18 @@ fn full_pipeline_shows_blocked_agent_and_quits() {
 
     // Roster's own output is a terminal byte stream: parse it with our
     // emulator and watch the screen it draws. The sidebar card is two
-    // lines: the agent name on one, the state and reason on the next.
+    // lines: the agent name on one, the reason on the next; the header
+    // counts the blocked agent. The reason marker carries the sidebar's
+    // truncation ellipsis and card indent, so a match proves the verbatim
+    // prompt reached the card — the pane's own copy of the prompt is
+    // full-width and can't satisfy it.
     let mut screen = Screen::new(cols, rows);
     let saw_blocked = drain_while(&mut screen, "claude-code", true, &rx)
-        && drain_while(&mut screen, "1 blocked", true, &rx);
+        && drain_while(&mut screen, "1 blocked", true, &rx)
+        && drain_while(&mut screen, "   Do you want to pro", true, &rx);
     assert!(
         saw_blocked,
-        "sidebar never showed the blocked agent; screen was:\n{}",
+        "sidebar never showed the blocked agent with its reason; screen was:\n{}",
         screen.grid().lines().join("\n")
     );
 
@@ -1008,8 +1013,14 @@ fn unfocused_done_pane_stays_done_until_visited() {
     let rx = pump(&pty);
     let mut screen = Screen::new(cols, rows);
 
-    // The unfocused pane settles and its card turns done with the result
-    // line as the reason.
+    // The unfocused pane settles and its card turns done: the ✓ glyph
+    // appears (the card's and title's state signal — the reason alone
+    // can't prove the state) with the result line as the reason.
+    assert!(
+        drain_while(&mut screen, "✓", true, &rx),
+        "done glyph never appeared:\n{}",
+        screen.grid().lines().join("\n")
+    );
     assert!(
         drain_while(&mut screen, "    pumpe", true, &rx),
         "sidebar never showed done:\n{}",
@@ -1029,22 +1040,33 @@ fn unfocused_done_pane_stays_done_until_visited() {
         }
     }
     assert!(
+        screen.grid().lines().iter().any(|l| l.contains('✓')),
+        "done state decayed while unfocused:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert!(
         screen
             .grid()
             .lines()
             .iter()
             .any(|l| l.contains("    pumpe")),
-        "done decayed while unfocused:\n{}",
+        "done reason decayed while unfocused:\n{}",
         screen.grid().lines().join("\n")
     );
 
     // Visit the pane (prefix-o cycles focus onto it): focus is the
-    // acknowledgment, and the card decays to idle.
+    // acknowledgment, and the card decays to idle — the ✓ leaves with
+    // the state, the reason with it.
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"o").expect("focus next");
     assert!(
+        drain_while(&mut screen, "✓", false, &rx),
+        "done state never decayed after focusing the pane:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert!(
         drain_while(&mut screen, "    pumpe", false, &rx),
-        "done never decayed after focusing the pane:\n{}",
+        "done reason never decayed after focusing the pane:\n{}",
         screen.grid().lines().join("\n")
     );
     // Three-space indent, not four: the visited card holds focus, so its

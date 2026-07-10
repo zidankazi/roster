@@ -25,7 +25,7 @@ use roster_core::{AgentState, AttentionItem, PaneId, Session, Telemetry};
 use roster_detect::Detector;
 
 use crate::style::{chip, muted, state_color, state_glyph, state_glyph_style, state_label};
-use crate::telemetry::{telemetry_line, telemetry_row_visible};
+use crate::telemetry::{context_badge, telemetry_line, telemetry_row_visible};
 
 /// One sidebar row: an agent pane and everything shown about it.
 #[derive(Clone, Debug, PartialEq)]
@@ -98,6 +98,15 @@ pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> 
         (item.priority(), e.pane)
     });
     entries
+}
+
+/// The entries index of the pane holding focus, when it has a card. The
+/// one resolver shared by render and hit-testing: the focused card is the
+/// card that grows the full telemetry row, so the two sides resolving
+/// focus differently would desync the row plan and land every click below
+/// the focused card one row off.
+pub fn focused_entry(entries: &[SidebarEntry], focused: Option<PaneId>) -> Option<usize> {
+    focused.and_then(|id| entries.iter().position(|entry| entry.pane == id))
 }
 
 /// A pane-switch request surfaced by the sidebar. The binary owns the
@@ -526,12 +535,17 @@ impl Widget for Sidebar<'_> {
                     }
                     if let Some(telemetry) = &entry.telemetry {
                         // Card indent + one right-margin column, like the
-                        // rows above.
+                        // rows above. An unfocused row exists only because
+                        // its context alert escalated (the row plan and
+                        // this content decision share telemetry_row_visible),
+                        // so the lone badge is always present.
                         let budget = width.saturating_sub(4).saturating_sub(1);
-                        let line = truncate_line(
-                            telemetry_line(telemetry, self.focused == Some(index)),
-                            budget,
-                        );
+                        let line = if self.focused == Some(index) {
+                            telemetry_line(telemetry)
+                        } else {
+                            Line::from(context_badge(telemetry).into_iter().collect::<Vec<_>>())
+                        };
+                        let line = truncate_line(line, budget);
                         buf.set_line(area.x + 4, y, &line, area.width.saturating_sub(4));
                     }
                 }
