@@ -32,7 +32,7 @@ pub use sidebar::{
     SidebarEntry, SidebarRow, SidebarState,
 };
 pub use style::{
-    cell_style, muted, state_color, state_glyph, state_glyph_style, state_label, ACCENT,
+    cell_style, chip, muted, state_color, state_glyph, state_glyph_style, state_label, ACCENT,
 };
 pub use telemetry::telemetry_line;
 pub use toast::{draw_toasts, toast_rects, ToastLevel};
@@ -167,22 +167,6 @@ pub fn close_button_cols(rect: roster_core::Rect, area: Rect) -> Option<std::ops
         .then(|| rect.x + content.width - 3..rect.x + content.width)
 }
 
-/// The sidebar row hosting the `grid · solo` layout switcher, one row above
-/// the + new agent button. Rendered (and clickable) only when the active
-/// window has more than one pane — with a single pane the layouts are
-/// identical and the control would be noise.
-pub fn sidebar_view_row(frame_area: Rect, side: SidebarSide) -> Option<u16> {
-    let bar = sidebar_inner(frame_area, side);
-    (bar.height >= 8).then(|| bar.y + bar.height - 2)
-}
-
-/// The switcher's click targets on its row, in sidebar-inner columns:
-/// `(grid, solo)` word spans.
-pub fn view_toggle_cols() -> (std::ops::Range<u16>, std::ops::Range<u16>) {
-    // " grid · solo" — generous targets around each word.
-    (0..6, 7..13)
-}
-
 /// The status row's right-aligned workspace indicator — `⧉ 2/3`, clickable
 /// to cycle windows. `None` with a single window (nothing to indicate) or
 /// when the status row is too crowded to fit it.
@@ -202,6 +186,33 @@ pub fn status_windows_span(area: Rect, active: usize, count: usize) -> Option<(R
             ),
             text,
         )
+    })
+}
+
+/// The status row's `grid` / `solo` layout-switcher pills, sitting left of
+/// the workspace indicator (`windows` is its rect, when shown). `None` with
+/// a single pane — the layouts are identical and the control would be
+/// noise — or when the row is too crowded to keep the pills clear of the
+/// key hints. Render draws them and `hit_test` targets them, so the pills
+/// can't drift off their click targets.
+pub fn status_view_spans(
+    area: Rect,
+    windows: Option<&Rect>,
+    multi_pane: bool,
+) -> Option<(Rect, Rect)> {
+    if !multi_pane || area.height < STATUS_HEIGHT {
+        return None;
+    }
+    let right = windows.map(|rect| rect.x).unwrap_or(area.x + area.width);
+    let y = area.y + area.height - STATUS_HEIGHT;
+    // ` grid ` and ` solo ` pills, one gap column apart, one column in
+    // from whatever bounds them on the right.
+    let pill = 6;
+    let total = pill + 1 + pill + 1;
+    ((right - area.x) > total + 24).then(|| {
+        let solo_x = right - 1 - pill;
+        let grid_x = solo_x - 1 - pill;
+        (Rect::new(grid_x, y, pill, 1), Rect::new(solo_x, y, pill, 1))
     })
 }
 
@@ -366,56 +377,13 @@ pub fn render(frame: &mut Frame, view: &View) {
     if let Some(button_y) = sidebar_button_row(area, view.side) {
         // Keep the cards clear of the button and its breathing row.
         cards.height = cards.height.saturating_sub(2);
-        let mut button_style = Style::default()
-            .fg(style::ACCENT)
-            .add_modifier(Modifier::BOLD);
-        if view.hover == Some(Hit::SidebarNewAgent) {
-            button_style = button_style.add_modifier(Modifier::REVERSED);
-        }
         frame.buffer_mut().set_stringn(
             bar_inner.x + 1,
             button_y,
             " + new agent ",
             usize::from(bar_inner.width.saturating_sub(1)),
-            button_style,
+            style::chip(false, view.hover == Some(Hit::SidebarNewAgent)),
         );
-    }
-    // A switcher word: accent+bold when it names the active mode, muted
-    // otherwise, inverted under the pointer.
-    let word = |active: bool, hovered: bool| -> Style {
-        let mut style = if active {
-            Style::default()
-                .fg(style::ACCENT)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            style::muted()
-        };
-        if hovered {
-            style = style.add_modifier(Modifier::REVERSED);
-        }
-        style
-    };
-    // The grid · solo switcher, above the button, when there is anything
-    // to switch between.
-    let multi_pane = view.session.layout(panes.width, panes.height).len() > 1;
-    if multi_pane {
-        if let Some(view_y) = sidebar_view_row(area, view.side) {
-            cards.height = cards.height.saturating_sub(1);
-            let buf = frame.buffer_mut();
-            buf.set_string(
-                bar_inner.x + 1,
-                view_y,
-                "grid",
-                word(!view.zoomed, view.hover == Some(Hit::SidebarViewGrid)),
-            );
-            buf.set_string(bar_inner.x + 6, view_y, "·", style::muted());
-            buf.set_string(
-                bar_inner.x + 8,
-                view_y,
-                "solo",
-                word(view.zoomed, view.hover == Some(Hit::SidebarViewSolo)),
-            );
-        }
     }
     let hovered_entry = match view.hover {
         Some(Hit::SidebarEntry(index)) => Some(index),
@@ -503,7 +471,9 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
     };
 
     if focused {
-        buf.set_string(span.x, span.y, "▎", Style::default().fg(style::ACCENT));
+        // The same accent bar as the focused sidebar card's edge — one
+        // glyph for one meaning, in both places.
+        buf.set_string(span.x, span.y, "▍", Style::default().fg(style::ACCENT));
     }
     buf.set_stringn(
         span.x + 2,
@@ -568,19 +538,39 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
         );
         x += text.chars().count() as u16 + 1;
     }
-    // The workspace indicator claims the right edge; the hint text yields
-    // to it.
+    // The workspace indicator claims the right edge, the layout-switcher
+    // pills sit left of it; the hint text yields to both.
     let span = status_windows_span(
         area,
         view.session.active_window().unwrap_or(0),
         view.session.window_count(),
     );
-    let right_edge = span
+    let panes = panes_area(area, view.side);
+    let multi_pane = view.session.layout(panes.width, panes.height).len() > 1;
+    let views = status_view_spans(area, span.as_ref().map(|(rect, _)| rect), multi_pane);
+    let right_edge = views
         .as_ref()
-        .map(|(rect, _)| rect.x)
+        .map(|(grid, _)| grid.x)
+        .or_else(|| span.as_ref().map(|(rect, _)| rect.x))
         .unwrap_or(area.x + area.width);
     if x < right_edge {
         draw_hotkeys(buf, x, y, right_edge - x, view.status);
+    }
+    if let Some((grid, solo)) = views {
+        // The active layout's pill is the armed one — the switcher doubles
+        // as the mode indicator.
+        buf.set_string(
+            grid.x,
+            grid.y,
+            " grid ",
+            style::chip(!view.zoomed, view.hover == Some(Hit::StatusViewGrid)),
+        );
+        buf.set_string(
+            solo.x,
+            solo.y,
+            " solo ",
+            style::chip(view.zoomed, view.hover == Some(Hit::StatusViewSolo)),
+        );
     }
     if let Some((rect, text)) = span {
         let style = if view.hover == Some(Hit::StatusWindows) {

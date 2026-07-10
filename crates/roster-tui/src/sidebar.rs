@@ -1,8 +1,12 @@
 //! The agent-state sidebar: every agent across every workspace in one flat
 //! list, each rendered as a card — a colored status glyph, the agent name,
-//! and its age on top; the state, its reason, and the clickable `auto`
-//! (auto-approve) chip below; and, only when the statusline bridge feeds
-//! one, a third line of telemetry badges (see `telemetry.rs`). Cards are
+//! and its age on top; the reason (why the agent is in its state) below,
+//! with the ` auto ` auto-approve pill revealed on the cards you're on;
+//! and a third line of telemetry badges only where they earn the row —
+//! the full line on the focused card, the escalated context badge anywhere
+//! (see `telemetry.rs`). The glyph alone carries the state: its shape and
+//! color are distinct per state, so the detail row spends its width on the
+//! reason — the signal — not on spelling the state out twice. Cards are
 //! ranked globally by `roster_core::attention` — blocked, done, idle, then
 //! working at the bottom — so the agents that need you are always at the
 //! top, regardless of which workspace they live in. With more than one
@@ -20,8 +24,8 @@ use ratatui::widgets::Widget;
 use roster_core::{AgentState, AttentionItem, PaneId, Session, Telemetry};
 use roster_detect::Detector;
 
-use crate::style::{muted, state_color, state_glyph, state_glyph_style, state_label};
-use crate::telemetry::telemetry_line;
+use crate::style::{chip, muted, state_color, state_glyph, state_glyph_style, state_label};
+use crate::telemetry::{telemetry_line, telemetry_row_visible};
 
 /// One sidebar row: an agent pane and everything shown about it.
 #[derive(Clone, Debug, PartialEq)]
@@ -182,11 +186,13 @@ impl SidebarState {
 pub enum SidebarRow {
     /// The first line of an entry's card: glyph, name, age.
     EntryName(usize),
-    /// The second line of an entry's card: state and reason.
+    /// The second line of an entry's card: the reason, and the `auto` chip
+    /// when revealed.
     EntryDetail(usize),
     /// The third line of an entry's card: telemetry badges. Emitted only
-    /// when the entry carries telemetry, so bridge-less cards keep their
-    /// exact two-line shape.
+    /// where the row earns its height (see `telemetry_row_visible`) — the
+    /// focused card, or a card whose context alert escalated — so at-rest
+    /// cards keep their two-line shape.
     EntryTelemetry(usize),
     /// Breathing room.
     Blank,
@@ -194,13 +200,20 @@ pub enum SidebarRow {
 
 /// The sidebar's card-region rows for `entries`: one flat, globally-ranked
 /// list of cards with no workspace headers — the ranking already interleaves
-/// workspaces, so there is nothing to group under.
-pub fn sidebar_rows(entries: &[SidebarEntry]) -> Vec<SidebarRow> {
+/// workspaces, so there is nothing to group under. `focused` is the entry
+/// whose pane holds focus; only its card grows the full telemetry row.
+/// Render draws this plan and hit-testing mirrors it, so both must resolve
+/// `focused` the same way.
+pub fn sidebar_rows(entries: &[SidebarEntry], focused: Option<usize>) -> Vec<SidebarRow> {
     let mut rows = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
         rows.push(SidebarRow::EntryName(index));
         rows.push(SidebarRow::EntryDetail(index));
-        if entry.telemetry.is_some() {
+        if entry
+            .telemetry
+            .as_ref()
+            .is_some_and(|telemetry| telemetry_row_visible(telemetry, focused == Some(index)))
+        {
             rows.push(SidebarRow::EntryTelemetry(index));
         }
         rows.push(SidebarRow::Blank);
@@ -208,10 +221,11 @@ pub fn sidebar_rows(entries: &[SidebarEntry]) -> Vec<SidebarRow> {
     rows
 }
 
-/// The `auto` chip's text — the per-card auto-approve toggle. The brackets
-/// are the affordance: they read as a pressable control even in terminals
-/// that ignore the pointer-shape protocol and show no hand cursor.
-const AUTO_CHIP: &str = "[auto]";
+/// The `auto` chip's text — the per-card auto-approve toggle, space-padded
+/// into the reverse-video pill `style::chip` draws. The pill is the
+/// affordance: it reads as pressable even in terminals that ignore the
+/// pointer-shape protocol and show no hand cursor.
+const AUTO_CHIP: &str = " auto ";
 
 /// The minimum reason budget the chip must leave on its row. The reason is
 /// the signal and outranks chrome: a sidebar too cramped for both drops
@@ -222,38 +236,26 @@ const MIN_REASON: u16 = 8;
 const CARD_INDENT: u16 = 4;
 
 /// The columns of an entry detail row's `auto` chip, in sidebar-inner
-/// columns: the word right-aligned one column in from the edge, mirroring
+/// columns: the pill right-aligned one column in from the edge, mirroring
 /// the age on the name row above. `None` when the row can't host it and a
-/// useful reason. Deliberately width-only: sized to the *longest* state
-/// label so the chip — and its click target — never flickers as a card's
-/// state changes value. Render draws it and `hit_test` targets it, so the
-/// chip can't drift off its click target.
+/// useful reason. Width-only, and the reason's budget always stops short
+/// of these columns even while the chip is hidden — an unarmed chip is
+/// revealed by hover, and text must not reflow under the pointer. Render
+/// draws it and `hit_test` targets it, so the chip can't drift off its
+/// click target.
 pub fn auto_chip_cols(width: u16) -> Option<std::ops::Range<u16>> {
     let chip = AUTO_CHIP.chars().count() as u16;
-    let longest_label = [
-        AgentState::Blocked,
-        AgentState::Working,
-        AgentState::Done,
-        AgentState::Idle,
-    ]
-    .into_iter()
-    .map(|state| state_label(state).chars().count())
-    .max()
-    .unwrap_or(0) as u16;
-    // Card indent + the longest state word + a gap + the reason's reserve
-    // + the gutter before the chip.
-    let gap_after_label = 1;
+    // Card indent + the reason's reserve + the gutter before the chip.
     let gutter = 1;
-    let taken = CARD_INDENT + longest_label + gap_after_label + MIN_REASON + gutter;
+    let taken = CARD_INDENT + MIN_REASON + gutter;
     (width > taken + chip).then(|| width - 1 - chip..width - 1)
 }
 
 /// The fleet toggle's text — arms auto-approve for every agent at once.
-/// The brackets are the affordance, same as the per-card chip: a pressable
-/// control even in terminals that never show a hand cursor.
-const AUTO_ALL: &str = "[auto-yes]";
+/// Space-padded into the same pill as the per-card chip.
+const AUTO_ALL: &str = " auto-yes ";
 
-/// The columns of the sidebar header's `[auto-yes]` fleet toggle, in
+/// The columns of the sidebar header's `auto-yes` fleet toggle, in
 /// sidebar-inner columns: right-aligned one column in from the edge,
 /// mirroring the per-card chip below it. `None` on sidebars too narrow to
 /// keep it clear of the inline blocked count on the left. Width-only and
@@ -355,7 +357,7 @@ impl Widget for Sidebar<'_> {
         let mut y = area.y;
 
         // Quiet header: lowercase, dim; the blocked count follows it inline
-        // (only when someone actually needs you), and the `[auto-yes]`
+        // (only when someone actually needs you), and the `auto-yes`
         // fleet toggle holds the right edge at fixed columns.
         let blocked = self.blocked_count();
         buf.set_stringn(area.x + 1, y, "agents", width.saturating_sub(1), muted());
@@ -375,25 +377,21 @@ impl Widget for Sidebar<'_> {
             );
         }
         // The fleet toggle: arm auto-approve for every agent, or disarm
-        // all when everything is already on. Accent when the whole fleet
-        // is armed, muted otherwise — same vocabulary as the per-card chip.
+        // all when everything is already on. An accent-filled pill when the
+        // whole fleet is armed, a quiet one otherwise — same vocabulary as
+        // the per-card chip.
         if let Some(cols) = auto_all_cols(area.width) {
             let all_on = !self.entries.is_empty() && self.entries.iter().all(|e| e.auto_approve);
-            let mut style = if all_on {
-                Style::default()
-                    .fg(crate::style::ACCENT)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                muted()
-            };
-            if self.hovered_auto_all {
-                style = style.add_modifier(Modifier::REVERSED);
-            }
-            buf.set_string(area.x + cols.start, y, AUTO_ALL, style);
+            buf.set_string(
+                area.x + cols.start,
+                y,
+                AUTO_ALL,
+                chip(all_on, self.hovered_auto_all),
+            );
         }
         y += 2;
 
-        for row in sidebar_rows(self.entries) {
+        for row in sidebar_rows(self.entries, self.focused) {
             if y >= bottom {
                 break;
             }
@@ -468,65 +466,60 @@ impl Widget for Sidebar<'_> {
                     buf.set_string(name_start, y, truncate(name, name_width), name_style);
                 }
                 SidebarRow::EntryDetail(index) => {
-                    // The state word in its own color — the signal — the
-                    // reason dimmed after it, and the `auto` chip pinned at
-                    // the right edge: the per-pane auto-approve toggle,
-                    // muted until it's on so every card shows where to
-                    // click.
+                    // The reason owns the line — the glyph above already
+                    // carries the state in shape and color, so the row
+                    // spends its width on why, not on the state's name.
+                    // The `auto` chip holds the right edge: always drawn
+                    // while armed (it is a state signal), otherwise only
+                    // revealed on the card under the pointer, the selected
+                    // card, or the focused one — eight unarmed chips on
+                    // eight at-rest cards is wallpaper, not affordance.
                     let entry = &self.entries[index];
                     if self.focused == Some(index) {
                         Self::draw_focus_bar(buf, area.x, y);
                     }
-                    let label = state_label(entry.state);
-                    buf.set_stringn(
-                        area.x + 4,
-                        y,
-                        label,
-                        width.saturating_sub(4),
-                        Style::default().fg(state_color(entry.state)),
-                    );
-                    let chip = auto_chip_cols(area.width);
-                    if let Some(reason) = &entry.reason {
-                        // The reason yields to the chip: its budget ends a
-                        // gutter column short of it (or one column in from
-                        // the edge when no chip fits).
-                        let used = 4 + label.chars().count();
-                        let end = chip.as_ref().map_or(width.saturating_sub(1), |cols| {
-                            usize::from(cols.start).saturating_sub(1)
-                        });
-                        let rest = end.saturating_sub(used);
-                        if rest > 4 {
-                            buf.set_stringn(
-                                area.x + used as u16,
+                    let chip_cols = auto_chip_cols(area.width);
+                    // A card with no reason (a fresh idle pane) falls back
+                    // to the state word so the line never sits empty.
+                    let reason = entry.reason.as_deref().unwrap_or(state_label(entry.state));
+                    // The reason's budget always stops short of the chip
+                    // columns, drawn or not — text reflowing under the
+                    // pointer as the chip appears would read as flicker.
+                    let end = chip_cols.as_ref().map_or(width.saturating_sub(1), |cols| {
+                        usize::from(cols.start).saturating_sub(1)
+                    });
+                    let budget = end.saturating_sub(usize::from(CARD_INDENT));
+                    if budget > 0 {
+                        buf.set_stringn(
+                            area.x + CARD_INDENT,
+                            y,
+                            truncate(reason, budget),
+                            budget,
+                            muted(),
+                        );
+                    }
+                    if let Some(cols) = chip_cols {
+                        let revealed = entry.auto_approve
+                            || self.hovered == Some(index)
+                            || self.hovered_auto == Some(index)
+                            || self.selected == Some(index)
+                            || self.focused == Some(index);
+                        if revealed {
+                            buf.set_string(
+                                area.x + cols.start,
                                 y,
-                                format!(" · {}", truncate(reason, rest.saturating_sub(3))),
-                                rest,
-                                muted(),
+                                AUTO_CHIP,
+                                chip(entry.auto_approve, self.hovered_auto == Some(index)),
                             );
                         }
                     }
-                    if let Some(cols) = chip {
-                        // On mirrors the layout switcher's active word —
-                        // accent + bold — so the state survives terminals
-                        // that drop color; off is plain muted chrome.
-                        let mut style = if entry.auto_approve {
-                            Style::default()
-                                .fg(crate::style::ACCENT)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            muted()
-                        };
-                        if self.hovered_auto == Some(index) {
-                            style = style.add_modifier(Modifier::REVERSED);
-                        }
-                        buf.set_string(area.x + cols.start, y, AUTO_CHIP, style);
-                    }
                 }
                 SidebarRow::EntryTelemetry(index) => {
-                    // Badge line under the detail row, same indent: model,
-                    // context %, cost, rate limit — formatted and colored by
-                    // `telemetry_line` (the context badge escalates through
-                    // the state colors as it runs out).
+                    // Badge line under the detail row, same indent. The
+                    // focused card gets the full line — model, context %,
+                    // cost, rate limit; any other card planned here is one
+                    // whose context alert escalated, and shows just that
+                    // badge (see `telemetry_row_visible`).
                     let entry = &self.entries[index];
                     if self.focused == Some(index) {
                         Self::draw_focus_bar(buf, area.x, y);
@@ -535,7 +528,10 @@ impl Widget for Sidebar<'_> {
                         // Card indent + one right-margin column, like the
                         // rows above.
                         let budget = width.saturating_sub(4).saturating_sub(1);
-                        let line = truncate_line(telemetry_line(telemetry), budget);
+                        let line = truncate_line(
+                            telemetry_line(telemetry, self.focused == Some(index)),
+                            budget,
+                        );
                         buf.set_line(area.x + 4, y, &line, area.width.saturating_sub(4));
                     }
                 }
@@ -783,7 +779,7 @@ mod tests {
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         // Two workspaces, one flat list: each card is name + detail + blank,
         // nothing else — no header or placeholder rows between them.
-        let rows = sidebar_rows(&entries);
+        let rows = sidebar_rows(&entries, None);
         assert_eq!(
             rows,
             vec![
@@ -873,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn header_shows_blocked_count_and_cards_render_state_colored() {
+    fn header_shows_blocked_count_and_cards_lead_with_the_reason() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
@@ -885,34 +881,46 @@ mod tests {
         let header = buffer_row(&buf, 0);
         assert!(header.starts_with(" agents"), "header: {header}");
         assert!(header.contains("1 blocked"), "header: {header}");
-        assert!(header.ends_with("[auto-yes]"), "header: {header}");
+        assert!(header.ends_with("auto-yes"), "header: {header}");
 
         // Cards start after a blank row: the blocked card first (glyph, bold
-        // name, right-aligned age; state word + dim reason below), then a
-        // blank spacer before the next card.
+        // name, right-aligned age; the reason below — the glyph already
+        // says "blocked", so the detail row doesn't), then a blank spacer
+        // before the next card.
         let name_row = buffer_row(&buf, 2);
         assert!(name_row.starts_with("  ◉ claude-code"), "row: {name_row}");
         assert!(name_row.ends_with("30s"), "row: {name_row}");
         let detail_row = buffer_row(&buf, 3);
-        assert!(
-            detail_row.starts_with("    blocked · Approve"),
-            "row: {detail_row}"
-        );
+        assert!(detail_row.starts_with("    Approve"), "row: {detail_row}");
         assert_eq!(buffer_row(&buf, 4), "");
-        // The second card (after the spacer) is the done pane; assert its
-        // detail row — the state + reason still distinguishes cards now that
-        // every card shares the name "claude-code".
+        // The second card (after the spacer) is the done pane; its reason
+        // still distinguishes cards now that every card shares the name
+        // "claude-code".
         assert!(
-            buffer_row(&buf, 6).starts_with("    done · finished"),
+            buffer_row(&buf, 6).starts_with("    finished"),
             "second card is the done pane: {}",
             buffer_row(&buf, 6)
         );
 
-        // The state word is colored, the reason after it is not.
-        assert_eq!(
-            buf.cell((4, 3)).unwrap().style().fg,
-            Some(state_color(AgentState::Blocked))
-        );
+        // The reason is quiet muted chrome — the state color lives on the
+        // glyph, not spelled out twice per card.
+        assert_eq!(buf.cell((4, 3)).unwrap().style().fg, muted().fg);
+    }
+
+    #[test]
+    fn reasonless_cards_fall_back_to_the_state_word() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        let a = session.focused().unwrap();
+        session.pane_mut(a).unwrap().command = Some("claude".into());
+        session.set_reading(a, AgentState::Idle, None, now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        // No reason reported: the detail line says "idle" rather than
+        // sitting empty under the name.
+        assert_eq!(buffer_row(&buf, 3), "    idle");
     }
 
     #[test]
@@ -1002,12 +1010,14 @@ mod tests {
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 32, 16), &mut buf);
 
-        // Two-line cards with a blank between: detail rows at 3, 6, 9, 12.
-        for (y, label) in [(3, "blocked"), (6, "done"), (9, "idle"), (12, "working")] {
+        // Two-line cards with a blank between: detail rows at 3, 6, 9, 12,
+        // each leading with its reason (the idle card has none and falls
+        // back to the state word).
+        for (y, detail) in [(3, "Approve?"), (6, "finished"), (9, "idle"), (12, "tests")] {
             let row = buffer_row(&buf, y);
             assert!(
-                row.starts_with(&format!("    {label}")),
-                "row {y} should lead with {label}: {row}"
+                row.starts_with(&format!("    {detail}")),
+                "row {y} should lead with {detail}: {row}"
             );
         }
     }
@@ -1076,7 +1086,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_all_button_sits_in_the_header_accent_when_fleet_armed() {
+    fn auto_all_pill_sits_in_the_header_accent_filled_when_fleet_armed() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
@@ -1084,17 +1094,19 @@ mod tests {
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 31, 14), &mut buf);
 
-        // The blocked count sits inline after the label; the button holds
-        // the right edge.
+        // The blocked count sits inline after the label; the pill holds
+        // the right edge (its trailing pad space trims off the row text).
         let header = buffer_row(&buf, 0);
         assert!(header.starts_with(" agents  1 blocked"), "header: {header}");
-        assert!(header.ends_with("[auto-yes]"), "header: {header}");
-        // Mixed fleet (none armed here): the button is quiet chrome.
+        assert!(header.ends_with("auto-yes"), "header: {header}");
+        // Mixed fleet (none armed here): a quiet muted pill — reversed is
+        // the button shape, not a hover effect.
         let cols = auto_all_cols(31).unwrap();
         let off = buf.cell((cols.start, 0)).unwrap().style();
         assert_eq!(off.fg, muted().fg);
+        assert!(off.add_modifier.contains(Modifier::REVERSED));
 
-        // Arm the whole fleet: the button takes the accent, like a chip.
+        // Arm the whole fleet: the accent fills the pill.
         for entry in &mut entries {
             entry.auto_approve = true;
         }
@@ -1104,6 +1116,7 @@ mod tests {
         let on = buf.cell((cols.start, 0)).unwrap().style();
         assert_eq!(on.fg, Some(crate::style::ACCENT));
         assert!(on.add_modifier.contains(Modifier::BOLD));
+        assert!(on.add_modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
@@ -1121,16 +1134,15 @@ mod tests {
         // Right-aligned one column in from the edge.
         assert_eq!(auto_chip_cols(31), Some(24..30));
         assert_eq!(auto_chip_cols(40), Some(33..39));
-        // One width-only threshold — sized to the longest state word plus
-        // a reason reserve — so the chip never flickers as a card's state
-        // changes and never starves the reason of its sliver.
-        assert_eq!(auto_chip_cols(28), Some(21..27));
-        assert_eq!(auto_chip_cols(27), None);
+        // One width-only threshold — the card indent plus the reason's
+        // reserve — so the chip never starves the reason of its sliver.
+        assert_eq!(auto_chip_cols(20), Some(13..19));
+        assert_eq!(auto_chip_cols(19), None);
         assert_eq!(auto_chip_cols(0), None);
     }
 
     #[test]
-    fn auto_chip_sits_on_every_card_accent_on_muted_off() {
+    fn armed_chip_always_shows_unarmed_chip_waits_for_a_reveal() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
@@ -1139,27 +1151,67 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .render(Rect::new(0, 0, 40, 14), &mut buf);
-        // The chip ends every card's detail row — the toggle is always
-        // visible, not just when it's on.
+        // The armed chip is a state signal: always drawn, an accent-filled
+        // pill (bold, so it survives no-color terminals).
         let detail = buffer_row(&buf, 3);
-        assert!(detail.ends_with("[auto]"), "chip missing: {detail}");
-        let other = buffer_row(&buf, 6);
-        assert!(other.ends_with("[auto]"), "chip missing: {other}");
-        // Accent + bold when on — mirroring the layout switcher's active
-        // word, and legible without color — plain muted when off.
+        assert!(detail.ends_with("auto"), "armed chip missing: {detail}");
         let cols = auto_chip_cols(40).unwrap();
         let on = buf.cell((cols.start, 3)).unwrap().style();
         assert_eq!(on.fg, Some(crate::style::ACCENT));
         assert!(on.add_modifier.contains(Modifier::BOLD));
-        let off = buf.cell((cols.start, 6)).unwrap().style();
-        assert_eq!(off.fg, muted().fg);
-        assert!(!off.add_modifier.contains(Modifier::BOLD));
+        assert!(on.add_modifier.contains(Modifier::REVERSED));
+        // An unarmed chip on an at-rest card is wallpaper, not affordance:
+        // it stays hidden until the card is hovered, selected, or focused.
+        let other = buffer_row(&buf, 6);
+        assert!(!other.contains("auto"), "unarmed chip drawn: {other}");
         // A gutter column separates the truncated reason from the chip.
         assert_eq!(buf.cell((cols.start - 1, 3)).unwrap().symbol(), " ");
     }
 
     #[test]
-    fn auto_chip_hover_inverts_the_chip() {
+    fn unarmed_chip_reveals_on_hover_selection_and_focus() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let cols = auto_chip_cols(40).unwrap();
+        let render = |sidebar: Sidebar| -> Buffer {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 40, 14));
+            sidebar.render(Rect::new(0, 0, 40, 14), &mut buf);
+            buf
+        };
+        // Hovering the card reveals its quiet pill — that's where the
+        // pointer finds the toggle.
+        let buf = render(Sidebar::new(
+            &entries,
+            None,
+            Some(0),
+            session.window_count(),
+            0,
+        ));
+        assert!(buffer_row(&buf, 3).ends_with("auto"));
+        let style = buf.cell((cols.start, 3)).unwrap().style();
+        assert_eq!(style.fg, muted().fg);
+        assert!(style.add_modifier.contains(Modifier::REVERSED));
+        // The jump-mode selection reveals it for the keyboard (`a`
+        // toggles the selected card).
+        let buf = render(Sidebar::new(
+            &entries,
+            Some(1),
+            None,
+            session.window_count(),
+            0,
+        ));
+        assert!(buffer_row(&buf, 6).ends_with("auto"));
+        // The focused card shows its controls too.
+        let buf =
+            render(Sidebar::new(&entries, None, None, session.window_count(), 0).focused(Some(2)));
+        assert!(buffer_row(&buf, 9).ends_with("auto"));
+        // And everywhere else the row stays chip-free.
+        assert!(!buffer_row(&buf, 3).contains("auto"));
+    }
+
+    #[test]
+    fn auto_chip_hover_underlines_the_pill() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
@@ -1168,36 +1220,28 @@ mod tests {
             .hovered_auto(Some(0))
             .render(Rect::new(0, 0, 40, 14), &mut buf);
         let cols = auto_chip_cols(40).unwrap();
-        assert!(buf
-            .cell((cols.start, 3))
-            .unwrap()
-            .style()
-            .add_modifier
-            .contains(Modifier::REVERSED));
-        // Hovering one chip leaves the others plain.
-        assert!(!buf
-            .cell((cols.start, 6))
-            .unwrap()
-            .style()
-            .add_modifier
-            .contains(Modifier::REVERSED));
+        // Hovering the chip itself both reveals it and underlines it —
+        // underline stays visible inside the reversed pill.
+        let style = buf.cell((cols.start, 3)).unwrap().style();
+        assert!(style.add_modifier.contains(Modifier::REVERSED));
+        assert!(style.add_modifier.contains(Modifier::UNDERLINED));
+        // Hovering one chip leaves the others hidden.
+        assert!(!buffer_row(&buf, 6).contains("auto"));
     }
 
     #[test]
     fn auto_chip_gives_way_to_the_reason_on_a_narrow_sidebar() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
-        let entries = sidebar_entries(&session, &Detector::builtin(), now);
-        // One column below the chip's threshold: the reason — the signal —
-        // still renders; the chip is what yields.
-        let mut buf = Buffer::empty(Rect::new(0, 0, 25, 14));
+        let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // Even armed — the strongest claim a chip has to the row — the
+        // reason wins below the width threshold.
+        entries[0].auto_approve = true;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 19, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
-            .render(Rect::new(0, 0, 25, 14), &mut buf);
+            .render(Rect::new(0, 0, 19, 14), &mut buf);
         let detail = buffer_row(&buf, 3);
-        assert!(
-            detail.starts_with("    blocked · Approve"),
-            "reason lost: {detail}"
-        );
+        assert!(detail.starts_with("    Approve"), "reason lost: {detail}");
         for y in 0..14 {
             let row = buffer_row(&buf, y);
             assert!(!row.contains("auto"), "chip on a narrow row: {row}");
@@ -1205,10 +1249,10 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_cards_grow_a_badge_line_and_bridge_less_cards_do_not() {
+    fn focused_card_grows_the_full_badge_line_and_at_rest_cards_do_not() {
         let now = Instant::now();
         let (mut session, ids) = populated_session(now);
-        // Feed telemetry to the blocked pane only; the others stay two-line.
+        // Feed healthy telemetry to the blocked pane only.
         session.set_telemetry(
             ids[1],
             Some(Telemetry {
@@ -1220,8 +1264,25 @@ mod tests {
         );
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
 
-        // The row plan grows the telemetry row for that card alone.
-        let rows = sidebar_rows(&entries);
+        // Unfocused with a healthy context reading, the card keeps its
+        // two-line shape — the full badge line is the focused card's.
+        assert_eq!(
+            sidebar_rows(&entries, None),
+            vec![
+                SidebarRow::EntryName(0),
+                SidebarRow::EntryDetail(0),
+                SidebarRow::Blank,
+                SidebarRow::EntryName(1),
+                SidebarRow::EntryDetail(1),
+                SidebarRow::Blank,
+                SidebarRow::EntryName(2),
+                SidebarRow::EntryDetail(2),
+                SidebarRow::Blank,
+            ]
+        );
+
+        // Focus the telemetry-fed card: its card alone grows the row.
+        let rows = sidebar_rows(&entries, Some(0));
         assert_eq!(
             rows,
             vec![
@@ -1240,21 +1301,17 @@ mod tests {
 
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 16));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .focused(Some(0))
             .render(Rect::new(0, 0, 40, 16), &mut buf);
-        // The badge line sits under the blocked card's detail row, at the
+        // The badge line sits under the focused card's detail row, at the
         // card indent, with the muted separators.
-        assert_eq!(buffer_row(&buf, 4), "    Opus · 62% context · $1.23");
+        assert_eq!(buffer_row(&buf, 4), "▍   Opus · 62% context · $1.23");
         // Muted chrome for the model badge; the healthy context badge too.
         assert_eq!(buf.cell((4, 4)).unwrap().style().fg, muted().fg);
         // The next card starts after one blank, one row lower than before.
         assert_eq!(buffer_row(&buf, 5), "");
         assert!(
-            buffer_row(&buf, 6).starts_with("  "),
-            "second card shifted down: {}",
-            buffer_row(&buf, 6)
-        );
-        assert!(
-            buffer_row(&buf, 7).starts_with("    done · finished"),
+            buffer_row(&buf, 7).starts_with("    finished"),
             "second card detail: {}",
             buffer_row(&buf, 7)
         );
@@ -1276,9 +1333,11 @@ mod tests {
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         // Too narrow for the whole line: the cut is marked with the same
         // trailing … the name and reason rows use, and no partial cost
-        // survives to read as a smaller number than it is.
+        // survives to read as a smaller number than it is. (Focused, so
+        // the full line renders at all.)
         let mut buf = Buffer::empty(Rect::new(0, 0, 26, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .focused(Some(0))
             .render(Rect::new(0, 0, 26, 14), &mut buf);
         let row = buffer_row(&buf, 4);
         assert!(row.ends_with('…'), "cut not marked: {row}");
@@ -1301,6 +1360,7 @@ mod tests {
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         let mut buf = Buffer::empty(Rect::new(0, 0, 26, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .focused(Some(0))
             .render(Rect::new(0, 0, 26, 14), &mut buf);
         let row = buffer_row(&buf, 4);
         assert!(row.ends_with('…'), "wide-char cut not marked: {row}");

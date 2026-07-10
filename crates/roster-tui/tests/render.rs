@@ -100,10 +100,11 @@ fn panes_get_title_bars_and_content_shifts_down() {
     );
 
     // Focus reads as an accent marker and accent-colored name — not a
-    // heavy inverse bar.
-    assert_eq!(buf.cell((56, 0)).unwrap().symbol(), "▎");
+    // heavy inverse bar. The marker is the same ▍ bar the focused sidebar
+    // card carries: one glyph for one meaning.
+    assert_eq!(buf.cell((56, 0)).unwrap().symbol(), "▍");
     assert_eq!(buf.cell((60, 0)).unwrap().style().fg, Some(ACCENT));
-    assert_ne!(buf.cell((32, 0)).unwrap().symbol(), "▎");
+    assert_ne!(buf.cell((32, 0)).unwrap().symbol(), "▍");
     assert!(!buf
         .cell((56, 0))
         .unwrap()
@@ -128,19 +129,33 @@ fn panes_get_title_bars_and_content_shifts_down() {
     assert_eq!(buf.cell((31, 9)).unwrap().symbol(), "│");
     assert!(region_text(&buf, 0, 80, 11).contains("ctrl-b"));
 
-    // Mouse-first chrome: the pinned + new agent button on the sidebar's
-    // bottom row, the grid · solo switcher above it (two panes exist), and
-    // a ✕ close button at each title's right edge.
+    // Mouse-first chrome: the pinned + new agent pill on the sidebar's
+    // bottom row (a reversed pill, not bracketed text), a ✕ close button
+    // at each title's right edge, and the grid · solo switcher pills on
+    // the status row (two panes exist).
     assert_eq!(region_text(&buf, 0, 31, 10).trim(), "+ new agent");
-    assert_eq!(region_text(&buf, 0, 31, 9).trim(), "grid · solo");
+    assert!(buf
+        .cell((1, 10))
+        .unwrap()
+        .style()
+        .add_modifier
+        .contains(Modifier::REVERSED));
+    // The row above the button is breathing room now — the switcher left
+    // the sidebar.
+    assert_eq!(region_text(&buf, 0, 31, 9), "");
     assert_eq!(buf.cell((53, 0)).unwrap().symbol(), "✕");
     assert_eq!(buf.cell((78, 0)).unwrap().symbol(), "✕");
-    // Grid is the active layout (accent); the inactive solo word is muted —
+    // On the status row: grid at 66..72, solo at 73..79. The active
+    // layout's pill is accent-filled; the inactive one is a muted pill —
     // an explicit, legible foreground rather than the near-invisible DIM
-    // attribute this fix replaced.
-    assert_eq!(buf.cell((1, 9)).unwrap().style().fg, Some(ACCENT));
-    let solo = buf.cell((8, 9)).unwrap().style();
+    // attribute an earlier fix replaced.
+    assert_eq!(region_text(&buf, 66, 80, 11).trim(), "grid   solo");
+    let grid = buf.cell((67, 11)).unwrap().style();
+    assert_eq!(grid.fg, Some(ACCENT));
+    assert!(grid.add_modifier.contains(Modifier::REVERSED));
+    let solo = buf.cell((74, 11)).unwrap().style();
     assert_eq!(solo.fg, muted().fg);
+    assert!(solo.add_modifier.contains(Modifier::REVERSED));
     assert!(!solo.add_modifier.contains(Modifier::DIM));
 }
 
@@ -204,9 +219,9 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
         "▍ ◉ claude-code            12s"
     );
     assert_muted(27, 2, "sidebar age");
-    // …and the state reason after the colored state word on the detail row
-    // (behind the focus bar's edge column).
-    assert!(region_text(&buf, 0, 31, 3).starts_with("▍   blocked · Approve"));
+    // …and the reason leading the detail row (behind the focus bar's edge
+    // column) — the glyph carries the state, the row carries the why.
+    assert!(region_text(&buf, 0, 31, 3).starts_with("▍   Approve this"));
     assert_muted(14, 3, "sidebar state reason");
     // The bottom status hint line spans from the left edge.
     assert_eq!(buf.cell((0, 11)).unwrap().symbol(), "c");
@@ -260,14 +275,16 @@ fn hover_lights_up_interactive_chrome() {
     assert_eq!(other.style().fg, muted().fg);
     assert!(!other.style().add_modifier.contains(Modifier::DIM));
 
-    // Hovering the + new agent button inverts it.
+    // The + new agent pill is reversed at rest — that's its button shape —
+    // and hover underlines it.
+    let rested = draw(None);
+    let rest = rested.cell((1, 10)).unwrap().style();
+    assert!(rest.add_modifier.contains(Modifier::REVERSED));
+    assert!(!rest.add_modifier.contains(Modifier::UNDERLINED));
     let buf = draw(Some(Hit::SidebarNewAgent));
-    assert!(buf
-        .cell((1, 10))
-        .unwrap()
-        .style()
-        .add_modifier
-        .contains(Modifier::REVERSED));
+    let hovered = buf.cell((1, 10)).unwrap().style();
+    assert!(hovered.add_modifier.contains(Modifier::REVERSED));
+    assert!(hovered.add_modifier.contains(Modifier::UNDERLINED));
 
     // Hovering a sidebar card shows a quiet muted marker.
     let buf = draw(Some(Hit::SidebarEntry(0)));
@@ -334,10 +351,14 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
     assert!(!all.contains("left agent output"), "screen:\n{all}");
 
     // Sidebar still lists every agent — it is the switcher — and the
-    // layout control shows solo active.
+    // status row's layout pills show solo active (accent-filled).
     assert!(all.contains("claude-code"), "screen:\n{all}");
-    assert!(all.contains("grid · solo"), "screen:\n{all}");
-    assert_eq!(buf.cell((8, 9)).unwrap().style().fg, Some(ACCENT));
+    assert_eq!(region_text(&buf, 66, 80, 11).trim(), "grid   solo");
+    let solo = buf.cell((74, 11)).unwrap().style();
+    assert_eq!(solo.fg, Some(ACCENT));
+    assert!(solo.add_modifier.contains(Modifier::REVERSED));
+    let grid = buf.cell((67, 11)).unwrap().style();
+    assert_eq!(grid.fg, muted().fg);
 }
 
 #[test]

@@ -10,7 +10,7 @@ use roster_core::{PaneId, Session};
 use crate::sidebar::{auto_all_cols, auto_chip_cols, sidebar_rows, SidebarEntry, SidebarRow};
 use crate::{
     close_button_cols, local_panes, panes_area, sidebar_button_row, sidebar_inner,
-    sidebar_view_row, status_windows_span, view_toggle_cols, SidebarSide, STATUS_HEIGHT,
+    status_view_spans, status_windows_span, SidebarSide, STATUS_HEIGHT,
 };
 
 /// What a screen position corresponds to.
@@ -27,10 +27,10 @@ pub enum Hit {
     SidebarAutoAll,
     /// The sidebar's pinned `+ new agent` button.
     SidebarNewAgent,
-    /// The `grid` half of the sidebar's layout switcher.
-    SidebarViewGrid,
-    /// The `solo` half of the sidebar's layout switcher.
-    SidebarViewSolo,
+    /// The `grid` pill of the status row's layout switcher.
+    StatusViewGrid,
+    /// The `solo` pill of the status row's layout switcher.
+    StatusViewSolo,
     /// Sidebar background (header, spacers, rule).
     Sidebar,
     /// A pane's title bar.
@@ -86,8 +86,8 @@ pub fn pointer_for(hit: Hit) -> Pointer {
         | Hit::SidebarAuto(_)
         | Hit::SidebarAutoAll
         | Hit::SidebarNewAgent
-        | Hit::SidebarViewGrid
-        | Hit::SidebarViewSolo
+        | Hit::StatusViewGrid
+        | Hit::StatusViewSolo
         | Hit::PaneTitle(_)
         | Hit::PaneClose(_)
         | Hit::PaneRestart(_)
@@ -113,47 +113,44 @@ pub fn hit_test(
     if x < area.x || y < area.y || x >= area.x + area.width || y >= area.y + area.height {
         return Hit::Outside;
     }
+    let panes = panes_area(area, side);
+    let multi_pane = session.layout(panes.width, panes.height).len() > 1;
     if area.height >= STATUS_HEIGHT && y >= area.y + area.height - STATUS_HEIGHT {
-        if let Some((span, _)) = status_windows_span(
+        let span = status_windows_span(
             area,
             session.active_window().unwrap_or(0),
             session.window_count(),
-        ) {
-            if x >= span.x && x < span.x + span.width {
+        );
+        if let Some((rect, _)) = &span {
+            if x >= rect.x && x < rect.x + rect.width {
                 return Hit::StatusWindows;
+            }
+        }
+        // The layout-switcher pills sit left of the workspace indicator —
+        // mirroring draw_status.
+        if let Some((grid, solo)) =
+            status_view_spans(area, span.as_ref().map(|(rect, _)| rect), multi_pane)
+        {
+            if x >= grid.x && x < grid.x + grid.width {
+                return Hit::StatusViewGrid;
+            }
+            if x >= solo.x && x < solo.x + solo.width {
+                return Hit::StatusViewSolo;
             }
         }
         return Hit::Status;
     }
 
-    let panes = panes_area(area, side);
-    let multi_pane = session.layout(panes.width, panes.height).len() > 1;
-
     let bar = sidebar_inner(area, side);
     if x >= bar.x && x < bar.x + bar.width && y >= bar.y && y < bar.y + bar.height {
-        // Mirror render: the bottom rows belong to the pinned button, the
-        // layout switcher (multi-pane only), and a breathing row — not to
-        // agent cards.
+        // Mirror render: the bottom rows belong to the pinned button and
+        // its breathing row — not to agent cards.
         let mut cards = bar;
         if sidebar_button_row(area, side) == Some(y) {
             return Hit::SidebarNewAgent;
         }
         if sidebar_button_row(area, side).is_some() {
             cards.height = cards.height.saturating_sub(2);
-        }
-        if multi_pane && sidebar_view_row(area, side) == Some(y) {
-            let (grid, solo) = view_toggle_cols();
-            let col = x - bar.x;
-            if grid.contains(&col) {
-                return Hit::SidebarViewGrid;
-            }
-            if solo.contains(&col) {
-                return Hit::SidebarViewSolo;
-            }
-            return Hit::Sidebar;
-        }
-        if multi_pane && sidebar_view_row(area, side).is_some() {
-            cards.height = cards.height.saturating_sub(1);
         }
         if y >= cards.y + cards.height {
             return Hit::Sidebar;
@@ -174,7 +171,12 @@ pub fn hit_test(
         if y < first {
             return Hit::Sidebar;
         }
-        let rows = sidebar_rows(entries);
+        // The row plan needs the focused entry — only its card grows the
+        // full telemetry row — resolved exactly the way render does.
+        let focused = session
+            .focused()
+            .and_then(|id| entries.iter().position(|entry| entry.pane == id));
+        let rows = sidebar_rows(entries, focused);
         return match rows.get(usize::from(y - first)) {
             Some(SidebarRow::EntryName(index)) => Hit::SidebarEntry(*index),
             Some(SidebarRow::EntryDetail(index)) => {
@@ -271,23 +273,19 @@ mod tests {
             hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 29)),
             Hit::Status
         );
-        // The pinned + new agent button owns the sidebar's bottom row; the
-        // layout switcher the row above (two panes exist); breathing above
-        // that is background.
+        // The pinned + new agent button owns the sidebar's bottom row;
+        // breathing above it is background (the layout switcher lives on
+        // the status row now).
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 28)),
             Hit::SidebarNewAgent
         );
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, (2, 27)),
-            Hit::SidebarViewGrid
+            Hit::Sidebar
         );
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, (9, 27)),
-            Hit::SidebarViewSolo
-        );
-        assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (20, 27)),
             Hit::Sidebar
         );
         assert_eq!(
@@ -377,9 +375,11 @@ mod tests {
     fn telemetry_rows_resolve_to_their_card_and_shift_the_rows_below() {
         let now = Instant::now();
         let (mut session, entries) = setup();
-        // Feed telemetry to the blocked pane — the first card — so its card
-        // grows a third row and everything below shifts down one.
+        // Feed telemetry to the blocked pane — the first card, and the
+        // focused pane (split moves focus to the new pane), so its card
+        // grows the full third row and everything below shifts down one.
         let blocked = entries[0].pane;
+        assert_eq!(session.focused(), Some(blocked));
         session.set_telemetry(
             blocked,
             Some(roster_core::Telemetry {
@@ -413,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn view_switcher_hides_with_a_single_pane() {
+    fn view_switcher_pills_sit_on_the_status_row_and_hide_with_a_single_pane() {
         let now = Instant::now();
         let mut session = Session::new();
         let only = session.focused().unwrap();
@@ -421,15 +421,33 @@ mod tests {
         session.set_reading(only, AgentState::Idle, None, now);
         let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);
         let area = Rect::new(0, 0, 120, 30);
-        // One pane: the switcher row is plain background.
-        assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (2, 27)),
-            Hit::Sidebar
-        );
-        assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (9, 27)),
-            Hit::Sidebar
-        );
+        // One pane: no pills — the whole status row is plain status.
+        for x in [100, 108, 115] {
+            assert_eq!(
+                hit_test(area, &session, SidebarSide::Left, &entries, None, (x, 29)),
+                Hit::Status
+            );
+        }
+
+        // A second pane brings the pills: with a single window (no ⧉
+        // indicator) they end one column in from the right edge — solo at
+        // 113..119, grid at 106..112.
+        let (session, entries) = setup();
+        for (x, hit) in [
+            (105, Hit::Status),
+            (106, Hit::StatusViewGrid),
+            (111, Hit::StatusViewGrid),
+            (112, Hit::Status),
+            (113, Hit::StatusViewSolo),
+            (118, Hit::StatusViewSolo),
+            (119, Hit::Status),
+        ] {
+            assert_eq!(
+                hit_test(area, &session, SidebarSide::Left, &entries, None, (x, 29)),
+                hit,
+                "at x={x}"
+            );
+        }
     }
 
     #[test]
@@ -603,16 +621,28 @@ mod tests {
     fn status_indicator_resolves_only_with_multiple_windows() {
         let (mut session, entries) = setup();
         let area = Rect::new(0, 0, 120, 30);
-        // One window: the whole status row is plain status.
+        // One window: no ⧉ indicator — its columns fall to the solo pill
+        // (two panes exist) and plain status beyond it.
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, (115, 29)),
+            Hit::StatusViewSolo
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, (119, 29)),
             Hit::Status
         );
         session.new_window();
-        // Two windows: `⧉ 1/2` plus padding is 7 columns at the right edge.
+        // Two windows: `⧉ 1/2` plus padding is 7 columns at the right
+        // edge. The new window is active and holds a single pane, so the
+        // pills hide with it — layouts to switch between are the active
+        // window's.
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, (115, 29)),
             Hit::StatusWindows
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, None, (108, 29)),
+            Hit::Status
         );
         assert_eq!(
             hit_test(area, &session, SidebarSide::Left, &entries, None, (60, 29)),

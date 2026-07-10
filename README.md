@@ -18,12 +18,12 @@ prompt each one is waiting on.
 <summary>text preview of the sidebar (until the screenshot lands)</summary>
 
 ```
- agents               1 blocked │ ⠼ claude-code      ✕ │▎ ◉ claude-code       ✕
+ agents               1 blocked │ ⠼ claude-code      ✕ │▍ ◉ claude-code       ✕
                                 │ ✳ Compiling…         │ Do you want to proceed?
   ◉ claude-code             30s │                      │ ❯ 1. Yes
-    blocked · Approve command?  │ ╭─ new agent ──────╮ │   2. No
+    Approve command?            │ ╭─ new agent ──────╮ │   2. No
   ⠼ claude-code              5s │ │ ❯ cla            │ │
-    working · compiling roster  │ │ ❯ claude-code    │ │
+    compiling roster            │ │ ❯ claude-code    │ │
                                 │ ╰──────────────────╯ │
  + new agent                    │                      │
 ```
@@ -77,9 +77,9 @@ state, anything else just runs.
 the sidebar rolls every agent into a colored glyph and triages by who needs
 you first: blocked (longest wait leading), then done, then idle, working at the
 bottom. two layouts: grid tiles every pane, solo shows one full size with the
-sidebar as the switcher. toggle from the sidebar or by double-clicking a title
-bar. `ctrl-b` is the prefix; the status bar keeps the hints on screen, and
-`roster --help` lists them all.
+sidebar as the switcher. toggle with the `grid · solo` pills in the status bar
+or by double-clicking a title bar. `ctrl-b` is the prefix; hold it and the
+status bar shows the full key palette, and `roster --help` lists it all.
 
 ## workspaces
 
@@ -123,21 +123,23 @@ roster --print-statusline   # same file; model / context left / cost / rate-limi
 ```
 
 now every pane reports its permission asks directly. the moment Claude wants a
-tool, the sidebar shows the verbatim ask, `blocked · Bash: cargo test`,
-straight from the `PermissionRequest` hook, and approving clears it just as
-precisely. the hooks are silent no-ops for any Claude running outside roster,
+tool, the sidebar shows the verbatim ask, `Bash: cargo test`, on the blocked
+card, straight from the `PermissionRequest` hook, and approving clears it just
+as precisely. the hooks are silent no-ops for any Claude running outside roster,
 so registering them costs nothing; screen detection keeps running underneath
 and reconciles if a signal ever goes missing.
 
 because the hook is two-way, roster can answer for you. each card has an `auto`
-chip: flip it (click, or `ctrl-b j` then `a`) and roster approves that pane's
-next asks, so it runs uninterrupted but stays observable. that's the difference
+pill — it appears on the card under your pointer (an armed one stays visible):
+flip it (click, or `ctrl-b j` then `a`) and roster approves that pane's next
+asks, so it runs uninterrupted but stays observable. that's the difference
 from `--dangerously-skip-permissions`, which hides the asks entirely. the
-sidebar header's `auto-yes` toggle arms the whole fleet at once, and per-card
-chips still win, so one sensitive agent can stay manual. with the statusline
-feed on, each card also carries a quiet telemetry line: model, context
-remaining (it turns yellow, then red as the agent nears a compaction), session
-cost, and the busiest rate-limit window.
+sidebar header's `auto-yes` pill arms the whole fleet at once, and per-card
+pills still win, so one sensitive agent can stay manual. with the statusline
+feed on, the focused card carries a quiet telemetry line — model, context
+remaining, session cost, and the busiest rate-limit window — and any card's
+context badge surfaces on its own (yellow, then red) as that agent nears a
+compaction.
 
 this is the first slice of a Claude-native attention layer;
 [`docs/05-claude-native-attention.md`](docs/05-claude-native-attention.md) is

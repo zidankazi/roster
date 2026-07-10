@@ -3,8 +3,10 @@
 //!
 //! Pure formatting over [`roster_core::Telemetry`] — absent readings render
 //! nothing, so a pane without the statusline bridge contributes an empty
-//! line. The sidebar draws it as a card's third line, only when the entry
-//! carries telemetry. See `docs/05-claude-native-attention.md`.
+//! line. The sidebar draws it as a card's third line: the full badge line
+//! on the focused card, and only the escalated context badge elsewhere —
+//! at a glance the only telemetry with attention value is an agent about
+//! to run out of context. See `docs/05-claude-native-attention.md`.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -13,16 +15,46 @@ use roster_core::{context_alert, AgentState, ContextAlert, Telemetry};
 use crate::sidebar::format_age;
 use crate::style::{muted, state_color};
 
+/// Whether a card earns its telemetry row: always on the focused card, and
+/// on any card whose context alert escalated — the one reading that must
+/// interrupt a glance. The sidebar's row plan and this crate's rendering
+/// both key off this, so a planned row can't render blank.
+pub fn telemetry_row_visible(telemetry: &Telemetry, focused: bool) -> bool {
+    focused || context_alert(telemetry.context_pct).is_some()
+}
+
+/// The `N% context` badge, in its severity color. `None` when the feed
+/// never reported context.
+fn context_badge(telemetry: &Telemetry) -> Option<Span<'static>> {
+    let pct = telemetry.context_pct?;
+    Some(Span::styled(
+        format!("{pct:.0}% context"),
+        context_style(telemetry.context_pct),
+    ))
+}
+
 /// The telemetry badge line for one sidebar card: model, `N% context`,
 /// `$X.XX`, and `limit N%` in that order, joined by muted `·` separators.
 /// Absent readings render nothing — an unreported [`Telemetry`] yields an
 /// empty line. The context badge carries the severity color (see
 /// [`context_style`]); every other badge is quiet chrome.
 ///
+/// Only the focused card gets the `full` line; elsewhere the line is just
+/// the context badge, and only once its alert escalated — the third line
+/// nearly doubles a card, so at-rest cards don't pay it for readings with
+/// no attention value.
+///
 /// The model's parenthetical variant suffix is dropped — Claude Code reports
 /// display names like `Opus 4.8 (1M context)`, and on a ~30-column card the
 /// suffix starves the numbers the badge exists to show.
-pub fn telemetry_line(telemetry: &Telemetry) -> Line<'static> {
+pub fn telemetry_line(telemetry: &Telemetry, full: bool) -> Line<'static> {
+    if !full {
+        let badge = context_alert(telemetry.context_pct)
+            .is_some()
+            .then(|| context_badge(telemetry))
+            .flatten();
+        return Line::from(badge.into_iter().collect::<Vec<_>>());
+    }
     let mut badges: Vec<Span<'static>> = Vec::new();
     if let Some(model) = &telemetry.model {
         let name = match model.find(" (") {
@@ -31,11 +63,8 @@ pub fn telemetry_line(telemetry: &Telemetry) -> Line<'static> {
         };
         badges.push(Span::styled(name.to_string(), muted()));
     }
-    if let Some(pct) = telemetry.context_pct {
-        badges.push(Span::styled(
-            format!("{pct:.0}% context"),
-            context_style(telemetry.context_pct),
-        ));
+    if let Some(badge) = context_badge(telemetry) {
+        badges.push(badge);
     }
     if let Some(cost) = telemetry.cost_usd {
         badges.push(Span::styled(format!("${cost:.2}"), muted()));
@@ -113,10 +142,13 @@ mod tests {
         }
     }
 
-    /// Draw the badge line for `telemetry` on a one-row TestBackend.
+    /// Draw the full badge line for `telemetry` on a one-row TestBackend.
     fn draw(telemetry: &Telemetry, width: u16) -> Terminal<TestBackend> {
+        draw_line(telemetry_line(telemetry, true), width)
+    }
+
+    fn draw_line(line: Line<'static>, width: u16) -> Terminal<TestBackend> {
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
-        let line = telemetry_line(telemetry);
         terminal
             .draw(|frame| frame.render_widget(line, frame.area()))
             .unwrap();
@@ -266,6 +298,32 @@ mod tests {
             ..Telemetry::default()
         };
         assert_eq!(row_text(&draw(&seven_only, 40)), "limit 60%");
+    }
+
+    #[test]
+    fn compact_line_keeps_only_the_escalated_context_badge() {
+        // An unfocused card with healthy readings renders nothing — the
+        // model, cost, and rate-limit badges are the focused card's.
+        let terminal = draw_line(telemetry_line(&full_telemetry(), false), 70);
+        assert_eq!(row_text(&terminal), "");
+        // Once the context alert escalates, the badge — and only the
+        // badge — appears, in its severity color.
+        let mut telemetry = full_telemetry();
+        telemetry.context_pct = Some(5.0);
+        let terminal = draw_line(telemetry_line(&telemetry, false), 70);
+        assert_eq!(row_text(&terminal), "5% context");
+        let style = style_at(&terminal, 0);
+        assert_eq!(style.fg, Some(state_color(AgentState::Blocked)));
+    }
+
+    #[test]
+    fn telemetry_row_shows_on_focus_or_escalation_only() {
+        let healthy = full_telemetry();
+        assert!(telemetry_row_visible(&healthy, true));
+        assert!(!telemetry_row_visible(&healthy, false));
+        let mut low = full_telemetry();
+        low.context_pct = Some(20.0);
+        assert!(telemetry_row_visible(&low, false));
     }
 
     #[test]

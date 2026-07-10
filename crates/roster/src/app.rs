@@ -56,7 +56,7 @@ const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 fn hook_pin_wins(pin_age: Duration, scraped: AgentState) -> bool {
     pin_age < HOOK_PIN_GRACE || scraped == AgentState::Blocked
 }
-/// Whether the sidebar header's `[auto-yes]` fleet toggle reads armed for
+/// Whether the sidebar header's `auto-yes` fleet toggle reads armed for
 /// these agent cards' auto-approve flags: every card auto-approved, and at
 /// least one card. Mirrors the exact condition the header uses to light the
 /// toggle (`sidebar.rs`) so an agent spawned while it is lit inherits
@@ -890,7 +890,7 @@ impl App {
         }
     }
 
-    /// Arm a freshly spawned agent pane when the fleet `[auto-yes]` toggle is
+    /// Arm a freshly spawned agent pane when the fleet `auto-yes` toggle is
     /// on, so creating an agent while it is lit doesn't silently un-light it —
     /// the newcomer joins auto-approved. Only identified agents inherit: a
     /// plain shell has no asks and never carries the chip. Reads `last_entries`
@@ -1604,8 +1604,8 @@ impl App {
                     Hit::SidebarNewAgent => {
                         self.mode = Mode::Launch(LauncherState::new());
                     }
-                    Hit::SidebarViewGrid => self.zoomed = false,
-                    Hit::SidebarViewSolo => self.zoomed = true,
+                    Hit::StatusViewGrid => self.zoomed = false,
+                    Hit::StatusViewSolo => self.zoomed = true,
                     Hit::StatusWindows => self.session.next_window(),
                     Hit::PaneClose(id) => self.request_close(id),
                     Hit::PaneRestart(id) => self.restart_pane(id),
@@ -1764,8 +1764,8 @@ impl App {
             Hit::PaneClose(_)
                 | Hit::PaneRestart(_)
                 | Hit::SidebarNewAgent
-                | Hit::SidebarViewGrid
-                | Hit::SidebarViewSolo
+                | Hit::StatusViewGrid
+                | Hit::StatusViewSolo
                 | Hit::SidebarEntry(_)
                 | Hit::SidebarAuto(_)
                 | Hit::SidebarAutoAll
@@ -1972,20 +1972,17 @@ impl App {
                     .and_then(|pane| pane.command.as_deref())
                     .map(|command| format!("focused ▸ {command} · "))
                     .unwrap_or_default();
+                // At rest the footer stays nearly silent: where keystrokes
+                // go, plus the one key that opens everything else. The
+                // full palette lives on the PREFIX row — hold ctrl-b and
+                // it appears.
                 if self.zoomed {
                     (
                         Some("SOLO"),
-                        format!(
-                            "{focused}click a card to switch · ctrl-b: keys · then z: grid · j: jump · q: quit roster"
-                        ),
+                        format!("{focused}click a card to switch · ctrl-b: keys · then z: grid"),
                     )
                 } else {
-                    (
-                        None,
-                        format!(
-                            "{focused}ctrl-b: keys · then c: new agent · j: jump · z: solo · x: close agent · d: detach · q: quit roster"
-                        ),
-                    )
+                    (None, format!("{focused}ctrl-b: keys · then j: jump"))
                 }
             }
             Mode::Prefix => (

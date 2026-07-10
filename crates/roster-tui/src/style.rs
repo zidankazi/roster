@@ -66,6 +66,28 @@ pub fn danger() -> Color {
     state_color(AgentState::Blocked)
 }
 
+/// The style for roster's clickable chrome — toggle chips and buttons,
+/// drawn as space-padded reverse-video pills (` auto `), never bracketed
+/// text. The filled pill is the affordance: it reads as pressable even in
+/// terminals that ignore the pointer-shape protocol and show no hand
+/// cursor. `armed` fills the pill with the accent (bold) for an active
+/// toggle or mode; `hovered` underlines it — underline stays visible
+/// inside a reversed cell where another inversion would cancel out. Every
+/// chip routes through here so rest, hover, and armed can't drift apart
+/// between controls.
+pub fn chip(armed: bool, hovered: bool) -> Style {
+    let mut style = if armed {
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+    } else {
+        muted()
+    };
+    style = style.add_modifier(Modifier::REVERSED);
+    if hovered {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    style
+}
+
 /// Spinner frames for the working state, advanced by the frame tick.
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -203,6 +225,33 @@ mod tests {
                 state_glyph_style(state, PULSE_TICKS)
             );
         }
+    }
+
+    #[test]
+    fn chips_are_reversed_pills_with_accent_when_armed_and_underline_on_hover() {
+        // Rest: a quiet muted pill — the reversal is the button shape.
+        let rest = chip(false, false);
+        assert_eq!(rest.fg, Some(MUTED));
+        assert!(rest.add_modifier.contains(Modifier::REVERSED));
+        assert!(!rest.add_modifier.contains(Modifier::BOLD));
+        // Armed: the accent fills the pill, bold so it survives no-color
+        // terminals.
+        let armed = chip(true, false);
+        assert_eq!(armed.fg, Some(ACCENT));
+        assert!(armed.add_modifier.contains(Modifier::REVERSED));
+        assert!(armed.add_modifier.contains(Modifier::BOLD));
+        // Hover underlines — visible inside the reversed pill in both
+        // states, where a second inversion would cancel to nothing.
+        for armed in [false, true] {
+            assert!(chip(armed, true)
+                .add_modifier
+                .contains(Modifier::UNDERLINED));
+            assert!(!chip(armed, false)
+                .add_modifier
+                .contains(Modifier::UNDERLINED));
+        }
+        // Never DIM — same guarantee as the rest of the chrome.
+        assert!(!chip(false, false).add_modifier.contains(Modifier::DIM));
     }
 
     #[test]

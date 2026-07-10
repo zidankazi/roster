@@ -159,7 +159,7 @@ fn launcher_spawns_an_agent_at_runtime() {
 
     // The fake agent's blocked prompt must reach a pane and the sidebar.
     assert!(
-        drain_while(&mut screen, "blocked · Do y", true, &rx),
+        drain_while(&mut screen, "1 blocked", true, &rx),
         "launched agent never showed blocked:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -283,7 +283,7 @@ fn mouse_clicks_focus_launch_and_jump() {
     );
     pty.write(&click(45, 11)).expect("click claude-code row");
     assert!(
-        drain_while(&mut screen, "blocked · Do y", true, &rx),
+        drain_while(&mut screen, "1 blocked", true, &rx),
         "clicked launch never went blocked:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -329,9 +329,9 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
         screen.grid().lines().join("\n")
     );
 
-    // Click "solo" in the sidebar's layout switcher (row above the + new
-    // agent button: 0-based y 27 → 1-based 28; word at cols 8..12).
-    pty.write(&click(10, 28)).expect("click solo");
+    // Click the "solo" pill in the status row's layout switcher (bottom
+    // row, right edge: 0-based cols 113..119 → 1-based click at 115, 30).
+    pty.write(&click(115, 30)).expect("click solo");
     assert!(
         drain_while(&mut screen, "focused ▸ sleep 70 · click a card", true, &rx),
         "solo never engaged:\n{}",
@@ -360,9 +360,9 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
         screen.grid().lines().join("\n")
     );
 
-    // Clicking "grid" in the switcher returns to the tiles: the interior
-    // separator is back.
-    pty.write(&click(3, 28)).expect("click grid");
+    // Clicking the "grid" pill (0-based cols 106..112) returns to the
+    // tiles: the interior separator is back.
+    pty.write(&click(108, 30)).expect("click grid");
     assert!(
         drain_while(&mut screen, "focused ▸ sleep 60 · ctrl-b", true, &rx),
         "grid never returned:\n{}",
@@ -491,7 +491,7 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
     pty.write(b"cla").expect("filter");
     pty.write(b"\r").expect("launch");
     assert!(
-        drain_while(&mut screen, "blocked · Do y", true, &rx),
+        drain_while(&mut screen, "1 blocked", true, &rx),
         "launched agent never showed blocked:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -548,7 +548,7 @@ fn typing_into_the_backdrop_shell_does_not_save_it() {
     pty.write(b"cla").expect("filter");
     pty.write(b"\r").expect("launch");
     assert!(
-        drain_while(&mut screen, "blocked · Do y", true, &rx),
+        drain_while(&mut screen, "1 blocked", true, &rx),
         "launched agent never showed blocked:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -590,7 +590,7 @@ fn closing_a_live_agent_asks_first() {
     let mut screen = Screen::new(cols, rows);
 
     assert!(
-        drain_while(&mut screen, "blocked · Do y", true, &rx),
+        drain_while(&mut screen, "1 blocked", true, &rx),
         "agent never showed blocked:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -929,7 +929,7 @@ fn full_pipeline_shows_blocked_agent_and_quits() {
     // lines: the agent name on one, the state and reason on the next.
     let mut screen = Screen::new(cols, rows);
     let saw_blocked = drain_while(&mut screen, "claude-code", true, &rx)
-        && drain_while(&mut screen, "blocked · Do y", true, &rx);
+        && drain_while(&mut screen, "1 blocked", true, &rx);
     assert!(
         saw_blocked,
         "sidebar never showed the blocked agent; screen was:\n{}",
@@ -1011,7 +1011,7 @@ fn unfocused_done_pane_stays_done_until_visited() {
     // The unfocused pane settles and its card turns done with the result
     // line as the reason.
     assert!(
-        drain_while(&mut screen, "done · pumpe", true, &rx),
+        drain_while(&mut screen, "    pumpe", true, &rx),
         "sidebar never showed done:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -1033,7 +1033,7 @@ fn unfocused_done_pane_stays_done_until_visited() {
             .grid()
             .lines()
             .iter()
-            .any(|l| l.contains("done · pumpe")),
+            .any(|l| l.contains("    pumpe")),
         "done decayed while unfocused:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -1043,12 +1043,14 @@ fn unfocused_done_pane_stays_done_until_visited() {
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"o").expect("focus next");
     assert!(
-        drain_while(&mut screen, "done · pumpe", false, &rx),
+        drain_while(&mut screen, "    pumpe", false, &rx),
         "done never decayed after focusing the pane:\n{}",
         screen.grid().lines().join("\n")
     );
+    // Three-space indent, not four: the visited card holds focus, so its
+    // edge column carries the ▍ bar.
     assert!(
-        drain_while(&mut screen, "idle", true, &rx),
+        drain_while(&mut screen, "   idle", true, &rx),
         "card never reached idle:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -1101,7 +1103,7 @@ fn hook_bridge_pins_blocked_and_clears_end_to_end() {
     // The hook-delivered ask, verbatim, in the sidebar — while the pane
     // itself only ever printed "thinking hard...".
     assert!(
-        drain_while(&mut screen, "blocked · Bash: rm", true, &rx),
+        drain_while(&mut screen, "Bash: rm", true, &rx),
         "hook-reported ask never reached the sidebar:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -1109,7 +1111,7 @@ fn hook_bridge_pins_blocked_and_clears_end_to_end() {
     // The Stop hook releases the pane back to screen-based detection, and
     // the pinned reason leaves the sidebar.
     assert!(
-        drain_while(&mut screen, "blocked · Bash: rm", false, &rx),
+        drain_while(&mut screen, "Bash: rm", false, &rx),
         "hook block never cleared:\n{}",
         screen.grid().lines().join("\n")
     );
