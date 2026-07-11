@@ -445,7 +445,15 @@ fn exited_pane_stays_until_closed() {
         screen.grid().lines().join("\n")
     );
 
-    // The overlay card carries restart and close buttons.
+    // The overlay card carries restart and close buttons. Sync on "close"
+    // first — the rightmost button text, painted after everything else on
+    // the buttons row — because the card title above can arrive a chunk
+    // ahead of the buttons (a torn frame; flaked on Linux CI).
+    assert!(
+        drain_while(&mut screen, "close", true, &rx),
+        "overlay buttons never rendered:\n{}",
+        screen.grid().lines().join("\n")
+    );
     let lines = screen.grid().lines();
     assert!(
         lines
