@@ -467,8 +467,14 @@ fn degenerate_frames_render_without_panicking() {
     let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
     let scrolled = HashMap::new();
+    let items = launch_items(&detector);
+    let state = LauncherState::new();
     // Sizes straddling every threshold: the inset gate (24x8 and just
-    // under), non-panelled slivers, and near-zero frames.
+    // under), non-panelled slivers, near-zero frames, and the
+    // drawable-but-cramped band (5-15 rows) where a modal passes its size
+    // floor but cannot hold its full layout. Each size is drawn with
+    // every overlay — no overlay, the mid-session launcher, the welcome
+    // launcher, and the confirm dialog.
     for (w, h) in [
         (1, 1),
         (5, 2),
@@ -479,30 +485,39 @@ fn degenerate_frames_render_without_panicking() {
         (24, 8),
         (25, 9),
         (30, 4),
+        (80, 3),
+        (80, 5),
+        (80, 6),
+        (80, 10),
+        (80, 15),
     ] {
-        let view = View {
-            session: &session,
-            grids: &grids,
-            exited: &exited,
-            entries: &entries,
-            selected: None,
-            hover: None,
-            zoomed: false,
-            side: SidebarSide::Left,
-            launcher: None,
-            confirm: None,
-            toasts: &[],
-            selection: None,
-            scrolled: &scrolled,
-            welcome: false,
-            mode_badge: Some("PREFIX"),
-            status: "c: new agent · q: quit",
-            tick: 0,
-        };
-        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
-        terminal
-            .draw(|frame| render(frame, &view))
-            .unwrap_or_else(|_| panic!("render panicked at {w}x{h}"));
+        for overlay in 0..4 {
+            let launcher = (overlay == 1 || overlay == 2).then_some((items.as_slice(), &state));
+            let confirm = (overlay == 3).then_some(None);
+            let view = View {
+                session: &session,
+                grids: &grids,
+                exited: &exited,
+                entries: &entries,
+                selected: None,
+                hover: None,
+                zoomed: false,
+                side: SidebarSide::Left,
+                launcher,
+                confirm,
+                toasts: &[],
+                selection: None,
+                scrolled: &scrolled,
+                welcome: overlay == 2,
+                mode_badge: Some("PREFIX"),
+                status: "c: new agent · q: quit",
+                tick: 0,
+            };
+            let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+            terminal
+                .draw(|frame| render(frame, &view))
+                .unwrap_or_else(|_| panic!("render panicked at {w}x{h} overlay {overlay}"));
+        }
     }
 }
 

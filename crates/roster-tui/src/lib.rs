@@ -317,8 +317,9 @@ pub fn render(frame: &mut Frame, view: &View) {
     if view.welcome {
         if let Some((items, state)) = view.launcher {
             let launcher = Launcher::new(items, state).welcome(true).tick(view.tick);
-            let (cursor_x, cursor_y) = launcher.input_position(area);
-            frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+            if let Some((cursor_x, cursor_y)) = launcher.input_position(area) {
+                frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+            }
             frame.render_widget(launcher, area);
             // Launch failures must reach the user even on the welcome
             // screen.
@@ -491,9 +492,10 @@ pub fn render(frame: &mut Frame, view: &View) {
 
     if let Some((items, state)) = view.launcher {
         let launcher = Launcher::new(items, state);
-        // Cursor follows the launcher's input line.
-        let (cursor_x, cursor_y) = launcher.input_position(area);
-        frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+        // Cursor follows the launcher's input line — and hides with it.
+        if let Some((cursor_x, cursor_y)) = launcher.input_position(area) {
+            frame.set_cursor_position(Position::new(cursor_x, cursor_y));
+        }
         frame.render_widget(launcher, area);
     }
 

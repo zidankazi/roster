@@ -23,6 +23,15 @@ pub enum ConfirmButton {
 
 const WIDTH: u16 = 46;
 const HEIGHT: u16 = 7;
+/// The smallest dialog that still works: wide enough for the button row
+/// (cancel + gap + close) to sit inside the borders — any narrower and a
+/// centered close button would overflow the frame, catching clicks past
+/// the dialog's edge. `confirm_rect` floors to this and `confirm_drawable`
+/// refuses anything smaller, so the two can't drift apart.
+const MIN_WIDTH: u16 = 25;
+/// Border, title gap, message, gap, buttons — the five rows the layout
+/// hardcodes.
+const MIN_HEIGHT: u16 = 5;
 /// Rows from the modal's top to the button row.
 const BUTTONS_ROW: u16 = 4;
 const CANCEL_LABEL: &str = "  cancel  ";
@@ -30,22 +39,39 @@ const CLOSE_LABEL: &str = "  close  ";
 /// Columns between the two buttons.
 const BUTTON_GAP: u16 = 3;
 
-/// The centered rect the dialog occupies within `area`.
+/// The centered rect the dialog occupies within `area`. The minimum
+/// footprint can exceed a sliver frame, so the rect is clipped to `area` —
+/// the private `confirm_drawable` predicate is how render and hit-testing
+/// agree the result is big enough to exist.
 pub fn confirm_rect(area: Rect) -> Rect {
-    let width = WIDTH.min(area.width.saturating_sub(2)).max(20);
-    let height = HEIGHT.min(area.height.saturating_sub(2)).max(5);
+    let width = WIDTH.min(area.width.saturating_sub(2)).max(MIN_WIDTH);
+    let height = HEIGHT.min(area.height.saturating_sub(2)).max(MIN_HEIGHT);
     Rect::new(
         area.x + (area.width.saturating_sub(width)) / 2,
         area.y + (area.height.saturating_sub(height)) / 3,
         width,
         height,
     )
+    .intersection(area)
 }
 
-/// Whether (`x`, `y`) falls inside the dialog.
+/// Whether a clipped dialog rect is big enough to draw at all. Render
+/// bails when this is false, and the hit tests consult it too — an
+/// invisible dialog must never own a click, or a phantom close button
+/// kills the agent with no dialog on screen.
+fn confirm_drawable(modal: Rect) -> bool {
+    modal.width >= MIN_WIDTH && modal.height >= MIN_HEIGHT
+}
+
+/// Whether (`x`, `y`) falls inside the dialog. Always false when the
+/// dialog is too small to draw, so any click dismisses it.
 pub fn confirm_contains(area: Rect, x: u16, y: u16) -> bool {
     let modal = confirm_rect(area);
-    x >= modal.x && x < modal.x + modal.width && y >= modal.y && y < modal.y + modal.height
+    confirm_drawable(modal)
+        && x >= modal.x
+        && x < modal.x + modal.width
+        && y >= modal.y
+        && y < modal.y + modal.height
 }
 
 /// The button spans on their row: `(cancel, close)`, in absolute columns.
@@ -64,6 +90,9 @@ fn button_spans(area: Rect) -> (Rect, Rect) {
 
 /// The button under (`x`, `y`), when one is there.
 pub fn confirm_button_at(area: Rect, x: u16, y: u16) -> Option<ConfirmButton> {
+    if !confirm_drawable(confirm_rect(area)) {
+        return None;
+    }
     let (cancel, close) = button_spans(area);
     let inside = |r: Rect| x >= r.x && x < r.x + r.width && y == r.y;
     if inside(cancel) {
@@ -97,7 +126,7 @@ impl Confirm {
 impl Widget for Confirm {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let modal = confirm_rect(area);
-        if modal.width < 20 || modal.height < 5 {
+        if !confirm_drawable(modal) {
             return;
         }
         fill(buf, modal, SURFACE_RAISED);
@@ -197,5 +226,50 @@ mod tests {
         let modal = confirm_rect(area);
         assert!(confirm_contains(area, modal.x + 1, modal.y + 1));
         assert!(!confirm_contains(area, modal.x.saturating_sub(1), modal.y));
+    }
+
+    #[test]
+    fn sliver_frames_neither_draw_nor_hit() {
+        // Frames too small for the dialog's minimum footprint: nothing is
+        // drawn (buffer-equality catches style-only writes too) and no
+        // click lands — a phantom close button here would kill the agent
+        // with no dialog on screen. MIN_WIDTH is the narrowest area the
+        // dialog accepts, so one column under it must refuse.
+        for (w, h) in [(1u16, 1u16), (80, 3), (80, 4), (MIN_WIDTH - 1, 24)] {
+            let area = Rect::new(0, 0, w, h);
+            let mut buf = Buffer::empty(area);
+            Confirm::new().render(area, &mut buf);
+            assert_eq!(buf, Buffer::empty(area), "drawn at {w}x{h}");
+            for y in 0..h {
+                for x in 0..w {
+                    assert_eq!(
+                        confirm_button_at(area, x, y),
+                        None,
+                        "phantom button at ({x},{y}) in {w}x{h}"
+                    );
+                    assert!(
+                        !confirm_contains(area, x, y),
+                        "phantom contains at ({x},{y}) in {w}x{h}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn buttons_stay_inside_the_dialog_at_the_minimum_width() {
+        // At the narrowest drawable width the centered button row must sit
+        // inside the borders — a close button overflowing the frame would
+        // catch clicks past the dialog's edge and kill the agent on what
+        // reads as a click-outside dismissal.
+        let area = Rect::new(0, 0, MIN_WIDTH, 24);
+        let modal = confirm_rect(area);
+        assert!(modal.width >= MIN_WIDTH, "dialog should draw here");
+        let (cancel, close) = button_spans(area);
+        assert!(cancel.x > modal.x, "cancel overflows the left border");
+        assert!(
+            close.x + close.width < modal.x + modal.width,
+            "close overflows the right border"
+        );
     }
 }

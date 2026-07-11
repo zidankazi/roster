@@ -217,7 +217,10 @@ impl<'a> Launcher<'a> {
     }
 
     /// The centered rect the launcher occupies within `area`. The welcome
-    /// block is dead-centered; the modal sits in the upper third.
+    /// block is dead-centered; the modal sits in the upper third. The
+    /// minimum footprint can exceed a sliver frame, so the rect is clipped
+    /// to `area` — the private `drawable` predicate is how render and
+    /// hit-testing agree the result is big enough to exist.
     pub fn modal_rect(&self, area: Rect) -> Rect {
         let rows = (self.state.filtered(self.items).len() as u16).max(1);
         let (width, height) = if self.welcome {
@@ -235,30 +238,52 @@ impl<'a> Launcher<'a> {
         } else {
             area.y + (area.height.saturating_sub(height)) / 3
         };
-        Rect::new(x, y, width, height)
+        Rect::new(x, y, width, height).intersection(area)
     }
 
     /// Where the terminal cursor belongs: the end of the typed input.
-    pub fn input_position(&self, area: Rect) -> (u16, u16) {
+    /// `None` when the launcher (or just its input row) is clipped away —
+    /// a cursor without an input line is a stray blink on an empty screen.
+    pub fn input_position(&self, area: Rect) -> Option<(u16, u16)> {
         let modal = self.modal_rect(area);
         let input_len = 2 + self.state.input().chars().count() as u16;
         let y = modal.y + self.items_offset() - 1;
-        (
+        (drawable(modal) && y < modal.y + modal.height).then_some((
             (modal.x + 2 + input_len).min(modal.x + modal.width.saturating_sub(2)),
             y,
-        )
+        ))
     }
 
-    /// Whether (`x`, `y`) falls inside the launcher block.
+    /// Whether (`x`, `y`) falls inside the launcher block. Always false
+    /// when the launcher is too small to draw.
     pub fn contains(&self, area: Rect, x: u16, y: u16) -> bool {
         let modal = self.modal_rect(area);
-        x >= modal.x && x < modal.x + modal.width && y >= modal.y && y < modal.y + modal.height
+        drawable(modal)
+            && x >= modal.x
+            && x < modal.x + modal.width
+            && y >= modal.y
+            && y < modal.y + modal.height
+    }
+
+    /// One past the last row that may hold an item: the welcome block is
+    /// borderless, the modal keeps its bottom border row. Render stops
+    /// drawing here and [`Launcher::item_at`] refuses clicks past it — a
+    /// height-clamped list must not launch from rows it never drew.
+    fn rows_bottom(&self, modal: Rect) -> u16 {
+        if self.welcome {
+            modal.y + modal.height
+        } else {
+            modal.y + modal.height - 1
+        }
     }
 
     /// The filtered item row under (`x`, `y`), when one is there.
     pub fn item_at(&self, area: Rect, x: u16, y: u16) -> Option<usize> {
         let modal = self.modal_rect(area);
-        if !self.contains(area, x, y) || y < modal.y + self.items_offset() {
+        if !self.contains(area, x, y)
+            || y < modal.y + self.items_offset()
+            || y >= self.rows_bottom(modal)
+        {
             return None;
         }
         let index = usize::from(y - modal.y - self.items_offset());
@@ -267,12 +292,24 @@ impl<'a> Launcher<'a> {
     }
 }
 
+/// Whether a clipped modal rect is big enough to draw at all. Render bails
+/// when this is false, and the hit tests consult it too — a modal that
+/// isn't on screen must never own a click.
+fn drawable(modal: Rect) -> bool {
+    modal.width >= 8 && modal.height >= 5
+}
+
 impl Widget for Launcher<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let modal = self.modal_rect(area);
-        if modal.width < 8 || modal.height < 5 {
+        if !drawable(modal) {
             return;
         }
+        // Everything below writes only inside the clipped modal: rows past
+        // `bottom` are skipped, not drawn — set_stringn past the buffer
+        // panics, and the welcome layout's fixed offsets (wordmark, then
+        // tagline, input, hints) don't fit short frames.
+        let bottom = modal.y + modal.height;
         // The modal is a dialog on the raised surface; the welcome block
         // sits directly on the app canvas.
         let bg = if self.welcome {
@@ -317,6 +354,9 @@ impl Widget for Launcher<'_> {
                         style = Style::default().fg(ACCENT_FAINT);
                     }
                     let (x, y) = (mark_x + col as u16, modal.y + row as u16);
+                    if y >= bottom {
+                        continue;
+                    }
                     if let Some(cell) = buf.cell_mut((x, y)) {
                         cell.set_char(glyph);
                         cell.set_style(style);
@@ -326,7 +366,9 @@ impl Widget for Launcher<'_> {
             y += WORDMARK.len() as u16 + 1;
             let tagline = "terminal multiplexer for Claude Code";
             let tag_x = modal.x + (modal.width.saturating_sub(tagline.chars().count() as u16)) / 2;
-            buf.set_stringn(tag_x, y, tagline, usize::from(modal.width), muted());
+            if y < bottom {
+                buf.set_stringn(tag_x, y, tagline, usize::from(modal.width), muted());
+            }
             y += 2;
         } else {
             frame(buf, modal, " new agent ");
@@ -338,26 +380,28 @@ impl Widget for Launcher<'_> {
 
         // Input line, prompt-style: the accent prompt marks where typing
         // lands, the typed text takes the bright tier.
-        buf.set_stringn(
-            inner_x,
-            y,
-            "❯",
-            inner_w,
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        );
-        buf.set_stringn(
-            inner_x + 2,
-            y,
-            self.state.input(),
-            inner_w.saturating_sub(2),
-            bright().add_modifier(Modifier::BOLD),
-        );
+        if y < bottom {
+            buf.set_stringn(
+                inner_x,
+                y,
+                "❯",
+                inner_w,
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            );
+            buf.set_stringn(
+                inner_x + 2,
+                y,
+                self.state.input(),
+                inner_w.saturating_sub(2),
+                bright().add_modifier(Modifier::BOLD),
+            );
+        }
         y += 1;
 
         let filtered = self.state.filtered(self.items);
         let selected = self.state.selected(self.items);
         let items_bottom = modal.y + self.items_offset() + (filtered.len() as u16).max(1);
-        if filtered.is_empty() {
+        if filtered.is_empty() && y < bottom {
             let typed = self.state.input().trim().to_string();
             let hint = if typed.is_empty() {
                 "type a command…".to_string()
@@ -366,13 +410,7 @@ impl Widget for Launcher<'_> {
             };
             buf.set_stringn(inner_x, y, hint, inner_w, muted());
         }
-        // The modal keeps its bottom border row; the welcome block is
-        // borderless.
-        let rows_bottom = if self.welcome {
-            modal.y + modal.height
-        } else {
-            modal.y + modal.height - 1
-        };
+        let rows_bottom = self.rows_bottom(modal);
         for (index, item) in filtered.iter().enumerate() {
             if y >= rows_bottom {
                 break;
@@ -429,13 +467,10 @@ impl Widget for Launcher<'_> {
                 "add your own cards: roster --print-config",
             ];
             for (row, hint) in hints.iter().enumerate() {
-                buf.set_stringn(
-                    inner_x,
-                    items_bottom + 1 + row as u16,
-                    *hint,
-                    inner_w,
-                    muted(),
-                );
+                let hint_y = items_bottom + 1 + row as u16;
+                if hint_y < bottom {
+                    buf.set_stringn(inner_x, hint_y, *hint, inner_w, muted());
+                }
             }
         }
     }
@@ -753,5 +788,94 @@ mod tests {
         assert!(all.contains("new agent"), "missing title:\n{all}");
         assert!(all.contains("❯ c"), "missing input line:\n{all}");
         assert!(all.contains("claude-code"), "missing item:\n{all}");
+    }
+
+    #[test]
+    fn sliver_frames_neither_draw_nor_hit() {
+        // Frames too small for the modal's minimum footprint: nothing is
+        // drawn (buffer-equality catches style-only writes too) and no
+        // click lands on the invisible modal.
+        let items = items();
+        let state = LauncherState::new();
+        for welcome in [false, true] {
+            for (w, h) in [(1u16, 1u16), (7, 24), (80, 3), (80, 4)] {
+                let area = Rect::new(0, 0, w, h);
+                let mut buf = Buffer::empty(area);
+                Launcher::new(&items, &state)
+                    .welcome(welcome)
+                    .render(area, &mut buf);
+                assert_eq!(
+                    buf,
+                    Buffer::empty(area),
+                    "drawn at {w}x{h} welcome={welcome}"
+                );
+                let launcher = Launcher::new(&items, &state).welcome(welcome);
+                assert_eq!(launcher.input_position(area), None, "{w}x{h}");
+                for y in 0..h {
+                    for x in 0..w {
+                        assert!(
+                            !launcher.contains(area, x, y),
+                            "phantom contains at ({x},{y}) in {w}x{h} welcome={welcome}"
+                        );
+                        assert_eq!(
+                            launcher.item_at(area, x, y),
+                            None,
+                            "phantom item at ({x},{y}) in {w}x{h} welcome={welcome}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_frames_draw_what_fits_without_panicking() {
+        // The drawable-but-cramped band: tall enough to pass the floor,
+        // too short for the full layout (the welcome block wants ~15
+        // rows). Writes past the clipped modal are skipped, not drawn —
+        // on main this whole band panicked with an out-of-bounds index.
+        let items = items();
+        let state = LauncherState::new();
+        for welcome in [false, true] {
+            for h in 5..=16u16 {
+                let area = Rect::new(0, 0, 80, h);
+                let mut buf = Buffer::empty(area);
+                Launcher::new(&items, &state)
+                    .welcome(welcome)
+                    .tick(99)
+                    .render(area, &mut buf);
+            }
+        }
+    }
+
+    #[test]
+    fn height_clamped_list_refuses_clicks_on_undrawn_rows() {
+        // More items than the clamped modal can show: rows render only
+        // above the bottom border, and item_at must agree — clicking the
+        // border (or below) must not launch something never drawn.
+        let items: Vec<LaunchItem> = (0..20)
+            .map(|i| LaunchItem {
+                name: format!("agent-{i}"),
+                command: format!("cmd-{i}"),
+            })
+            .collect();
+        let state = LauncherState::new();
+        let area = Rect::new(0, 0, 80, 12);
+        let launcher = Launcher::new(&items, &state);
+        let modal = launcher.modal_rect(area);
+        let mut buf = Buffer::empty(area);
+        Launcher::new(&items, &state).render(area, &mut buf);
+
+        let border_row = modal.y + modal.height - 1;
+        let last_item_row = border_row - 1;
+        assert!(
+            launcher.item_at(area, modal.x + 2, last_item_row).is_some(),
+            "last drawn row should still hit"
+        );
+        assert_eq!(
+            launcher.item_at(area, modal.x + 2, border_row),
+            None,
+            "border row hit an undrawn item"
+        );
     }
 }
