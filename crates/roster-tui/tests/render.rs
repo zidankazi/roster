@@ -182,6 +182,64 @@ fn panes_get_title_bars_and_content_shifts_down() {
 }
 
 #[test]
+fn pane_title_prefers_the_panes_terminal_title_over_the_agent_name() {
+    // The border has the width the sidebar card lacks: a pane whose agent
+    // broadcast a task title shows it in full on the top border, and a
+    // pane without one keeps the agent-name fallback.
+    let now = Instant::now();
+    let (mut session, left, right) = two_agent_session(now);
+    session.set_title(left, Some("fix the launch button".into()));
+
+    let mut grids = HashMap::new();
+    grids.insert(left, Grid::from_text("left agent output"));
+    grids.insert(right, Grid::from_text("right agent output"));
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+    let exited = HashMap::new();
+    let scrolled = HashMap::new();
+    let view = View {
+        session: &session,
+        grids: &grids,
+        exited: &exited,
+        entries: &entries,
+        selected: None,
+        hover: None,
+        zoomed: false,
+        side: SidebarSide::Left,
+        launcher: None,
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
+        welcome: false,
+        mode_badge: None,
+        status: "",
+        tick: 0,
+    };
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+    terminal.draw(|frame| render(frame, &view)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    // Left pane (titled): the full task on the border, not `claude-code`.
+    let left_title = region_text(&buf, 34, 66, 1);
+    assert!(
+        left_title.contains("fix the launch button"),
+        "left title: {left_title}"
+    );
+    assert!(
+        !left_title.contains("claude-code"),
+        "left title: {left_title}"
+    );
+    // Right pane (untitled): the agent-name fallback stays.
+    let right_title = region_text(&buf, 66, 98, 1);
+    assert!(
+        right_title.contains("claude-code"),
+        "right title: {right_title}"
+    );
+}
+
+#[test]
 fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
     // Regression guard for the low-contrast chrome bug: on a terminal's
     // default palette, `Modifier::DIM` renders as a near-invisible faint

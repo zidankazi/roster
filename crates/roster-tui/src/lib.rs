@@ -502,11 +502,14 @@ pub fn render(frame: &mut Frame, view: &View) {
     }
 }
 
-/// A pane's display name: its agent card's name when detected, else the
-/// basename of its command's binary.
+/// A pane's display name: its live terminal title when the agent set one,
+/// else its agent card's name when detected, else the basename of its
+/// command's binary. The title beats the config name for the same reason
+/// the sidebar prefers it: every Claude pane saying `claude-code` says
+/// nothing, but the task does.
 fn pane_display_name(view: &View, id: PaneId) -> String {
     if let Some(entry) = view.entries.iter().find(|e| e.pane == id) {
-        return entry.agent.clone();
+        return entry.title.clone().unwrap_or_else(|| entry.agent.clone());
     }
     let command = view
         .session
@@ -518,7 +521,9 @@ fn pane_display_name(view: &View, id: PaneId) -> String {
 }
 
 /// One pane's title, riding the panel's top border: a space-padded live
-/// state glyph and the agent or command name breaking the border line —
+/// state glyph and the pane's display name breaking the border line —
+/// the live session title when the agent set one (the border has the width
+/// the sidebar card lacks, so the full task shows here untruncated), else
 /// `╭ ⠋ claude-code ─╮`. Focus reads as the accent border and an accented
 /// name, not a heavy inverse bar. `span` is the panel's full top row;
 /// `close` is the ✕ button's absolute columns from `close_button_cols`,
@@ -543,7 +548,9 @@ fn draw_title(
         Some(entry) => (
             state_glyph(entry.state, view.tick),
             style::state_glyph_style(entry.state, view.tick),
-            entry.agent.clone(),
+            // The live task title beats the config name, same precedence
+            // as the sidebar card (see sidebar.rs).
+            entry.title.clone().unwrap_or_else(|| entry.agent.clone()),
         ),
         None => {
             let command = view
