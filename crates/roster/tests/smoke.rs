@@ -516,6 +516,15 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
         "launched agent never showed blocked:\n{}",
         screen.grid().lines().join("\n")
     );
+    // "1 blocked" sits on the header row, which ratatui paints first —
+    // on a slow PTY the wait above can return mid-frame, before the rows
+    // below exist. The footer paints last, so its post-launch text is the
+    // frame-complete barrier the geometry assertions need.
+    assert!(
+        drain_while(&mut screen, "focused ▸ claude", true, &rx),
+        "post-launch footer never painted:\n{}",
+        screen.grid().lines().join("\n")
+    );
     let lines = screen.grid().lines();
     // A single full-width pane: one panel, two side borders (the sidebar
     // separates by spacing, not a rule); a split would add two more.
@@ -579,6 +588,13 @@ fn typing_into_the_backdrop_shell_does_not_save_it() {
         screen.grid().lines().join("\n")
     );
 
+    // Frame-complete barrier before geometry, as in the bare-start test:
+    // the blocked wait matches the header row, painted before the rest.
+    assert!(
+        drain_while(&mut screen, "focused ▸ claude", true, &rx),
+        "post-launch footer never painted:\n{}",
+        screen.grid().lines().join("\n")
+    );
     let lines = screen.grid().lines();
     // One window only: a `⧉` workspace tag renders only with more than one
     // window, so its absence proves the typed-into shell did not survive as
