@@ -241,17 +241,78 @@ impl<'a> Launcher<'a> {
         Rect::new(x, y, width, height).intersection(area)
     }
 
-    /// Where the terminal cursor belongs: the end of the typed input.
-    /// `None` when the launcher (or just its input row) is clipped away —
-    /// a cursor without an input line is a stray blink on an empty screen.
+    /// Where the terminal cursor belongs: the end of the typed input, on
+    /// the welcome fallback strip when the full block is clipped away.
+    /// `None` when no input line is drawn at all — a cursor without one
+    /// is a stray blink on an empty screen.
     pub fn input_position(&self, area: Rect) -> Option<(u16, u16)> {
         let modal = self.modal_rect(area);
         let input_len = 2 + self.state.input().chars().count() as u16;
+        if !drawable(modal) {
+            let (x, y) = self.strip_origin(area)?;
+            return Some(((x + input_len).min(area.x + area.width - 1), y));
+        }
         let y = modal.y + self.items_offset() - 1;
-        (drawable(modal) && y < modal.y + modal.height).then_some((
+        (y < modal.y + modal.height).then_some((
             (modal.x + 2 + input_len).min(modal.x + modal.width.saturating_sub(2)),
             y,
         ))
+    }
+
+    /// Where the welcome fallback strip's prompt goes: one column in, on
+    /// the middle row. `Some` only on the welcome screen when a strip
+    /// fits at all; callers gate on the full block being undrawable.
+    /// Render and the cursor derive from this one spot so they can't
+    /// disagree.
+    fn strip_origin(&self, area: Rect) -> Option<(u16, u16)> {
+        (self.welcome && area.width >= 4 && area.height > 0)
+            .then_some((area.x + 1, area.y + area.height / 2))
+    }
+
+    /// The one-line welcome fallback: prompt, typed input, and what enter
+    /// launches — a bare start in a sliver terminal stays legible instead
+    /// of blank. Only rendered when the full block cannot draw.
+    fn render_strip(&self, area: Rect, buf: &mut Buffer) {
+        let Some((x, y)) = self.strip_origin(area) else {
+            return;
+        };
+        buf.set_stringn(
+            x,
+            y,
+            "❯",
+            usize::from(area.x + area.width - x),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        );
+        let text_x = x + 2;
+        let mut budget = usize::from(area.x + area.width - text_x);
+        // What enter launches, right-aligned and quiet, when it fits
+        // beside the input.
+        if let Some(index) = self.state.selected(self.items) {
+            let label = format!("↵ {}", self.state.filtered(self.items)[index].name);
+            let len = label.chars().count() as u16;
+            let input_end = text_x + self.state.input().chars().count() as u16;
+            let label_x = (area.x + area.width).saturating_sub(len + 1);
+            if label_x > input_end + 2 {
+                buf.set_string(label_x, y, &label, muted());
+                budget = usize::from(label_x - 1 - text_x);
+            }
+        }
+        if self.state.input().is_empty() {
+            // Whole or not at all: a chopped placeholder ("❯ ty") reads
+            // as garbage, and unlike typed input it carries no state.
+            let hint = "type a command…";
+            if budget >= hint.chars().count() {
+                buf.set_stringn(text_x, y, hint, budget, muted());
+            }
+        } else {
+            buf.set_stringn(
+                text_x,
+                y,
+                self.state.input(),
+                budget,
+                bright().add_modifier(Modifier::BOLD),
+            );
+        }
     }
 
     /// Whether (`x`, `y`) falls inside the launcher block. Always false
@@ -303,6 +364,12 @@ impl Widget for Launcher<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let modal = self.modal_rect(area);
         if !drawable(modal) {
+            // The welcome screen is the whole UI at bare start — a frame
+            // too small for the block gets a one-line strip instead of
+            // going blank while keystrokes still drive the picker. The
+            // mid-session modal just vanishes: panes stay visible and
+            // esc is the way out.
+            self.render_strip(area, buf);
             return;
         }
         // Everything below writes only inside the clipped modal: rows past
@@ -792,9 +859,11 @@ mod tests {
 
     #[test]
     fn sliver_frames_neither_draw_nor_hit() {
-        // Frames too small for the modal's minimum footprint: nothing is
-        // drawn (buffer-equality catches style-only writes too) and no
-        // click lands on the invisible modal.
+        // Frames too small for the modal's minimum footprint: the
+        // mid-session modal draws nothing at all (buffer-equality catches
+        // style-only writes too), the welcome screen degrades to its
+        // one-line strip, and no click lands on the invisible modal
+        // either way.
         let items = items();
         let state = LauncherState::new();
         for welcome in [false, true] {
@@ -804,13 +873,21 @@ mod tests {
                 Launcher::new(&items, &state)
                     .welcome(welcome)
                     .render(area, &mut buf);
-                assert_eq!(
-                    buf,
-                    Buffer::empty(area),
-                    "drawn at {w}x{h} welcome={welcome}"
-                );
                 let launcher = Launcher::new(&items, &state).welcome(welcome);
-                assert_eq!(launcher.input_position(area), None, "{w}x{h}");
+                if welcome && w >= 4 {
+                    let strip: String = (0..w)
+                        .map(|x| buf.cell((x, h / 2)).unwrap().symbol().to_string())
+                        .collect();
+                    assert!(strip.contains('❯'), "no strip prompt at {w}x{h}: {strip}");
+                    assert!(launcher.input_position(area).is_some(), "{w}x{h}");
+                } else {
+                    assert_eq!(
+                        buf,
+                        Buffer::empty(area),
+                        "drawn at {w}x{h} welcome={welcome}"
+                    );
+                    assert_eq!(launcher.input_position(area), None, "{w}x{h}");
+                }
                 for y in 0..h {
                     for x in 0..w {
                         assert!(
@@ -826,6 +903,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn welcome_sliver_shows_prompt_input_and_selection() {
+        // The fallback strip is legible, not just non-blank: the prompt,
+        // a placeholder (then the typed text), and what enter launches.
+        let items = items();
+        let mut state = LauncherState::new();
+        let area = Rect::new(0, 0, 40, 3);
+        let row = |buf: &Buffer, y: u16| -> String {
+            (0..40u16)
+                .map(|x| buf.cell((x, y)).unwrap().symbol().to_string())
+                .collect()
+        };
+
+        let mut buf = Buffer::empty(area);
+        Launcher::new(&items, &state)
+            .welcome(true)
+            .render(area, &mut buf);
+        let strip = row(&buf, 1);
+        assert!(strip.contains("❯ type a command…"), "strip: {strip}");
+        assert!(strip.contains("↵ claude-code"), "strip: {strip}");
+
+        state.push('c');
+        let mut buf = Buffer::empty(area);
+        Launcher::new(&items, &state)
+            .welcome(true)
+            .render(area, &mut buf);
+        let strip = row(&buf, 1);
+        assert!(strip.contains("❯ c"), "typed input missing: {strip}");
+        assert!(!strip.contains("type a command…"), "stale hint: {strip}");
+        // Cursor sits after the typed character on the strip row.
+        let launcher = Launcher::new(&items, &state).welcome(true);
+        assert_eq!(launcher.input_position(area), Some((4, 1)));
     }
 
     #[test]
