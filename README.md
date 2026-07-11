@@ -90,8 +90,10 @@ splitting the current pane; cycle them with `ctrl-b n`/`p` or click the `⧉`
 indicator in the status bar. the sidebar is one list ranked
 most-blocked-first across every workspace, so the agent waiting on you rises
 to the top no matter where it lives — with more than one workspace each card
-carries a `⧉N` tag naming its home. cards name themselves after the task
-Claude Code is working on (`fix auth bug`, not `claude-code`).
+carries a `⧉N` tag naming its home. cards and pane title bars name
+themselves after the task Claude Code is working on (`fix auth bug`, not
+`claude-code`) — the card truncates to its column, the title bar shows the
+full task.
 
 ## persistent sessions
 
