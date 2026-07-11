@@ -535,7 +535,7 @@ fn launcher_modal_overlays_the_frame() {
         selection: None,
         scrolled: &scrolled,
         welcome: false,
-        mode_badge: Some("LAUNCH"),
+        mode_badge: None,
         status: "type to filter",
         tick: 0,
     };
@@ -578,7 +578,7 @@ fn welcome_screen_shows_wordmark_picker_and_command_hint() {
         selection: None,
         scrolled: &scrolled,
         welcome: true,
-        mode_badge: Some("LAUNCH"),
+        mode_badge: None,
         status: "type to filter",
         // Past the reveal: the wordmark is fully on screen.
         tick: 99,

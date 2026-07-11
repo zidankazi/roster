@@ -2017,8 +2017,8 @@ impl App {
         }
     }
 
-    /// The status line: a badge while a mode is armed, plus contextual key
-    /// hints.
+    /// The status line: a badge while a mode is armed (except launch mode,
+    /// whose modal announces itself), plus contextual key hints.
     fn status_line(&self) -> (Option<&'static str>, String) {
         match &self.mode {
             Mode::Normal => {
@@ -2053,8 +2053,10 @@ impl App {
                 Some("JUMP"),
                 "j/k: move · enter: jump to pane · a: auto-approve · esc: cancel".to_string(),
             ),
+            // No badge: the launcher modal already announces the mode, so
+            // a LAUNCH pill in the corner reads as a second (dead) button.
             Mode::Launch(_) => (
-                Some("LAUNCH"),
+                None,
                 "type to filter or run a command · enter: launch · tab: edit flags · esc: cancel"
                     .to_string(),
             ),

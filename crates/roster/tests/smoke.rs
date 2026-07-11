@@ -154,6 +154,26 @@ fn launcher_spawns_an_agent_at_runtime() {
         "launcher never opened:\n{}",
         screen.grid().lines().join("\n")
     );
+    // The launcher modal is the mode indicator; no LAUNCH badge doubles it
+    // in the corner. "new agent" above can match the pinned sidebar chip on
+    // a pre-launcher frame, so wait for launch mode's own footer hint — it
+    // shares the badge's row and paints after it, so once it shows, a
+    // reintroduced badge would be visible too.
+    assert!(
+        drain_while(&mut screen, "type to filter", true, &rx),
+        "launch-mode footer hint never rendered:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    let lines = screen.grid().lines();
+    let status_row = lines
+        .iter()
+        .find(|l| l.contains("type to filter"))
+        .expect("hint row just drained into view");
+    // Case-sensitive on purpose: the same row hints "enter: launch".
+    assert!(
+        !status_row.contains("LAUNCH"),
+        "LAUNCH badge rendered with the launcher open:\n{status_row}"
+    );
     pty.write(b"cla").expect("filter");
     pty.write(b"\r").expect("launch");
 
