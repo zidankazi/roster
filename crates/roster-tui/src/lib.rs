@@ -394,9 +394,7 @@ pub fn render(frame: &mut Frame, view: &View) {
                     content.x + content.width - chip_len - 1,
                     content.y,
                     &chip,
-                    Style::default()
-                        .fg(style::ACCENT)
-                        .add_modifier(Modifier::REVERSED | Modifier::BOLD),
+                    style::accent_pill(),
                 );
             }
         }

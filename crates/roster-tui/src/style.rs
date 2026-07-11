@@ -32,17 +32,20 @@ pub fn state_label(state: AgentState) -> &'static str {
     }
 }
 
-/// roster's brand color — a calm lavender from the fixed 256-color cube
-/// (index 141 ≈ `#af87ff`) — the accent for the launch wordmark and all
-/// interactive chrome (focused pane title, launcher frame, selection
-/// markers, the keys in keyboard hints). Deliberately *not* red: red is
-/// reserved for the blocked state and destructive affordances ([`danger`]),
-/// and an accent that shared it made every piece of chrome read as alarm.
-/// A fixed cube index for the same theme-independence reason as [`MUTED`];
-/// contrast ~7.7:1 on pure black, ~5.6:1 on [`SURFACE_RAISED`]. The four
-/// semantic state colors above stay distinct traffic-light hues: the accent
-/// is the brand, the dots are the signal.
-pub const ACCENT: Color = Color::Indexed(141);
+/// roster's brand color — a signal red from the fixed 256-color cube
+/// (index 160 ≈ `#d70000`, the nearest cube step to the brand `#df2c2c`)
+/// — the accent for the launch wordmark and all interactive chrome
+/// (focused pane title, launcher frame, selection markers, the keys in
+/// keyboard hints). The trade-off, taken knowingly: blocked and [`danger`]
+/// keep the brighter alarm red (196), so the two can never be the same
+/// index, but chrome now shares their hue family — the blocked dot's claim
+/// on attention rests on its ring glyph, its brightness step, and the
+/// triage order, not on owning red outright. A fixed cube index for the
+/// same theme-independence reason as [`MUTED`]; contrast ~3.9:1 on pure
+/// black, ~2.8:1 on [`SURFACE_RAISED`] — shallower than the lavender it
+/// replaced, so as a *fill* the accent takes light text, never dark (see
+/// [`chip`]).
+pub const ACCENT: Color = Color::Indexed(160);
 
 /// The surface roster's chrome sits on — the app canvas behind panels and
 /// between cards. Surface levels are background fills from the fixed
@@ -92,15 +95,17 @@ pub fn selected_muted() -> Style {
 /// not the critical red.
 pub(crate) const WARN_ON_SELECTED: Color = Color::Indexed(94);
 
-/// A pale tint of the accent (cube 189 ≈ `#d7d7ff`) for the wordmark's
+/// A pale tint of the accent (cube 224 ≈ `#ffd7d7`) for the wordmark's
 /// shine sweep — light glancing off the mark, not a hard white flash.
 /// Fixed-cube for the same reason as [`ACCENT`].
-pub(crate) const ACCENT_SHINE: Color = Color::Indexed(189);
+pub(crate) const ACCENT_SHINE: Color = Color::Indexed(224);
 
-/// A deep tint of the accent (cube 97 ≈ `#875faf`) for the wordmark's
+/// A deep tint of the accent (cube 124 ≈ `#af0000`) for the wordmark's
 /// flicker stand-ins — an explicit faint, because `DIM` is reserved for
-/// guest cells and renders near-invisible on many default palettes.
-pub(crate) const ACCENT_FAINT: Color = Color::Indexed(97);
+/// guest cells and renders near-invisible on many default palettes. One
+/// cube step below the accent, not two: ~2.5:1 on [`SURFACE_BASE`] is the
+/// floor where "faint" still reads as a glyph rather than a dropout.
+pub(crate) const ACCENT_FAINT: Color = Color::Indexed(124);
 
 /// The bright foreground tier — primary text: card names, dialog titles.
 /// Index 255 ≈ `#eeeeee`, ~13:1 on [`SURFACE_RAISED`]. Fixed-ramp for the
@@ -156,6 +161,22 @@ pub fn danger() -> Color {
     state_color(AgentState::Blocked)
 }
 
+/// The accent-filled pill — bold light text (~4.7:1) on the brand-red
+/// fill, built as a reversal (accent foreground, bright background
+/// pinned) so a terminal that drops color still shows an inverse-video
+/// pill. The bright pin is load-bearing: the red is mid-luminance, and
+/// letting the reversal swap in whatever sits underneath — a dark
+/// surface, a guest cell — puts the text under 3:1. Every accent-filled
+/// affordance on a dark surface (the armed chip, the exited card's
+/// restart button, the scrollback chip) routes through here so no call
+/// site can lose the pin.
+pub(crate) fn accent_pill() -> Style {
+    Style::default()
+        .fg(ACCENT)
+        .bg(BRIGHT)
+        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+}
+
 /// The style for roster's clickable chrome — toggle chips and buttons,
 /// drawn as space-padded reverse-video pills (` auto `), never bracketed
 /// text. The filled pill is the affordance: it reads as pressable even in
@@ -165,7 +186,7 @@ pub fn danger() -> Color {
 /// inside a reversed cell where another inversion would cancel out. On
 /// the light selected surface (`on_selected`) the reversal trick has
 /// nothing dark to swap in, so the pill pins both sides explicitly: a
-/// dark pill at rest, the accent fill with dark text when armed. Every
+/// dark pill at rest, the accent fill with light text when armed. Every
 /// sidebar and status-row chip routes through here so rest, hover, and
 /// armed can't drift apart between those controls. The modal dialogs
 /// (confirm, exited) keep their own padded-button treatment — default and
@@ -173,19 +194,18 @@ pub fn danger() -> Color {
 pub fn chip(armed: bool, hovered: bool, on_selected: bool) -> Style {
     let mut style = if on_selected {
         if armed {
-            // Dark text on the accent fill (~5.6:1); the accent as a pill
-            // *background* is what "armed" looks like on a light card.
+            // The accent fill, but pinned directly: the light card leaves
+            // the reversal trick nothing to add, so this arm states what
+            // [`accent_pill`] reaches through a reversal.
             Style::default()
-                .fg(SELECTED_FG)
+                .fg(BRIGHT)
                 .bg(ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(SELECTED_BG).bg(SELECTED_FG)
         }
     } else if armed {
-        Style::default()
-            .fg(ACCENT)
-            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        accent_pill()
     } else {
         muted().add_modifier(Modifier::REVERSED)
     };
@@ -357,9 +377,11 @@ mod tests {
         assert!(rest.add_modifier.contains(Modifier::REVERSED));
         assert!(!rest.add_modifier.contains(Modifier::BOLD));
         // Armed: the accent fills the pill, bold so it survives no-color
-        // terminals.
+        // terminals. The bg is pinned bright — reversed, that's light text
+        // on the red fill; the dark surface underneath wouldn't clear it.
         let armed = chip(true, false, false);
         assert_eq!(armed.fg, Some(ACCENT));
+        assert_eq!(armed.bg, Some(BRIGHT));
         assert!(armed.add_modifier.contains(Modifier::REVERSED));
         assert!(armed.add_modifier.contains(Modifier::BOLD));
         // Hover underlines — visible inside the reversed pill in both
@@ -386,11 +408,13 @@ mod tests {
         assert_eq!(rest.fg, Some(SELECTED_BG));
         assert_eq!(rest.bg, Some(SELECTED_FG));
         assert!(!rest.add_modifier.contains(Modifier::REVERSED));
-        // …and the accent as the pill's background when armed, dark text
-        // on it, bold as everywhere else.
+        // …and the accent as the pill's background when armed, light text
+        // on it (the dark tier falls under 3:1 on the mid-luminance red),
+        // bold as everywhere else. The text is the same bright the
+        // reversed pill pins, so the two armed pills are one color.
         let armed = chip(true, false, true);
         assert_eq!(armed.bg, Some(ACCENT));
-        assert_eq!(armed.fg, Some(SELECTED_FG));
+        assert_eq!(armed.fg, bright().fg);
         assert!(armed.add_modifier.contains(Modifier::BOLD));
         // Hover stays the underline, and DIM stays banned.
         assert!(chip(false, true, true)
@@ -431,9 +455,9 @@ mod tests {
 
     #[test]
     fn accent_is_a_fixed_cube_color_and_never_the_danger_red() {
-        // The accent is brand + interactive chrome; red is exclusively the
-        // blocked state and destructive affordances. Sharing a hue made all
-        // of roster's chrome read as alarm.
+        // The brand red and the danger red share a hue family by choice,
+        // but must never be the same index — an armed pill and an alarm
+        // dot that render literally identically would erase the signal.
         assert_ne!(ACCENT, danger());
         for state in [
             AgentState::Blocked,

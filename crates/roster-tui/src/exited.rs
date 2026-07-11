@@ -5,7 +5,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 
 use crate::launcher::{fill, frame};
 use crate::style::{bright, SURFACE_RAISED};
@@ -85,9 +85,7 @@ pub fn draw_exited(
     let Some((restart, close)) = exited_buttons(content) else {
         return true;
     };
-    let mut restart_style = Style::default()
-        .fg(crate::style::ACCENT)
-        .add_modifier(Modifier::REVERSED | Modifier::BOLD);
+    let mut restart_style = crate::style::accent_pill();
     if hover_restart {
         restart_style = restart_style.remove_modifier(Modifier::REVERSED);
     }
@@ -204,6 +202,9 @@ mod tests {
         let (restart, close) = exited_buttons(area).unwrap();
         let restart_style = buf.cell((restart.x, restart.y)).unwrap().style();
         assert_eq!(restart_style.fg, Some(crate::style::ACCENT));
+        // The reversal's light side is pinned (see `accent_pill`) — left
+        // unset it would swap in the raised surface, dark-on-red.
+        assert_eq!(restart_style.bg, bright().fg);
         assert!(restart_style.add_modifier.contains(Modifier::REVERSED));
         assert_eq!(
             buf.cell((close.x, close.y)).unwrap().style().fg,

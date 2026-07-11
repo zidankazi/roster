@@ -475,9 +475,9 @@ impl Widget for Sidebar<'_> {
                     let entry = &self.entries[index];
                     let is_selected = self.selected == Some(index);
                     // The jump marker keeps the raw accent even on the
-                    // light fill: lavender clears it by hue, not
-                    // luminance, and the moving cursor must look the same
-                    // on every card it lands on.
+                    // light fill: the brand red clears it (~4.3:1), and
+                    // the moving cursor must look the same on every card
+                    // it lands on.
                     let marker_style = Style::default().fg(crate::style::ACCENT);
                     if is_selected {
                         buf.set_string(area.x, y, "❯", marker_style);
@@ -1674,7 +1674,8 @@ mod tests {
         let rest = buf.cell((cols.start, 3)).unwrap().style();
         assert_eq!(rest.fg, selected().bg, "dark pill, light label");
         assert_eq!(rest.bg, selected().fg);
-        // Armed, the accent is the pill's background with dark text.
+        // Armed, the accent is the pill's background with light text —
+        // the dark tier falls under 3:1 on the mid-luminance brand red.
         entries[0].auto_approve = true;
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
@@ -1682,7 +1683,7 @@ mod tests {
             .render(Rect::new(0, 0, 40, 14), &mut buf);
         let armed = buf.cell((cols.start, 3)).unwrap().style();
         assert_eq!(armed.bg, Some(crate::style::ACCENT));
-        assert_eq!(armed.fg, selected().fg);
+        assert_eq!(armed.fg, crate::style::bright().fg);
         assert!(armed.add_modifier.contains(Modifier::BOLD));
     }
 
