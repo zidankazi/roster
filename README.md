@@ -38,9 +38,10 @@ without reading every screen.
   whoever's been blocked longest sits on top, each card showing why. a
   finished agent's check pulses until you look, and the card you're on is
   the one inverted card in the stack — light fill, dark text.
-- **a real terminal, not a wrapped interpretation.** 10k lines of scrollback
-  per pane, full-screen TUIs keep their keys, drag to select and copy (OSC 52,
-  works over ssh), bracketed paste for multi-line prompts.
+- **a real terminal, not a wrapped interpretation.** each agent in its own
+  rounded panel, 10k lines of scrollback per pane, full-screen TUIs keep
+  their keys, drag to select and copy (OSC 52, works over ssh), bracketed
+  paste for multi-line prompts.
 - **mouse and keyboard, both first-class.** click a pane, drag a divider, hit
   the `+ new agent` button, or drive all of it with tmux-style `ctrl-b` keys.
 - **detach, agents keep running.** every pane lives in a background server.

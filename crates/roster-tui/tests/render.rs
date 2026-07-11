@@ -86,75 +86,96 @@ fn panes_get_title_bars_and_content_shifts_down() {
     terminal.draw(|frame| render(frame, &view)).unwrap();
     let buf = terminal.backend().buffer().clone();
 
-    // Row 0 of the pane region holds title bars, not content: the working
-    // claude pane's title on the left half (spinner frame at tick 0), the
-    // blocked claude pane's on the right.
-    let left_title = region_text(&buf, 32, 55, 0);
+    // The chrome stands back from the terminal edge: rows 0 and 11 and
+    // columns 0-1 are bare canvas — empty text, painted in the base
+    // surface (the fill IS the region separation, so bg is the point).
+    assert_eq!(region_text(&buf, 0, 80, 0), "");
+    assert_eq!(region_text(&buf, 0, 80, 11), "");
+    for (x, y) in [(0, 0), (40, 0), (0, 6), (79, 11)] {
+        assert_eq!(
+            buf.cell((x, y)).unwrap().style().bg,
+            Some(roster_tui::SURFACE_BASE),
+            "margin cell ({x},{y})"
+        );
+    }
+    // The gap column between sidebar and panes sits on the same canvas.
+    assert_eq!(
+        buf.cell((33, 5)).unwrap().style().bg,
+        Some(roster_tui::SURFACE_BASE)
+    );
+
+    // Each pane sits in a rounded panel (34..56 and 56..78, rows 1..10);
+    // the title rides the top border: the working claude pane's on the
+    // left (spinner frame at tick 0), the blocked one's on the right.
+    let left_title = region_text(&buf, 34, 56, 1);
     assert!(
-        left_title.trim_start().starts_with("⠋ claude-code"),
+        left_title.contains("⠋ claude-code"),
         "left title: {left_title}"
     );
-    let right_title = region_text(&buf, 56, 80, 0);
+    let right_title = region_text(&buf, 56, 78, 1);
     assert!(
         right_title.contains("◉ claude-code"),
         "right title: {right_title}"
     );
+    assert_eq!(buf.cell((34, 1)).unwrap().symbol(), "╭");
+    assert_eq!(buf.cell((34, 9)).unwrap().symbol(), "╰");
 
-    // Focus reads as an accent marker and accent-colored name — not a
-    // heavy inverse bar. The marker is the same ▍ bar the focused sidebar
-    // card carries: one glyph for one meaning.
-    assert_eq!(buf.cell((56, 0)).unwrap().symbol(), "▍");
-    assert_eq!(buf.cell((60, 0)).unwrap().style().fg, Some(ACCENT));
-    assert_ne!(buf.cell((32, 0)).unwrap().symbol(), "▍");
+    // Focus reads as the accent border and an accent-colored name — not a
+    // heavy inverse bar. The unfocused panel's border stays muted.
+    assert_eq!(buf.cell((56, 1)).unwrap().symbol(), "╭");
+    assert_eq!(buf.cell((56, 1)).unwrap().style().fg, Some(ACCENT));
+    assert_eq!(buf.cell((60, 1)).unwrap().style().fg, Some(ACCENT));
+    assert_eq!(buf.cell((34, 1)).unwrap().style().fg, muted().fg);
     assert!(!buf
-        .cell((56, 0))
+        .cell((56, 1))
         .unwrap()
         .style()
         .add_modifier
         .contains(Modifier::REVERSED));
 
-    // Content starts on row 1, under the titles.
-    assert_eq!(region_text(&buf, 32, 55, 1), "left agent output");
-    assert_eq!(region_text(&buf, 56, 80, 1), "right agent output");
+    // Content starts inside the panels, under the border row.
+    assert_eq!(region_text(&buf, 35, 55, 2), "left agent output");
+    assert_eq!(region_text(&buf, 57, 77, 2), "right agent output");
 
-    // Separator between the halves spans the pane rows.
-    assert_eq!(buf.cell((55, 0)).unwrap().symbol(), "│");
+    // The adjacent panel borders separate the halves — no bare rule.
     assert_eq!(buf.cell((55, 5)).unwrap().symbol(), "│");
+    assert_eq!(buf.cell((56, 5)).unwrap().symbol(), "│");
 
-    // Cursor lands one row lower than before, inside the focused content.
-    terminal.backend_mut().assert_cursor_position((57u16, 1u16));
+    // Cursor lands inside the focused panel's content.
+    terminal.backend_mut().assert_cursor_position((58u16, 2u16));
 
-    // Sidebar header, the sidebar/pane rule, and the status line render.
-    assert!(region_text(&buf, 0, 31, 0).trim().starts_with("agents"));
-    assert_eq!(buf.cell((31, 0)).unwrap().symbol(), "│");
-    assert_eq!(buf.cell((31, 9)).unwrap().symbol(), "│");
-    assert!(region_text(&buf, 0, 80, 11).contains("ctrl-b"));
+    // Sidebar header renders inside the inset; the old rule column is now
+    // a bare gap — spacing separates the regions.
+    assert!(region_text(&buf, 2, 33, 1).trim().starts_with("agents"));
+    assert_eq!(buf.cell((33, 1)).unwrap().symbol(), " ");
+    assert_eq!(buf.cell((33, 5)).unwrap().symbol(), " ");
+    assert!(region_text(&buf, 0, 80, 10).contains("ctrl-b"));
 
     // Mouse-first chrome: the pinned + new agent pill on the sidebar's
     // bottom row (a reversed pill, not bracketed text), a ✕ close button
-    // at each title's right edge, and the grid · solo switcher pills on
-    // the status row (two panes exist).
-    assert_eq!(region_text(&buf, 0, 31, 10).trim(), "+ new agent");
+    // punched into each title border, and the grid · solo switcher pills
+    // on the status row (two panes exist).
+    assert_eq!(region_text(&buf, 2, 33, 9).trim(), "+ new agent");
     assert!(buf
-        .cell((1, 10))
+        .cell((3, 9))
         .unwrap()
         .style()
         .add_modifier
         .contains(Modifier::REVERSED));
     // The row above the button is breathing room now — the switcher left
     // the sidebar.
-    assert_eq!(region_text(&buf, 0, 31, 9), "");
-    assert_eq!(buf.cell((53, 0)).unwrap().symbol(), "✕");
-    assert_eq!(buf.cell((78, 0)).unwrap().symbol(), "✕");
-    // On the status row: grid at 66..72, solo at 73..79. The active
+    assert_eq!(region_text(&buf, 2, 33, 8), "");
+    assert_eq!(buf.cell((53, 1)).unwrap().symbol(), "✕");
+    assert_eq!(buf.cell((75, 1)).unwrap().symbol(), "✕");
+    // On the status row (10): grid at 64..70, solo at 71..77. The active
     // layout's pill is accent-filled; the inactive one is a muted pill —
     // an explicit, legible foreground rather than the near-invisible DIM
     // attribute an earlier fix replaced.
-    assert_eq!(region_text(&buf, 66, 80, 11).trim(), "grid   solo");
-    let grid = buf.cell((67, 11)).unwrap().style();
+    assert_eq!(region_text(&buf, 64, 78, 10).trim(), "grid   solo");
+    let grid = buf.cell((65, 10)).unwrap().style();
     assert_eq!(grid.fg, Some(ACCENT));
     assert!(grid.add_modifier.contains(Modifier::REVERSED));
-    let solo = buf.cell((74, 11)).unwrap().style();
+    let solo = buf.cell((72, 10)).unwrap().style();
     assert_eq!(solo.fg, muted().fg);
     assert!(solo.add_modifier.contains(Modifier::REVERSED));
     assert!(!solo.add_modifier.contains(Modifier::DIM));
@@ -212,24 +233,26 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
             "{what} at ({x},{y}) still leans on DIM"
         );
     };
-    // Sidebar "agents" subtitle (first glyph after the leading space).
-    assert_eq!(buf.cell((1, 0)).unwrap().symbol(), "a");
-    assert_quiet(1, 0, muted().fg, "sidebar subtitle");
+    // Sidebar "agents" subtitle (first glyph after the leading space,
+    // inside the chrome inset).
+    assert_eq!(buf.cell((3, 1)).unwrap().symbol(), "a");
+    assert_quiet(3, 1, muted().fg, "sidebar subtitle");
     // The blocked card leads (12s old) and holds focus — the inverted
     // card: the focus bar on its edge, its right-aligned age column…
     assert_eq!(
-        region_text(&buf, 0, 31, 2),
+        region_text(&buf, 2, 33, 3),
         "▍ ◉ claude-code            12s"
     );
-    assert_quiet(27, 2, selected_muted().fg, "sidebar age");
+    assert_quiet(29, 3, selected_muted().fg, "sidebar age");
     // …and the reason leading the detail row (behind the focus bar's edge
     // column) — the glyph carries the state, the row carries the why, in
     // the surface's primary dark text.
-    assert!(region_text(&buf, 0, 31, 3).starts_with("▍   Approve this"));
-    assert_quiet(14, 3, selected().fg, "sidebar state reason");
-    // The bottom status hint line spans from the left edge.
-    assert_eq!(buf.cell((0, 11)).unwrap().symbol(), "c");
-    assert_quiet(0, 11, muted().fg, "status hint");
+    assert!(region_text(&buf, 2, 33, 4).starts_with("▍   Approve this"));
+    assert_quiet(16, 4, selected().fg, "sidebar state reason");
+    // The bottom status hint centers in the footer (41 drawn cells on a
+    // 76-wide chrome row → column 19).
+    assert_eq!(buf.cell((19, 10)).unwrap().symbol(), "c");
+    assert_quiet(19, 10, muted().fg, "status hint");
 }
 
 #[test]
@@ -269,46 +292,47 @@ fn hover_lights_up_interactive_chrome() {
         terminal.backend().buffer().clone()
     };
 
-    // Hovering a ✕ turns it red and bold; unhovered it stays muted.
+    // Hovering a ✕ turns it red and bold; unhovered it stays muted. The
+    // buttons ride the title borders (row 1) at 53 and 75.
     let buf = draw(Some(Hit::PaneClose(left)));
-    let close = buf.cell((53, 0)).unwrap();
+    let close = buf.cell((53, 1)).unwrap();
     assert_eq!(close.symbol(), "✕");
     assert_eq!(close.style().fg, Some(ratatui::style::Color::Red));
     assert!(close.style().add_modifier.contains(Modifier::BOLD));
-    let other = buf.cell((78, 0)).unwrap();
+    let other = buf.cell((75, 1)).unwrap();
     assert_eq!(other.style().fg, muted().fg);
     assert!(!other.style().add_modifier.contains(Modifier::DIM));
 
     // The + new agent pill is reversed at rest — that's its button shape —
     // and hover underlines it.
     let rested = draw(None);
-    let rest = rested.cell((1, 10)).unwrap().style();
+    let rest = rested.cell((3, 9)).unwrap().style();
     assert!(rest.add_modifier.contains(Modifier::REVERSED));
     assert!(!rest.add_modifier.contains(Modifier::UNDERLINED));
     let buf = draw(Some(Hit::SidebarNewAgent));
-    let hovered = buf.cell((1, 10)).unwrap().style();
+    let hovered = buf.cell((3, 9)).unwrap().style();
     assert!(hovered.add_modifier.contains(Modifier::REVERSED));
     assert!(hovered.add_modifier.contains(Modifier::UNDERLINED));
 
     // Hovering a sidebar card shows a quiet muted marker.
     let buf = draw(Some(Hit::SidebarEntry(1)));
-    let marker = buf.cell((0, 5)).unwrap();
+    let marker = buf.cell((2, 6)).unwrap();
     assert_eq!(marker.symbol(), "❯");
     assert_eq!(marker.style().fg, muted().fg);
 
     // On the focused — inverted — card the marker keeps the quiet tier in
     // the flipped palette, so it never washes out on the light fill.
     let buf = draw(Some(Hit::SidebarEntry(0)));
-    let marker = buf.cell((0, 2)).unwrap();
+    let marker = buf.cell((2, 3)).unwrap();
     assert_eq!(marker.symbol(), "❯");
     assert_eq!(marker.style().fg, selected_muted().fg);
 
     // No hover: the ✕ sits muted (not lit red), and no card marker shows.
     let buf = draw(None);
-    let close = buf.cell((53, 0)).unwrap().style();
+    let close = buf.cell((53, 1)).unwrap().style();
     assert_eq!(close.fg, muted().fg);
     assert_ne!(close.fg, Some(ratatui::style::Color::Red));
-    assert_ne!(buf.cell((0, 2)).unwrap().symbol(), "❯");
+    assert_ne!(buf.cell((2, 3)).unwrap().symbol(), "❯");
 }
 
 #[test]
@@ -347,15 +371,15 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
     terminal.draw(|frame| render(frame, &view)).unwrap();
     let buf = terminal.backend().buffer().clone();
 
-    // One full-width title — the focused pane's — and no interior
-    // separator column.
-    let title = region_text(&buf, 32, 80, 0);
+    // One full-width panel — the focused pane's — and no interior border
+    // between halves (column 55 is inside the solo panel).
+    let title = region_text(&buf, 34, 78, 1);
     assert!(title.contains("◉ claude-code"), "title: {title}");
     assert_ne!(buf.cell((55, 5)).unwrap().symbol(), "│");
 
-    // The solo pane's content spans the whole region; the hidden pane's
+    // The solo pane's content spans the panel interior; the hidden pane's
     // content is nowhere.
-    assert_eq!(region_text(&buf, 32, 80, 1), "right agent output");
+    assert_eq!(region_text(&buf, 35, 77, 2), "right agent output");
     let all: String = (0..12)
         .map(|y| region_text(&buf, 0, 80, y) + "\n")
         .collect();
@@ -364,12 +388,63 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
     // Sidebar still lists every agent — it is the switcher — and the
     // status row's layout pills show solo active (accent-filled).
     assert!(all.contains("claude-code"), "screen:\n{all}");
-    assert_eq!(region_text(&buf, 66, 80, 11).trim(), "grid   solo");
-    let solo = buf.cell((74, 11)).unwrap().style();
+    assert_eq!(region_text(&buf, 64, 78, 10).trim(), "grid   solo");
+    let solo = buf.cell((72, 10)).unwrap().style();
     assert_eq!(solo.fg, Some(ACCENT));
     assert!(solo.add_modifier.contains(Modifier::REVERSED));
-    let grid = buf.cell((67, 11)).unwrap().style();
+    let grid = buf.cell((65, 10)).unwrap().style();
     assert_eq!(grid.fg, muted().fg);
+}
+
+#[test]
+fn degenerate_frames_render_without_panicking() {
+    let now = Instant::now();
+    let (mut session, left, right) = two_agent_session(now);
+    session.focus(right);
+    let mut grids = HashMap::new();
+    grids.insert(left, Grid::from_text("left"));
+    grids.insert(right, Grid::from_text("right"));
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+    let exited = HashMap::new();
+    let scrolled = HashMap::new();
+    // Sizes straddling every threshold: the inset gate (24x8 and just
+    // under), non-panelled slivers, and near-zero frames.
+    for (w, h) in [
+        (1, 1),
+        (5, 2),
+        (10, 3),
+        (23, 7),
+        (23, 8),
+        (24, 7),
+        (24, 8),
+        (25, 9),
+        (30, 4),
+    ] {
+        let view = View {
+            session: &session,
+            grids: &grids,
+            exited: &exited,
+            entries: &entries,
+            selected: None,
+            hover: None,
+            zoomed: false,
+            side: SidebarSide::Left,
+            launcher: None,
+            confirm: None,
+            toasts: &[],
+            selection: None,
+            scrolled: &scrolled,
+            welcome: false,
+            mode_badge: Some("PREFIX"),
+            status: "c: new agent · q: quit",
+            tick: 0,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal
+            .draw(|frame| render(frame, &view))
+            .unwrap_or_else(|_| panic!("render panicked at {w}x{h}"));
+    }
 }
 
 #[test]
@@ -579,18 +654,18 @@ fn exited_pane_overlay_card_and_title_marker() {
     terminal.draw(|frame| render(frame, &view)).unwrap();
     let buf = terminal.backend().buffer().clone();
 
-    // Title marks the exit; the pane hosts the overlay card with its
-    // restart/close buttons.
-    let title = region_text(&buf, 32, 80, 0);
+    // The title border marks the exit; the pane hosts the overlay card
+    // with its restart/close buttons.
+    let title = region_text(&buf, 34, 78, 1);
     assert!(title.contains("exited"), "title: {title}");
     let all: String = (0..10u16)
-        .map(|y| region_text(&buf, 32, 80, y) + "\n")
+        .map(|y| region_text(&buf, 34, 78, y) + "\n")
         .collect();
     assert!(all.contains("claude · exit 3"), "card message:\n{all}");
     assert!(all.contains("restart"), "restart button:\n{all}");
     assert!(all.contains("close"), "close button:\n{all}");
 
-    let status = region_text(&buf, 0, 80, 9);
+    let status = region_text(&buf, 2, 80, 8);
     assert!(status.starts_with(" PREFIX "), "status: {status}");
 }
 
@@ -625,8 +700,8 @@ fn exited_pane_too_small_for_the_card_keeps_the_strip() {
         tick: 0,
     };
 
-    // 50 wide → sidebar 25, pane content 25 — too narrow for the 30-col
-    // card, so the one-line strip stays.
+    // 50 wide → chrome 46, sidebar 23, panel interior 21 — too narrow for
+    // the 30-col card, so the one-line strip stays.
     let mut terminal = Terminal::new(TestBackend::new(50, 8)).unwrap();
     terminal.draw(|frame| render(frame, &view)).unwrap();
     let buf = terminal.backend().buffer().clone();
@@ -695,7 +770,7 @@ fn sidebar_ranks_globally_across_workspaces_and_tags_cards() {
 
     // No workspace headers in the flat view — the whole sidebar is cards.
     let sidebar: String = (0..20)
-        .map(|y| region_text(&buf, 0, 31, y) + "\n")
+        .map(|y| region_text(&buf, 2, 33, y) + "\n")
         .collect();
     assert!(
         !sidebar.contains("workspace"),
@@ -704,12 +779,12 @@ fn sidebar_ranks_globally_across_workspaces_and_tags_cards() {
 
     // Each card carries a `⧉N` workspace tag: the top card is the blocked
     // agent from window 1 (⧉2), the next is the idle one from window 0 (⧉1).
-    let card0 = region_text(&buf, 0, 31, 2);
+    let card0 = region_text(&buf, 2, 33, 3);
     assert!(
         card0.contains("⧉2"),
         "top card should tag window 2: {card0}"
     );
-    let card1 = region_text(&buf, 0, 31, 5);
+    let card1 = region_text(&buf, 2, 33, 6);
     assert!(
         card1.contains("⧉1"),
         "next card should tag window 1: {card1}"
@@ -764,13 +839,13 @@ fn done_pulse_keeps_sidebar_and_title_glyphs_in_step() {
         terminal.draw(|frame| render(frame, &view)).unwrap();
         let buf = terminal.backend().buffer().clone();
         // The card glyph sits two columns into the sidebar's first card
-        // row; the title glyph two columns into the pane region (the
-        // sidebar spans 32 columns).
-        assert_eq!(buf.cell((2, 2)).unwrap().symbol(), "✓");
-        assert_eq!(buf.cell((34, 0)).unwrap().symbol(), "✓");
+        // row (inside the chrome inset); the title glyph two columns into
+        // the panel's top border.
+        assert_eq!(buf.cell((4, 3)).unwrap().symbol(), "✓");
+        assert_eq!(buf.cell((36, 1)).unwrap().symbol(), "✓");
         (
-            buf.cell((2, 2)).unwrap().style(),
-            buf.cell((34, 0)).unwrap().style(),
+            buf.cell((4, 3)).unwrap().style(),
+            buf.cell((36, 1)).unwrap().style(),
         )
     };
     let (card_off, title_off) = glyph_styles(0);

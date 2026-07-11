@@ -192,8 +192,9 @@ fn mouse_clicks_focus_launch_and_jump() {
     );
     std::env::set_var("PATH", &path);
 
-    // 120x30 frame: sidebar 0..32 (rule at col 31), panes 32..120, status
-    // row 30 (1-based). Two shell panes split 44/44 at local x 0..44/44..88.
+    // 120x30 frame, chrome inset (2,1): sidebar 2..34, panes 34..118 in
+    // rounded panels, status row 29 (1-based). Two shell panes split 42/42
+    // at local x 0..42/42..84.
     let (cols, rows) = (120u16, 30u16);
     let mut pty =
         Pty::spawn(&format!("'{}' 'sleep 60' 'sleep 70'", bin()), cols, rows).expect("spawn");
@@ -201,16 +202,18 @@ fn mouse_clicks_focus_launch_and_jump() {
 
     let mut screen = Screen::new(cols, rows);
 
-    // The second command has focus at startup; the status line names it.
+    // The second command has focus at startup; the status line names it
+    // (the footer sets hints a wide gap apart).
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 70 · ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 70  ·  ctrl-b", true, &rx),
         "first frame:\n{}",
         screen.grid().lines().join("\n")
     );
 
-    // Hovering the left pane's ✕ (motion is SGR button 35) must switch the
-    // terminal pointer to a hand via OSC 22.
-    pty.write(b"\x1b[<35;74;1M").expect("hover ✕");
+    // Hovering the left pane's ✕ (motion is SGR button 35; the button
+    // rides the title border, 1-based row 2) must switch the terminal
+    // pointer to a hand via OSC 22.
+    pty.write(b"\x1b[<35;74;2M").expect("hover ✕");
     let start = Instant::now();
     let mut raw: Vec<u8> = Vec::new();
     let mut saw_hand = false;
@@ -234,14 +237,14 @@ fn mouse_clicks_focus_launch_and_jump() {
     // focus follows the mouse click.
     pty.write(&click(40, 10)).expect("click left pane");
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 60 · ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 60  ·  ctrl-b", true, &rx),
         "click did not focus the left pane:\n{}",
         screen.grid().lines().join("\n")
     );
 
-    // Drag the divider between the halves (local col 43 → absolute 1-based
-    // 76) to the left; the separator must land near local col 23 (absolute
-    // 0-based 55).
+    // Drag the divider between the halves (local col 41 → absolute 1-based
+    // 76) to the left; the left panel's border must land near absolute
+    // 0-based col 55.
     pty.write(b"\x1b[<0;76;10M").expect("grab divider");
     pty.write(b"\x1b[<32;66;10M").expect("drag");
     pty.write(b"\x1b[<32;56;10M").expect("drag");
@@ -271,11 +274,11 @@ fn mouse_clicks_focus_launch_and_jump() {
     );
 
     // The sidebar's pinned + new agent button (bottom sidebar row, 0-based
-    // y 28 → 1-based 29) opens the launcher; click the sole claude-code row
+    // y 27 → 1-based 28) opens the launcher; click the sole claude-code row
     // to launch it. Modal at 120x30: width 44 → x 38..82; height 5 → y 8..13
     // (0-based); the input sits at y 9, the claude-code row at y 10 → 1-based
     // 11.
-    pty.write(&click(5, 29)).expect("click + new agent");
+    pty.write(&click(5, 28)).expect("click + new agent");
     assert!(
         drain_while(&mut screen, "new agent", true, &rx),
         "launcher never opened:\n{}",
@@ -290,19 +293,19 @@ fn mouse_clicks_focus_launch_and_jump() {
 
     // The launched agent opened in its own window and has focus. The flat
     // sidebar lists agents only — the shell-only workspace has no rows —
-    // so the status row's `⧉ 2/2` indicator (right edge, 7 columns) cycles
-    // back to the shells, and the agent's card (top of the sidebar, 1-based
-    // rows 3-4) jumps to the agent again.
-    pty.write(&click(116, 30))
+    // so the status row's `⧉ 2/2` indicator (chrome right edge, 1-based
+    // row 29) cycles back to the shells, and the agent's card (top of the
+    // sidebar, 1-based rows 4-5) jumps to the agent again.
+    pty.write(&click(116, 29))
         .expect("click status windows indicator");
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 60 · ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 60  ·  ctrl-b", true, &rx),
         "status indicator click did not switch windows:\n{}",
         screen.grid().lines().join("\n")
     );
-    pty.write(&click(5, 3)).expect("click sidebar card");
+    pty.write(&click(5, 4)).expect("click sidebar card");
     assert!(
-        drain_while(&mut screen, "focused ▸ claude · ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ claude  ·  ctrl-b", true, &rx),
         "sidebar click did not jump to the agent:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -324,16 +327,21 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     let mut screen = Screen::new(cols, rows);
 
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 70 · ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 70  ·  ctrl-b", true, &rx),
         "first frame:\n{}",
         screen.grid().lines().join("\n")
     );
 
-    // Click the "solo" pill in the status row's layout switcher (bottom
-    // row, right edge: 0-based cols 113..119 → 1-based click at 115, 30).
-    pty.write(&click(115, 30)).expect("click solo");
+    // Click the "solo" pill in the status row's layout switcher (status
+    // row 1-based 29, 0-based cols 111..117 → 1-based click at 115, 29).
+    pty.write(&click(115, 29)).expect("click solo");
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 70 · click a card", true, &rx),
+        drain_while(
+            &mut screen,
+            "focused ▸ sleep 70  ·  click a card",
+            true,
+            &rx
+        ),
         "solo never engaged:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -343,10 +351,11 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
         "no SOLO badge:\n{}",
         lines.join("\n")
     );
-    // One rule only — the sidebar's; no interior separator in solo.
+    // One panel only: its two side borders — no interior boundary in solo
+    // (the sidebar separates by spacing now, not a rule).
     assert_eq!(
         lines[5].matches('│').count(),
-        1,
+        2,
         "screen:\n{}",
         lines.join("\n")
     );
@@ -355,32 +364,43 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"o").expect("focus next");
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 60 · click a card", true, &rx),
+        drain_while(
+            &mut screen,
+            "focused ▸ sleep 60  ·  click a card",
+            true,
+            &rx
+        ),
         "solo did not follow focus:\n{}",
         screen.grid().lines().join("\n")
     );
 
-    // Clicking the "grid" pill (0-based cols 106..112) returns to the
-    // tiles: the interior separator is back.
-    pty.write(&click(108, 30)).expect("click grid");
+    // Clicking the "grid" pill (0-based cols 104..110) returns to the
+    // tiles: two panels, four side borders.
+    pty.write(&click(108, 29)).expect("click grid");
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 60 · ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 60  ·  ctrl-b", true, &rx),
         "grid never returned:\n{}",
         screen.grid().lines().join("\n")
     );
     let lines = screen.grid().lines();
     assert_eq!(
         lines[5].matches('│').count(),
-        2,
+        4,
         "screen:\n{}",
         lines.join("\n")
     );
 
-    // Double-clicking a pane's title also goes solo.
-    pty.write(&click(40, 1)).expect("first click");
-    pty.write(&click(40, 1)).expect("second click");
+    // Double-clicking a pane's title (the top border row, 1-based 2) also
+    // goes solo.
+    pty.write(&click(40, 2)).expect("first click");
+    pty.write(&click(40, 2)).expect("second click");
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 60 · click a card", true, &rx),
+        drain_while(
+            &mut screen,
+            "focused ▸ sleep 60  ·  click a card",
+            true,
+            &rx
+        ),
         "double-click did not go solo:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -416,9 +436,10 @@ fn exited_pane_stays_until_closed() {
     );
 
     // Clicking the title's ✕ closes the only (exited) pane and ends the
-    // session. 100x24 frame: single pane content width 68 → ✕ target at
-    // absolute cols 97..100, title row 0 → 1-based (98, 1).
-    pty.write(&click(98, 1)).expect("click ✕");
+    // session. 100x24 frame, chrome inset (2,1): the pane region is 64
+    // wide, the panel spans 34..98, its ✕ target at absolute 0-based cols
+    // 94..97 on the top border row → 1-based (96, 2).
+    pty.write(&click(96, 2)).expect("click ✕");
     let status = pty.wait().expect("wait");
     assert!(status.success, "roster exited with failure: {status:?}");
 }
@@ -496,12 +517,17 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
         screen.grid().lines().join("\n")
     );
     let lines = screen.grid().lines();
-    // A single full-width pane: a content row holds only the sidebar rule;
-    // a split would add an interior separator.
+    // A single full-width pane: one panel, two side borders (the sidebar
+    // separates by spacing, not a rule); a split would add two more.
     let rules = lines[5].matches('│').count();
-    assert_eq!(rules, 1, "expected one rule, screen:\n{}", lines.join("\n"));
+    assert_eq!(
+        rules,
+        2,
+        "expected one panel, screen:\n{}",
+        lines.join("\n")
+    );
     assert!(
-        !lines[0].contains("○ sh"),
+        !lines[1].contains("○ sh"),
         "placeholder shell still titled:\n{}",
         lines.join("\n")
     );
@@ -556,15 +582,20 @@ fn typing_into_the_backdrop_shell_does_not_save_it() {
     let lines = screen.grid().lines();
     // One window only: a `⧉` workspace tag renders only with more than one
     // window, so its absence proves the typed-into shell did not survive as
-    // its own workspace. A content row also holds just the single sidebar
-    // rule — a stray split would add an interior separator.
+    // its own workspace. A content row also holds one panel's two side
+    // borders — a stray split would add two more.
     assert!(
         !lines.iter().any(|l| l.contains('⧉')),
         "a stray shell workspace survived (⧉ tag present):\n{}",
         lines.join("\n")
     );
     let rules = lines[5].matches('│').count();
-    assert_eq!(rules, 1, "expected one rule, screen:\n{}", lines.join("\n"));
+    assert_eq!(
+        rules,
+        2,
+        "expected one panel, screen:\n{}",
+        lines.join("\n")
+    );
 
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"q").expect("quit");
@@ -612,7 +643,7 @@ fn closing_a_live_agent_asks_first() {
         screen.grid().lines().join("\n")
     );
     assert!(
-        screen.grid().lines()[0].contains("claude"),
+        screen.grid().lines()[1].contains("claude"),
         "agent pane gone after cancel:\n{}",
         screen.grid().lines().join("\n")
     );

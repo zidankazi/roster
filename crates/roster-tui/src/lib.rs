@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
+use ratatui::widgets::{Block, BorderType};
 use ratatui::Frame;
 use roster_core::{Grid, PaneId, Session};
 
@@ -33,7 +34,7 @@ pub use sidebar::{
 };
 pub use style::{
     cell_style, muted, selected, selected_muted, state_color, state_glyph, state_glyph_style,
-    ACCENT,
+    ACCENT, SURFACE_BASE,
 };
 pub use telemetry::telemetry_line;
 pub use toast::{draw_toasts, toast_rects, ToastLevel};
@@ -110,39 +111,63 @@ fn sidebar_width(total_width: u16) -> u16 {
     SIDEBAR_WIDTH.min(total_width / 2)
 }
 
+/// The chrome inset: how far roster's UI stands back from the terminal
+/// edge, in rows — columns double it, since terminal cells are roughly
+/// twice as tall as they are wide. [`chrome_area`] is its only consumer;
+/// retune the breathing room here.
+const INSET: u16 = 1;
+
+/// The area roster's chrome occupies: the frame stood back from the
+/// terminal edge by the inset — `2·INSET` columns, `INSET` rows — so the
+/// UI reads as an app sitting on the canvas rather than text jammed to the
+/// bezel. Small terminals spend every cell on content instead; the guard
+/// scales with [`INSET`] so retuning it can't underflow the subtraction.
+/// Every public geometry resolver takes the *raw* frame area and applies
+/// this exactly once, so render, hit-testing, and the binary can't
+/// disagree about where the chrome starts.
+pub fn chrome_area(frame_area: Rect) -> Rect {
+    if frame_area.width < 4 * INSET + 20 || frame_area.height < 2 * INSET + 6 {
+        return frame_area;
+    }
+    Rect::new(
+        frame_area.x + 2 * INSET,
+        frame_area.y + INSET,
+        frame_area.width - 4 * INSET,
+        frame_area.height - 2 * INSET,
+    )
+}
+
 /// The absolute region panes are laid out in: everything beside the sidebar
-/// and above the status line.
+/// and above the status line, within the chrome inset.
 pub fn panes_area(frame_area: Rect, side: SidebarSide) -> Rect {
-    let bar = sidebar_width(frame_area.width);
+    let area = chrome_area(frame_area);
+    let bar = sidebar_width(area.width);
     let x = match side {
-        SidebarSide::Left => frame_area.x + bar,
-        SidebarSide::Right => frame_area.x,
+        SidebarSide::Left => area.x + bar,
+        SidebarSide::Right => area.x,
     };
     Rect::new(
         x,
-        frame_area.y,
-        frame_area.width - bar,
-        frame_area.height.saturating_sub(STATUS_HEIGHT),
+        area.y,
+        area.width - bar,
+        area.height.saturating_sub(STATUS_HEIGHT),
     )
 }
 
-/// The absolute region the sidebar occupies.
+/// The absolute region the sidebar occupies, within the chrome inset.
 fn sidebar_area(frame_area: Rect, side: SidebarSide) -> Rect {
-    let bar = sidebar_width(frame_area.width);
+    let area = chrome_area(frame_area);
+    let bar = sidebar_width(area.width);
     let x = match side {
-        SidebarSide::Left => frame_area.x,
-        SidebarSide::Right => frame_area.x + frame_area.width - bar,
+        SidebarSide::Left => area.x,
+        SidebarSide::Right => area.x + area.width - bar,
     };
-    Rect::new(
-        x,
-        frame_area.y,
-        bar,
-        frame_area.height.saturating_sub(STATUS_HEIGHT),
-    )
+    Rect::new(x, area.y, bar, area.height.saturating_sub(STATUS_HEIGHT))
 }
 
-/// The sidebar's content region (the sidebar area minus its rule column),
-/// and where clicks on agent cards land.
+/// The sidebar's content region — the sidebar area minus the gap column
+/// that stands it off from the pane panels (regions separate by spacing
+/// and background, not rules) — and where clicks on agent cards land.
 pub fn sidebar_inner(frame_area: Rect, side: SidebarSide) -> Rect {
     let bar = sidebar_area(frame_area, side);
     match side {
@@ -159,19 +184,30 @@ pub fn sidebar_button_row(frame_area: Rect, side: SidebarSide) -> Option<u16> {
     (bar.height >= 6).then(|| bar.y + bar.height - 1)
 }
 
-/// The columns of a pane's title row occupied by its `✕` close button, in
-/// pane-local coordinates: a 3-column target around the glyph at the
-/// title's right edge. `None` when the title is too narrow to host one.
-pub fn close_button_cols(rect: roster_core::Rect, area: Rect) -> Option<std::ops::Range<u16>> {
-    let content = content_rect(rect, area);
-    (rect.height >= 2 && content.width >= 12)
-        .then(|| rect.x + content.width - 3..rect.x + content.width)
+/// Whether a pane rect gets its rounded panel. Below 3×3 there is no room
+/// for a border around any content, so the sliver spends every cell on the
+/// guest screen instead.
+pub(crate) fn panelled(rect: roster_core::Rect) -> bool {
+    rect.width >= 3 && rect.height >= 3
+}
+
+/// The columns of a pane's top border occupied by its `✕` close button, in
+/// pane-local coordinates: a 3-column target around the glyph, one column
+/// in from the panel's corner. `None` when the border is too narrow to
+/// host one.
+pub fn close_button_cols(rect: roster_core::Rect) -> Option<std::ops::Range<u16>> {
+    (panelled(rect) && rect.width >= 14).then(|| rect.x + rect.width - 4..rect.x + rect.width - 1)
 }
 
 /// The status row's right-aligned workspace indicator — `⧉ 2/3`, clickable
 /// to cycle windows. `None` with a single window (nothing to indicate) or
 /// when the status row is too crowded to fit it.
-pub fn status_windows_span(area: Rect, active: usize, count: usize) -> Option<(Rect, String)> {
+pub fn status_windows_span(
+    frame_area: Rect,
+    active: usize,
+    count: usize,
+) -> Option<(Rect, String)> {
+    let area = chrome_area(frame_area);
     if count <= 1 || area.height < STATUS_HEIGHT {
         return None;
     }
@@ -203,7 +239,12 @@ const SOLO_PILL: &str = " solo ";
 /// a single pane — the layouts are identical and the control would be
 /// noise — or when the row is too crowded to keep the pills clear of the
 /// key hints.
-fn status_view_spans(area: Rect, windows: Option<&Rect>, multi_pane: bool) -> Option<(Rect, Rect)> {
+fn status_view_spans(
+    frame_area: Rect,
+    windows: Option<&Rect>,
+    multi_pane: bool,
+) -> Option<(Rect, Rect)> {
+    let area = chrome_area(frame_area);
     if !multi_pane || area.height < STATUS_HEIGHT {
         return None;
     }
@@ -245,26 +286,15 @@ pub fn status_controls(area: Rect, side: SidebarSide, session: &Session) -> Stat
     StatusControls { windows, views }
 }
 
-/// The part of a laid-out pane rect its content actually occupies: the top
-/// row is given to the pane's title bar, and one column to a separator on
-/// the right edge when another pane sits beyond it. Stacked panes need no
-/// horizontal rule — the lower pane's title bar is the divider. `rect` and
-/// `area` share an origin; the inset is size-only.
-pub fn content_rect(rect: roster_core::Rect, area: Rect) -> Rect {
-    let mut width = rect.width;
-    if rect.x + rect.width < area.x + area.width {
-        width = width.saturating_sub(1);
+/// The part of a laid-out pane rect its content actually occupies: the
+/// interior of the pane's rounded panel — one border row and column on
+/// every side, the title riding the top border. Rects too small for a
+/// panel (see [`panelled`]) keep every cell and draw no border.
+pub fn content_rect(rect: roster_core::Rect) -> Rect {
+    if !panelled(rect) {
+        return Rect::new(rect.x, rect.y, rect.width, rect.height);
     }
-    if rect.height < 2 {
-        return Rect::new(rect.x, rect.y, width, rect.height);
-    }
-    Rect::new(rect.x, rect.y + 1, width, rect.height - 1)
-}
-
-/// The pane-local layout area: origin `(0, 0)`, sized to the pane region.
-/// Pane rects from [`Session::layout`] live in this space.
-pub fn local_panes(panes: Rect) -> Rect {
-    Rect::new(0, 0, panes.width, panes.height)
+    Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2)
 }
 
 /// Draw one frame: the active window's panes (each under its title bar),
@@ -273,6 +303,14 @@ pub fn local_panes(panes: Rect) -> Rect {
 /// launcher is open.
 pub fn render(frame: &mut Frame, view: &View) {
     let area = frame.area();
+
+    // The whole frame sits on the base canvas: the inset margin, the gap
+    // between regions, and under every panel. Regions separate by spacing
+    // and surface, not rules. Painted before the welcome branch too, so
+    // the first agent launch doesn't flash the background.
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(style::SURFACE_BASE));
 
     // The bare-start opening screen owns the whole frame: the animated
     // wordmark over the picker, dead-centered — no sidebar, no status.
@@ -290,7 +328,6 @@ pub fn render(frame: &mut Frame, view: &View) {
     }
 
     let panes = panes_area(area, view.side);
-    let local = local_panes(panes);
     let focused = view.session.focused();
 
     // Solo view shows only the focused pane, full size; the grid otherwise.
@@ -299,7 +336,7 @@ pub fn render(frame: &mut Frame, view: &View) {
         _ => view.session.layout(panes.width, panes.height),
     };
     for (id, rect) in rects {
-        let content_local = content_rect(rect, local);
+        let content_local = content_rect(rect);
         let content = Rect::new(
             panes.x + content_local.x,
             panes.y + content_local.y,
@@ -307,24 +344,34 @@ pub fn render(frame: &mut Frame, view: &View) {
             content_local.height,
         );
 
-        // Interior vertical separator to the pane's right.
-        if content_local.width < rect.width {
-            let x = panes.x + rect.x + rect.width - 1;
-            for y in panes.y + rect.y..panes.y + rect.y + rect.height {
-                if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
-                    cell.set_char('│');
-                    cell.set_style(style::muted());
-                }
-            }
-        }
-
-        if rect.height >= 2 {
+        // The pane's rounded panel; focus reads as the accent border, one
+        // vocabulary with the sidebar's inverted card. The title rides the
+        // top border.
+        if panelled(rect) {
+            let border_style = if focused == Some(id) {
+                Style::default().fg(style::ACCENT)
+            } else {
+                style::muted()
+            };
+            let panel = Rect::new(panes.x + rect.x, panes.y + rect.y, rect.width, rect.height);
+            frame.render_widget(
+                Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(border_style),
+                panel,
+            );
+            // The ✕ range comes from the one resolver hit_test targets,
+            // translated to absolute columns, so the drawn glyph can't
+            // drift off its click target.
+            let close =
+                close_button_cols(rect).map(|cols| panes.x + cols.start..panes.x + cols.end);
             draw_title(
                 frame.buffer_mut(),
-                Rect::new(panes.x + rect.x, panes.y + rect.y, content.width, 1),
+                Rect::new(panel.x, panel.y, panel.width, 1),
                 view,
                 id,
                 focused == Some(id),
+                close,
             );
         }
 
@@ -367,7 +414,13 @@ pub fn render(frame: &mut Frame, view: &View) {
                 view.hover == Some(Hit::PaneClose(id)),
             );
             if !drawn {
-                let notice = format!(" exited ({code}) — click ✕ to close ");
+                // Only promise a ✕ where the border actually hosts one —
+                // a sliver pane has no close button to click.
+                let notice = if close_button_cols(rect).is_some() {
+                    format!(" exited ({code}) — click ✕ to close ")
+                } else {
+                    format!(" exited ({code}) ")
+                };
                 let y = content.y + content.height.saturating_sub(1);
                 frame.buffer_mut().set_stringn(
                     content.x,
@@ -389,27 +442,11 @@ pub fn render(frame: &mut Frame, view: &View) {
         }
     }
 
-    // The sidebar, with a full-height rule separating it from the panes.
-    let bar = sidebar_area(area, view.side);
-    // The panel's base canvas under the whole region — the widget fills
-    // only the card area; this covers the rule column and the pinned
-    // button row too. The overlap with the widget's own fill is deliberate
-    // and idempotent: both name SURFACE_BASE, and the widget must stay
-    // self-contained for direct rendering in tests.
-    frame
-        .buffer_mut()
-        .set_style(bar, Style::default().bg(style::SURFACE_BASE));
+    // The sidebar: no rule against the panes — the gap column and the
+    // surface change are the separation. (The frame-wide base fill above
+    // already covers the gap and the pinned button row; the widget fills
+    // its own card area too so it stays self-contained in tests.)
     let bar_inner = sidebar_inner(area, view.side);
-    let rule_x = match view.side {
-        SidebarSide::Left => bar.x + bar.width.saturating_sub(1),
-        SidebarSide::Right => bar.x,
-    };
-    for y in bar.y..bar.y + bar.height {
-        if let Some(cell) = frame.buffer_mut().cell_mut((rule_x, y)) {
-            cell.set_char('│');
-            cell.set_style(style::muted());
-        }
-    }
     let mut cards = bar_inner;
     if let Some(button_y) = sidebar_button_row(area, view.side) {
         // Keep the cards clear of the button and its breathing row.
@@ -479,17 +516,29 @@ fn pane_display_name(view: &View, id: PaneId) -> String {
     name.rsplit('/').next().unwrap_or(&name).to_string()
 }
 
-/// One pane's title bar: an accent marker on the focused pane, a live state
-/// glyph, and the agent or command name. Focus reads as color, not a heavy
-/// inverse bar.
-fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bool) {
-    if span.width == 0 {
+/// One pane's title, riding the panel's top border: a space-padded live
+/// state glyph and the agent or command name breaking the border line —
+/// `╭ ⠋ claude-code ─╮`. Focus reads as the accent border and an accented
+/// name, not a heavy inverse bar. `span` is the panel's full top row;
+/// `close` is the ✕ button's absolute columns from `close_button_cols`,
+/// when the border hosts one — the caller resolves it so the drawn glyph
+/// and the hit target share one source.
+fn draw_title(
+    buf: &mut Buffer,
+    span: Rect,
+    view: &View,
+    id: PaneId,
+    focused: bool,
+    close: Option<std::ops::Range<u16>>,
+) {
+    // Corners, pads, and the glyph need this much before any name fits.
+    if span.width < 7 {
         return;
     }
     let entry = view.entries.iter().find(|e| e.pane == id);
     let (glyph, glyph_style, label) = match entry {
-        // The shared glyph style keeps the title bar in step with the
-        // sidebar card: the same done pane pulses in both places.
+        // The shared glyph style keeps the title in step with the sidebar
+        // card: the same done pane pulses in both places.
         Some(entry) => (
             state_glyph(entry.state, view.tick),
             style::state_glyph_style(entry.state, view.tick),
@@ -507,18 +556,11 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
         }
     };
 
-    if focused {
-        // The same accent bar as the focused sidebar card's edge — one
-        // glyph for one meaning, in both places.
-        buf.set_string(span.x, span.y, "▍", Style::default().fg(style::ACCENT));
-    }
-    buf.set_stringn(
-        span.x + 2,
-        span.y,
-        glyph,
-        usize::from(span.width.saturating_sub(2)),
-        glyph_style,
-    );
+    // ` ⠋ name ` punched into the border line, pads included, so the text
+    // never touches the box-drawing chars.
+    buf.set_string(span.x + 1, span.y, " ", style::muted());
+    buf.set_string(span.x + 2, span.y, glyph, glyph_style);
+    buf.set_string(span.x + 3, span.y, " ", style::muted());
     let text = if view.exited.contains_key(&id) {
         format!("{label} · exited")
     } else {
@@ -531,22 +573,25 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
     } else {
         style::muted()
     };
-    // Leave room for the ✕ close button at the right edge when it fits.
-    let close = span.width >= 12;
-    let text_width = if close {
-        span.width.saturating_sub(8)
-    } else {
-        span.width.saturating_sub(5)
+    // The name stops one pad short of the ✕ target (or of the corner when
+    // there is none).
+    let text_end = match &close {
+        Some(cols) => cols.start.saturating_sub(span.x),
+        None => span.width - 2,
     };
-    buf.set_stringn(
-        span.x + 4,
-        span.y,
-        text,
-        usize::from(text_width),
-        text_style,
-    );
-    if close {
-        // The ✕ lights up red under the pointer.
+    let budget = usize::from(text_end.saturating_sub(4));
+    if budget > 0 {
+        // set_stringn reports where the paint actually ended — cells, not
+        // chars — so the border-repair pad can't land inside a
+        // double-width glyph.
+        let (end_x, _) = buf.set_stringn(span.x + 4, span.y, text, budget, text_style);
+        if end_x < span.x + span.width - 1 {
+            buf.set_string(end_x, span.y, " ", style::muted());
+        }
+    }
+    if let Some(cols) = close {
+        // ` ✕ ` filling the resolver's 3-column target; it lights up red
+        // under the pointer.
         let style = if view.hover == Some(Hit::PaneClose(id)) {
             Style::default()
                 .fg(style::danger())
@@ -554,29 +599,33 @@ fn draw_title(buf: &mut Buffer, span: Rect, view: &View, id: PaneId, focused: bo
         } else {
             style::muted()
         };
-        buf.set_string(span.x + span.width - 2, span.y, "✕", style);
+        buf.set_string(cols.start, span.y, " ", style::muted());
+        buf.set_string(cols.start + 1, span.y, "✕", style);
+        buf.set_string(cols.start + 2, span.y, " ", style::muted());
     }
 }
 
 fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
-    if area.height < STATUS_HEIGHT {
+    let inner = chrome_area(area);
+    if inner.height < STATUS_HEIGHT {
         return;
     }
-    let y = area.y + area.height - STATUS_HEIGHT;
-    let mut x = area.x;
+    let y = inner.y + inner.height - STATUS_HEIGHT;
+    let mut x = inner.x;
     if let Some(badge) = view.mode_badge {
         let text = format!(" {badge} ");
         buf.set_stringn(
             x,
             y,
             &text,
-            usize::from(area.width),
+            usize::from(inner.width),
             Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
         );
         x += text.chars().count() as u16 + 1;
     }
     // The workspace indicator claims the right edge, the layout-switcher
-    // pills sit left of it; the hint text yields to both.
+    // pills sit left of it; the hint text yields to both. `area` is the
+    // raw frame — status_controls applies the chrome inset itself.
     let StatusControls {
         windows: span,
         views,
@@ -585,7 +634,14 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
         .as_ref()
         .map(|(grid, _)| grid.x)
         .or_else(|| span.as_ref().map(|(rect, _)| rect.x))
-        .unwrap_or(area.x + area.width);
+        .unwrap_or(inner.x + inner.width);
+    // The hint bar centers in the footer — a padded bar, not text jammed
+    // into a corner. Centering never costs content: the bar shifts left
+    // as far as the badge to clear the right controls before it accepts
+    // truncation.
+    let width = hotkeys_width(view.status);
+    let centered = inner.x + inner.width.saturating_sub(width) / 2;
+    let x = centered.min(right_edge.saturating_sub(width)).max(x);
     if x < right_edge {
         draw_hotkeys(buf, x, y, right_edge - x, view.status);
     }
@@ -619,11 +675,18 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
     }
 }
 
+/// The separator drawn between hint segments — wide gaps so the centered
+/// footer reads as spaced controls, not a sentence, sized so the longest
+/// mode palette (PREFIX) still fits a 120-column terminal. `hotkeys_width`
+/// derives the centering math from this constant, so the two can't drift.
+const HINT_GAP: &str = "  ·  ";
+
 /// Draw a status hint as a hotkey bar: within each ` · `-separated segment,
 /// a `key: label` pair renders the key accented and the label muted, so the
 /// keys read at a glance; a segment without the colon is plain muted text.
 /// This is how every mode's hint string gets its keys highlighted without
-/// the modes agreeing on anything beyond the `key: label` grammar.
+/// the modes agreeing on anything beyond the `key: label` grammar. Segments
+/// are set off by the wide [`HINT_GAP`].
 fn draw_hotkeys(buf: &mut Buffer, x: u16, y: u16, budget: u16, status: &str) {
     let mut remaining = usize::from(budget);
     let mut x = x;
@@ -641,7 +704,7 @@ fn draw_hotkeys(buf: &mut Buffer, x: u16, y: u16, budget: u16, status: &str) {
         .add_modifier(Modifier::BOLD);
     for (i, segment) in status.split(" · ").enumerate() {
         if i > 0 {
-            put(&mut x, " · ", style::muted());
+            put(&mut x, HINT_GAP, style::muted());
         }
         match segment.split_once(": ") {
             Some((key, label)) => {
@@ -652,6 +715,23 @@ fn draw_hotkeys(buf: &mut Buffer, x: u16, y: u16, budget: u16, status: &str) {
             None => put(&mut x, segment, style::muted()),
         }
     }
+}
+
+/// The exact cells [`draw_hotkeys`] paints for `status`, for centering:
+/// segment widths, the wide gaps between them, and the one-cell saving of
+/// each `key: label` colon rendering as a space.
+fn hotkeys_width(status: &str) -> u16 {
+    let mut width = 0usize;
+    for (i, segment) in status.split(" · ").enumerate() {
+        if i > 0 {
+            width += HINT_GAP.chars().count();
+        }
+        width += segment.chars().count();
+        if segment.split_once(": ").is_some() {
+            width -= 1;
+        }
+    }
+    width.min(usize::from(u16::MAX)) as u16
 }
 
 #[cfg(test)]
@@ -673,9 +753,9 @@ mod tests {
             .collect::<String>()
             .trim_end()
             .to_string();
-        // The colon in `key: label` renders as a space — keys read like the
-        // chips on a hotkey bar, not like prose.
-        assert_eq!(row, "plain prose · ctrl-b keys · then c new agent");
+        // The colon in `key: label` renders as a space, and segments sit a
+        // wide gap apart — spaced controls, not a sentence.
+        assert_eq!(row, "plain prose  ·  ctrl-b keys  ·  then c new agent");
 
         let accent = Style::default()
             .fg(style::ACCENT)
@@ -683,13 +763,13 @@ mod tests {
         let style_at = |x: u16| buf.cell((x, 0)).unwrap().style();
         // Prose segment: muted, never accented.
         assert_eq!(style_at(0).fg, style::muted().fg);
-        // "ctrl-b" (cols 14..20) is the key — accent + bold.
-        assert_eq!(style_at(14).fg, accent.fg);
-        assert!(style_at(14).add_modifier.contains(Modifier::BOLD));
-        // Its label "keys" (from col 21) is muted.
-        assert_eq!(style_at(21).fg, style::muted().fg);
+        // "ctrl-b" (cols 16..22) is the key — accent + bold.
+        assert_eq!(style_at(16).fg, accent.fg);
+        assert!(style_at(16).add_modifier.contains(Modifier::BOLD));
+        // Its label "keys" (from col 23) is muted.
+        assert_eq!(style_at(23).fg, style::muted().fg);
         // "then c" is a compound key — accented too.
-        assert_eq!(style_at(28).fg, accent.fg);
+        assert_eq!(style_at(32).fg, accent.fg);
     }
 
     #[test]
@@ -706,52 +786,93 @@ mod tests {
     }
 
     #[test]
-    fn content_rect_reserves_title_row_and_interior_separator() {
-        let area = Rect::new(0, 0, 48, 24);
-        // Left pane: another pane to its right → separator column; title row
-        // always comes off the top.
+    fn content_rect_is_the_panel_interior_and_slivers_keep_every_cell() {
+        // A panelled pane loses one border row/column on every side.
         assert_eq!(
-            content_rect(roster_core::Rect::new(0, 0, 24, 24), area),
-            Rect::new(0, 1, 23, 23)
+            content_rect(roster_core::Rect::new(0, 0, 24, 24)),
+            Rect::new(1, 1, 22, 22)
         );
-        // Right pane touches the area's right edge: full width, title row.
         assert_eq!(
-            content_rect(roster_core::Rect::new(24, 0, 24, 12), area),
-            Rect::new(24, 1, 24, 11)
+            content_rect(roster_core::Rect::new(24, 0, 24, 12)),
+            Rect::new(25, 1, 22, 10)
         );
-        // A one-row sliver has no room for a title.
+        // Slivers under 3×3 draw no panel and keep every cell.
         assert_eq!(
-            content_rect(roster_core::Rect::new(0, 0, 48, 1), area),
-            Rect::new(0, 0, 48, 1)
+            content_rect(roster_core::Rect::new(0, 0, 48, 2)),
+            Rect::new(0, 0, 48, 2)
+        );
+        assert_eq!(
+            content_rect(roster_core::Rect::new(0, 0, 2, 24)),
+            Rect::new(0, 0, 2, 24)
         );
     }
 
     #[test]
-    fn panes_area_reserves_sidebar_and_status() {
+    fn chrome_stands_back_from_the_edge_when_there_is_room() {
+        // A roomy frame is inset by 2 columns and 1 row on every side.
+        assert_eq!(
+            chrome_area(Rect::new(0, 0, 120, 30)),
+            Rect::new(2, 1, 116, 28)
+        );
+        // Small terminals spend every cell on content.
+        assert_eq!(
+            chrome_area(Rect::new(0, 0, 23, 30)),
+            Rect::new(0, 0, 23, 30)
+        );
+        assert_eq!(
+            chrome_area(Rect::new(0, 0, 120, 7)),
+            Rect::new(0, 0, 120, 7)
+        );
+        assert_eq!(chrome_area(Rect::new(0, 0, 0, 0)), Rect::new(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn panes_area_reserves_sidebar_and_status_inside_the_inset() {
         let area = Rect::new(0, 0, 120, 30);
-        // Left sidebar: panes are offset to its right.
+        // Chrome inset (2,1); left sidebar: panes offset to its right.
         assert_eq!(
             panes_area(area, SidebarSide::Left),
-            Rect::new(32, 0, 88, 29)
+            Rect::new(34, 1, 84, 27)
         );
         assert_eq!(
             sidebar_area(area, SidebarSide::Left),
-            Rect::new(0, 0, 32, 29)
+            Rect::new(2, 1, 32, 27)
         );
-        // Right sidebar: panes start at the left edge.
+        // Right sidebar: panes start at the chrome's left edge.
         assert_eq!(
             panes_area(area, SidebarSide::Right),
-            Rect::new(0, 0, 88, 29)
+            Rect::new(2, 1, 84, 27)
         );
         assert_eq!(
             sidebar_area(area, SidebarSide::Right),
-            Rect::new(88, 0, 32, 29)
+            Rect::new(86, 1, 32, 27)
         );
         // Narrow terminals split the width instead of going negative.
         let narrow = Rect::new(0, 0, 40, 10);
         assert_eq!(
             panes_area(narrow, SidebarSide::Left),
-            Rect::new(20, 0, 20, 9)
+            Rect::new(20, 1, 18, 7)
         );
+    }
+
+    #[test]
+    fn hint_bar_width_matches_what_draw_hotkeys_paints() {
+        for status in [
+            "plain prose",
+            "c: new agent",
+            "c: new agent · q: quit",
+            "plain · ctrl-b: keys · x: close",
+            "",
+        ] {
+            let width = hotkeys_width(status);
+            let mut buf = Buffer::empty(Rect::new(0, 0, 120, 1));
+            draw_hotkeys(&mut buf, 0, 0, 120, status);
+            let drawn = (0..120)
+                .rev()
+                .find(|x| buf.cell((*x, 0)).unwrap().symbol() != " ")
+                .map(|x| x + 1)
+                .unwrap_or(0);
+            assert_eq!(width, drawn, "status {status:?}");
+        }
     }
 }

@@ -28,9 +28,9 @@ use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
     confirm_button_at, confirm_contains, content_rect, exited_buttons, hit_test, launch_items,
-    local_panes, panes_area, pointer_for, render, sidebar_entries, toast_rects, ConfirmButton, Hit,
-    LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry, SidebarSide, SidebarState,
-    ToastLevel, View,
+    panes_area, pointer_for, render, sidebar_entries, toast_rects, ConfirmButton, Hit, LaunchItem,
+    Launcher, LauncherState, Message, Pointer, SidebarEntry, SidebarSide, SidebarState, ToastLevel,
+    View,
 };
 
 use crate::keys::encode_key;
@@ -1193,13 +1193,12 @@ impl App {
     /// size until they are shown again.
     fn sync_layout(&mut self, area: Rect) {
         let panes = panes_area(area, self.side);
-        let local = local_panes(panes);
         let layout = match self.zoomed_pane() {
             Some(id) => vec![(id, roster_core::Rect::new(0, 0, panes.width, panes.height))],
             None => self.session.layout(panes.width, panes.height),
         };
         for (id, rect) in layout {
-            let content = content_rect(rect, local);
+            let content = content_rect(rect);
             if content.width == 0 || content.height == 0 {
                 continue;
             }
@@ -1304,7 +1303,6 @@ impl App {
     /// isn't visible in the active window.
     fn pane_content_rect(&self, id: PaneId) -> Option<Rect> {
         let panes = panes_area(self.last_area, self.side);
-        let local = local_panes(panes);
         let rect = if let Some(zoomed) = self.zoomed_pane() {
             if zoomed != id {
                 return None;
@@ -1317,7 +1315,7 @@ impl App {
                 .find(|(pane, _)| *pane == id)?
                 .1
         };
-        let content_local = content_rect(rect, local);
+        let content_local = content_rect(rect);
         Some(Rect::new(
             panes.x + content_local.x,
             panes.y + content_local.y,
@@ -1650,19 +1648,17 @@ impl App {
                         if double && matches!(hit, Hit::PaneTitle(_)) {
                             self.zoomed = !self.zoomed;
                         }
-                        // Title rows and separator columns double as split
-                        // dividers; grab one if it's there. Solo view has
+                        // The seam between panels doubles as the split
+                        // divider; grab it if it's there. Solo view has
                         // no dividers.
                         let panes = panes_area(self.last_area, self.side);
                         let mut grabbed = false;
                         if !self.zoomed && x >= panes.x && y >= panes.y {
                             let local = (x - panes.x, y - panes.y);
-                            if self
-                                .session
-                                .divider_at(panes.width, panes.height, local.0, local.1)
-                                .is_some()
+                            if let Some((_, at)) =
+                                self.divider_under(panes.width, panes.height, local.0, local.1)
                             {
-                                self.dragging = Some(local);
+                                self.dragging = Some(at);
                                 grabbed = true;
                             }
                         }
@@ -1811,9 +1807,8 @@ impl App {
             && x < panes.x + panes.width
             && y < panes.y + panes.height
         {
-            if let Some(direction) =
-                self.session
-                    .divider_at(panes.width, panes.height, x - panes.x, y - panes.y)
+            if let Some((direction, _)) =
+                self.divider_under(panes.width, panes.height, x - panes.x, y - panes.y)
             {
                 return match direction {
                     SplitDirection::Horizontal => Pointer::ResizeEw,
@@ -1822,6 +1817,39 @@ impl App {
             }
         }
         pointer_for(hit)
+    }
+
+    /// The divider under a pane-local position, with the cell the layout
+    /// model knows it by. Under the panel chrome a split's seam is two
+    /// border cells wide — the left/upper panel's border is the column the
+    /// layout models as the divider, the right/lower panel's border is its
+    /// twin one cell over — and both halves must grab and show the resize
+    /// pointer.
+    fn divider_under(
+        &self,
+        cols: u16,
+        rows: u16,
+        x: u16,
+        y: u16,
+    ) -> Option<(SplitDirection, (u16, u16))> {
+        if let Some(direction) = self.session.divider_at(cols, rows, x, y) {
+            return Some((direction, (x, y)));
+        }
+        if x > 0 {
+            if let Some(direction @ SplitDirection::Horizontal) =
+                self.session.divider_at(cols, rows, x - 1, y)
+            {
+                return Some((direction, (x - 1, y)));
+            }
+        }
+        if y > 0 {
+            if let Some(direction @ SplitDirection::Vertical) =
+                self.session.divider_at(cols, rows, x, y - 1)
+            {
+                return Some((direction, (x, y - 1)));
+            }
+        }
+        None
     }
 
     /// Start `command` in its own fresh window. The bare-start backdrop
