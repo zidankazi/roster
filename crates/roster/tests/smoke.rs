@@ -670,6 +670,25 @@ fn closing_a_live_agent_asks_first() {
         "no close confirmation:\n{}",
         screen.grid().lines().join("\n")
     );
+    // The confirm modal is the mode indicator; no CLOSE? badge doubles it
+    // in the corner. Sync on the confirm-mode footer hint — it shares the
+    // badge's row and paints after it, so once it shows, a reintroduced
+    // badge would be visible too. (draw_hotkeys renders "y/enter: close"
+    // with the colon dropped.)
+    assert!(
+        drain_while(&mut screen, "y/enter close", true, &rx),
+        "confirm-mode footer hint never rendered:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    let lines = screen.grid().lines();
+    let status_row = lines
+        .iter()
+        .find(|l| l.contains("y/enter close"))
+        .expect("hint row just drained into view");
+    assert!(
+        !status_row.contains("CLOSE?"),
+        "CLOSE? badge rendered with the confirm modal open:\n{status_row}"
+    );
 
     // Esc cancels: the prompt clears and the agent pane survives.
     pty.write(b"\x1b").expect("cancel");
