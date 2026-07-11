@@ -10,6 +10,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Widget;
 
 use crate::launcher::{fill, frame};
+use crate::style::{bright, SURFACE_RAISED};
 
 /// The dialog's two click targets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +100,7 @@ impl Widget for Confirm {
         if modal.width < 20 || modal.height < 5 {
             return;
         }
-        fill(buf, modal);
+        fill(buf, modal, SURFACE_RAISED);
         frame(buf, modal, " close agent? ");
 
         let message = "This ends the session. There's no undo.";
@@ -109,11 +110,13 @@ impl Widget for Confirm {
             modal.y + 2,
             message,
             usize::from(modal.width.saturating_sub(4)),
-            Style::default().add_modifier(Modifier::BOLD),
+            bright().add_modifier(Modifier::BOLD),
         );
 
         let (cancel, close) = button_spans(area);
-        let mut cancel_style = Style::default().add_modifier(Modifier::REVERSED);
+        // The quiet button pins its foreground so the reversal has a
+        // defined light side on the raised surface.
+        let mut cancel_style = bright().add_modifier(Modifier::REVERSED);
         if self.hover == Some(ConfirmButton::Cancel) {
             cancel_style = cancel_style.add_modifier(Modifier::BOLD);
         }
@@ -152,6 +155,24 @@ mod tests {
         );
         assert!(all.contains("cancel"), "missing cancel button:\n{all}");
         assert!(all.contains("close"), "missing close button:\n{all}");
+
+        // The dialog is a raised surface, its message on the bright tier —
+        // the same system as every other piece of chrome.
+        let modal = confirm_rect(area);
+        for (x, y) in [(modal.x, modal.y), (modal.x + 3, modal.y + 2)] {
+            assert_eq!(
+                buf.cell((x, y)).unwrap().style().bg,
+                Some(SURFACE_RAISED),
+                "cell ({x},{y})"
+            );
+        }
+        let msg_col = (0..80u16)
+            .find(|x| buf.cell((*x, modal.y + 2)).unwrap().symbol() == "T")
+            .expect("message row");
+        assert_eq!(
+            buf.cell((msg_col, modal.y + 2)).unwrap().style().fg,
+            bright().fg
+        );
     }
 
     #[test]

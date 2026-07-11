@@ -422,12 +422,15 @@ pub fn render(frame: &mut Frame, view: &View) {
                     format!(" exited ({code}) ")
                 };
                 let y = content.y + content.height.saturating_sub(1);
+                // The selected surface, not a bare reversal: over frozen
+                // guest cells a REVERSED strip would swap against whatever
+                // each cell held — this pins one legible fill.
                 frame.buffer_mut().set_stringn(
                     content.x,
                     y,
                     &notice,
                     usize::from(content.width),
-                    Style::default().add_modifier(Modifier::REVERSED),
+                    style::selected(),
                 );
             }
         } else if view.launcher.is_none()
@@ -614,12 +617,14 @@ fn draw_status(buf: &mut Buffer, area: Rect, view: &View) {
     let mut x = inner.x;
     if let Some(badge) = view.mode_badge {
         let text = format!(" {badge} ");
+        // A pinned bright pill: reversing an unset foreground would fill
+        // the badge with the terminal's themed default instead.
         buf.set_stringn(
             x,
             y,
             &text,
             usize::from(inner.width),
-            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+            style::bright().add_modifier(Modifier::REVERSED | Modifier::BOLD),
         );
         x += text.chars().count() as u16 + 1;
     }

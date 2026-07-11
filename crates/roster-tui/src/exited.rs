@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 use crate::launcher::{fill, frame};
+use crate::style::{bright, SURFACE_RAISED};
 
 const CARD_WIDTH: u16 = 30;
 const CARD_HEIGHT: u16 = 5;
@@ -58,7 +59,7 @@ pub fn draw_exited(
     let Some(card) = exited_card_rect(content) else {
         return false;
     };
-    fill(buf, card);
+    fill(buf, card, SURFACE_RAISED);
     frame(buf, card, " exited ");
 
     // The exit code is the payload — truncate the name, never the code.
@@ -78,7 +79,7 @@ pub fn draw_exited(
         card.y + 1,
         &message,
         usize::from(card.width.saturating_sub(4)),
-        Style::default().add_modifier(Modifier::BOLD),
+        bright().add_modifier(Modifier::BOLD),
     );
 
     let Some((restart, close)) = exited_buttons(content) else {
@@ -90,7 +91,9 @@ pub fn draw_exited(
     if hover_restart {
         restart_style = restart_style.remove_modifier(Modifier::REVERSED);
     }
-    let mut close_style = Style::default().add_modifier(Modifier::REVERSED);
+    // The quiet button pins its foreground so the reversal has a defined
+    // light side on the raised surface.
+    let mut close_style = bright().add_modifier(Modifier::REVERSED);
     if hover_close {
         close_style = close_style
             .add_modifier(Modifier::BOLD)
@@ -183,5 +186,28 @@ mod tests {
         );
         assert!(all.contains("restart"), "missing restart:\n{all}");
         assert!(all.contains("close"), "missing close:\n{all}");
+
+        // The card is a raised surface with a bright message and a pinned
+        // quiet close button — the same system as every other dialog.
+        let card = exited_card_rect(area).unwrap();
+        assert_eq!(
+            buf.cell((card.x + 2, card.y + 1)).unwrap().style().bg,
+            Some(SURFACE_RAISED)
+        );
+        let msg_col = (0..80u16)
+            .find(|x| buf.cell((*x, card.y + 1)).unwrap().symbol() == "c")
+            .expect("message row");
+        assert_eq!(
+            buf.cell((msg_col, card.y + 1)).unwrap().style().fg,
+            bright().fg
+        );
+        let (restart, close) = exited_buttons(area).unwrap();
+        let restart_style = buf.cell((restart.x, restart.y)).unwrap().style();
+        assert_eq!(restart_style.fg, Some(crate::style::ACCENT));
+        assert!(restart_style.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(
+            buf.cell((close.x, close.y)).unwrap().style().fg,
+            bright().fg
+        );
     }
 }

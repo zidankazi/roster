@@ -11,8 +11,8 @@ use ratatui::Terminal;
 use roster_core::{AgentState, Grid, Session, SplitDirection};
 use roster_detect::Detector;
 use roster_tui::{
-    launch_items, muted, render, selected, selected_muted, sidebar_entries, Hit, LauncherState,
-    SidebarSide, View, ACCENT,
+    launch_items, muted, render, selected, selected_muted, sidebar_entries, state_color, Hit,
+    LauncherState, SidebarSide, View, ACCENT,
 };
 
 fn region_text(buf: &Buffer, x0: u16, x1: u16, y: u16) -> String {
@@ -292,12 +292,13 @@ fn hover_lights_up_interactive_chrome() {
         terminal.backend().buffer().clone()
     };
 
-    // Hovering a ✕ turns it red and bold; unhovered it stays muted. The
-    // buttons ride the title borders (row 1) at 53 and 75.
+    // Hovering a ✕ turns it the danger red (the blocked state's fixed
+    // hue) and bold; unhovered it stays muted. The buttons ride the title
+    // borders (row 1) at 53 and 75.
     let buf = draw(Some(Hit::PaneClose(left)));
     let close = buf.cell((53, 1)).unwrap();
     assert_eq!(close.symbol(), "✕");
-    assert_eq!(close.style().fg, Some(ratatui::style::Color::Red));
+    assert_eq!(close.style().fg, Some(state_color(AgentState::Blocked)));
     assert!(close.style().add_modifier.contains(Modifier::BOLD));
     let other = buf.cell((75, 1)).unwrap();
     assert_eq!(other.style().fg, muted().fg);
@@ -331,7 +332,7 @@ fn hover_lights_up_interactive_chrome() {
     let buf = draw(None);
     let close = buf.cell((53, 1)).unwrap().style();
     assert_eq!(close.fg, muted().fg);
-    assert_ne!(close.fg, Some(ratatui::style::Color::Red));
+    assert_ne!(close.fg, Some(state_color(AgentState::Blocked)));
     assert_ne!(buf.cell((2, 3)).unwrap().symbol(), "❯");
 }
 

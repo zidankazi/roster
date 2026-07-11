@@ -7,8 +7,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
+use crate::chrome_area;
 use crate::launcher::{fill, frame};
-use crate::style::{danger, ACCENT};
+use crate::style::{danger, normal, ACCENT, SURFACE_RAISED};
 
 /// How loud a toast is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,10 +23,12 @@ pub enum ToastLevel {
 const TOAST_HEIGHT: u16 = 3;
 const MAX_WIDTH: u16 = 44;
 
-/// The rects the current toasts occupy, top-right of `area`, newest first,
-/// stacked downward. Toasts that would not fit vertically get a zero-height
-/// rect (skipped by render, dead to clicks).
+/// The rects the current toasts occupy, top-right of the chrome (`area` is
+/// the raw frame; the inset applies here like everywhere else), newest
+/// first, stacked downward. Toasts that would not fit vertically get a
+/// zero-height rect (skipped by render, dead to clicks).
 pub fn toast_rects(area: Rect, toasts: &[(&str, ToastLevel)]) -> Vec<Rect> {
+    let area = chrome_area(area);
     let mut y = area.y + 1;
     toasts
         .iter()
@@ -51,7 +54,7 @@ pub fn draw_toasts(buf: &mut Buffer, area: Rect, toasts: &[(&str, ToastLevel)]) 
         if rect.height == 0 || rect.width < 8 {
             continue;
         }
-        fill(buf, *rect);
+        fill(buf, *rect, SURFACE_RAISED);
         frame(buf, *rect, "");
         // Re-tint the border by level: errors read as red.
         let border = match level {
@@ -84,19 +87,17 @@ pub fn draw_toasts(buf: &mut Buffer, area: Rect, toasts: &[(&str, ToastLevel)]) 
             rect.y + 1,
             *text,
             usize::from(rect.width.saturating_sub(6)),
-            Style::default(),
+            normal(),
         );
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use ratatui::style::Color;
-
     use super::*;
 
     #[test]
-    fn toasts_stack_from_the_top_right() {
+    fn toasts_stack_from_the_top_right_of_the_chrome() {
         let area = Rect::new(0, 0, 120, 30);
         let toasts = vec![
             ("launch failed: no such command", ToastLevel::Error),
@@ -104,9 +105,11 @@ mod tests {
         ];
         let rects = toast_rects(area, &toasts);
         assert_eq!(rects.len(), 2);
-        // Right-aligned with a one-column inset.
-        assert_eq!(rects[0].x + rects[0].width, 119);
-        assert_eq!(rects[1].x + rects[1].width, 119);
+        // Right-aligned one column in from the chrome's right edge (118),
+        // never jutting into the inset margin.
+        assert_eq!(rects[0].x + rects[0].width, 117);
+        assert_eq!(rects[1].x + rects[1].width, 117);
+        assert!(rects[0].y > 0, "toasts start inside the inset");
         // Stacked downward with a gap.
         assert!(rects[1].y > rects[0].y + rects[0].height);
         // Width scales with the text but stays clamped.
@@ -141,7 +144,16 @@ mod tests {
         assert!(row.contains("✗ launch failed: nope"), "row: {row}");
         assert_eq!(
             buf.cell((rect.x, rect.y)).unwrap().style().fg,
-            Some(Color::Red)
+            Some(danger())
+        );
+        // The toast is a raised surface with its text on the normal tier.
+        assert_eq!(
+            buf.cell((rect.x + 1, rect.y + 1)).unwrap().style().bg,
+            Some(SURFACE_RAISED)
+        );
+        assert_eq!(
+            buf.cell((rect.x + 4, rect.y + 1)).unwrap().style().fg,
+            normal().fg
         );
     }
 }

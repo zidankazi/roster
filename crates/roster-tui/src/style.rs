@@ -3,19 +3,22 @@
 use ratatui::style::{Color, Modifier, Style};
 use roster_core::{AgentState, CellStyle};
 
-/// The ratatui color for an agent state's dot and label.
+/// The ratatui color for an agent state's dot and label. All four are
+/// fixed 256-color-cube hues, never the themeable ANSI names: the state
+/// dots sit on roster's fixed dark surfaces ([`SURFACE_BASE`] /
+/// [`SURFACE_RAISED`]), and a theme's re-tuned red or yellow has no reason
+/// to clear a background it never sees. Blocked's red (196, `#ff0000`,
+/// ~3.8:1 on the raised card and legible-bold on the light selected fill)
+/// doubles as [`danger`]; working's gold (220, `#ffd700`) and idle's calm
+/// green (71, `#5faf5f`) are dark-surface hues — the selected surface
+/// swaps them out (see [`state_glyph_style_selected`]); done's azure (33,
+/// `#0087ff`) clears both dark and light.
 pub fn state_color(state: AgentState) -> Color {
     match state {
-        AgentState::Blocked => Color::Red,
-        AgentState::Working => Color::Yellow,
-        // Blue is intrinsically low-luminance, so the themeable ANSI blue
-        // (index 4) renders as a near-invisible dark navy on a default-palette
-        // dark terminal. Pin done to a fixed azure from the 256-color cube
-        // (index 33, #0087ff) instead — legible on both dark (~5.9:1) and
-        // light (~3.6:1). Red/yellow/green carry enough luminance to stay
-        // readable as the adaptive named colors.
+        AgentState::Blocked => Color::Indexed(196),
+        AgentState::Working => Color::Indexed(220),
         AgentState::Done => Color::Indexed(33),
-        AgentState::Idle => Color::Green,
+        AgentState::Idle => Color::Indexed(71),
     }
 }
 
@@ -88,6 +91,16 @@ pub fn selected_muted() -> Style {
 /// (index 94 ≈ `#875f00`, ~4.5:1 on [`SELECTED_BG`]) — still warm, still
 /// not the critical red.
 pub(crate) const WARN_ON_SELECTED: Color = Color::Indexed(94);
+
+/// A pale tint of the accent (cube 189 ≈ `#d7d7ff`) for the wordmark's
+/// shine sweep — light glancing off the mark, not a hard white flash.
+/// Fixed-cube for the same reason as [`ACCENT`].
+pub(crate) const ACCENT_SHINE: Color = Color::Indexed(189);
+
+/// A deep tint of the accent (cube 97 ≈ `#875faf`) for the wordmark's
+/// flicker stand-ins — an explicit faint, because `DIM` is reserved for
+/// guest cells and renders near-invisible on many default palettes.
+pub(crate) const ACCENT_FAINT: Color = Color::Indexed(97);
 
 /// The bright foreground tier — primary text: card names, dialog titles.
 /// Index 255 ≈ `#eeeeee`, ~13:1 on [`SURFACE_RAISED`]. Fixed-ramp for the

@@ -7,11 +7,14 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Widget;
 use roster_detect::Detector;
 
-use crate::style::{muted, ACCENT};
+use crate::style::{
+    bright, muted, normal, selected as selected_surface, selected_muted, ACCENT, ACCENT_FAINT,
+    ACCENT_SHINE, SURFACE_BASE, SURFACE_RAISED,
+};
 
 /// One launchable item: a display name and the command it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -270,7 +273,14 @@ impl Widget for Launcher<'_> {
         if modal.width < 8 || modal.height < 5 {
             return;
         }
-        fill(buf, modal);
+        // The modal is a dialog on the raised surface; the welcome block
+        // sits directly on the app canvas.
+        let bg = if self.welcome {
+            SURFACE_BASE
+        } else {
+            SURFACE_RAISED
+        };
+        fill(buf, modal, bg);
         let mut y = modal.y;
         if self.welcome {
             // The opening screen: the wordmark sweeps in left to right,
@@ -292,16 +302,19 @@ impl Widget for Launcher<'_> {
                     let mut glyph = ch;
                     let mut style = Style::default().fg(ACCENT);
                     if revealed >= mark_width && (0..6).contains(&(col as i32 - shine)) {
-                        // A soft rose — a lighter tint of the brand red — so the
-                        // sweep reads as light glancing off the wordmark rather
-                        // than a hard cold-white flash.
+                        // A pale tint of the accent, so the sweep reads as
+                        // light glancing off the wordmark rather than a
+                        // hard cold-white flash.
                         style = Style::default()
-                            .fg(ratatui::style::Color::Rgb(255, 150, 150))
+                            .fg(ACCENT_SHINE)
                             .add_modifier(Modifier::BOLD);
                     }
                     if let Some(stand_in) = flicker(col, row, self.tick) {
                         glyph = stand_in;
-                        style = Style::default().fg(ACCENT).add_modifier(Modifier::DIM);
+                        // An explicit deep tint, never DIM — the faint
+                        // attribute is reserved for guest cells and
+                        // vanishes on many default palettes.
+                        style = Style::default().fg(ACCENT_FAINT);
                     }
                     let (x, y) = (mark_x + col as u16, modal.y + row as u16);
                     if let Some(cell) = buf.cell_mut((x, y)) {
@@ -323,14 +336,21 @@ impl Widget for Launcher<'_> {
         let inner_x = modal.x + 2;
         let inner_w = usize::from(modal.width.saturating_sub(4));
 
-        // Input line, prompt-style.
-        let input = format!("❯ {}", self.state.input());
+        // Input line, prompt-style: the accent prompt marks where typing
+        // lands, the typed text takes the bright tier.
         buf.set_stringn(
             inner_x,
             y,
-            &input,
+            "❯",
             inner_w,
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        );
+        buf.set_stringn(
+            inner_x + 2,
+            y,
+            self.state.input(),
+            inner_w.saturating_sub(2),
+            bright().add_modifier(Modifier::BOLD),
         );
         y += 1;
 
@@ -357,36 +377,46 @@ impl Widget for Launcher<'_> {
             if y >= rows_bottom {
                 break;
             }
-            let marker = if selected == Some(index) { "❯" } else { " " };
+            // The selected row is the selected surface — the same light
+            // fill that marks the focused sidebar card. Painting fg AND bg
+            // (never a REVERSED overlay) keeps the bar one continuous
+            // color regardless of what each cell's foreground was.
+            let is_selected = selected == Some(index);
+            if is_selected {
+                buf.set_style(
+                    Rect::new(modal.x + 1, y, modal.width - 2, 1),
+                    selected_surface(),
+                );
+            }
+            let marker = if is_selected { "❯" } else { " " };
             buf.set_stringn(
                 inner_x,
                 y,
                 format!("{marker} {}", item.name),
                 inner_w,
-                if selected == Some(index) {
-                    Style::default().add_modifier(Modifier::BOLD)
+                if is_selected {
+                    selected_surface().add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default()
+                    normal()
                 },
             );
-            // The command sits right-aligned and dim — truncated with an
+            // The command sits right-aligned and quiet — truncated with an
             // ellipsis when it would otherwise run into the item's name.
+            let cmd_style = if is_selected {
+                selected_muted()
+            } else {
+                muted()
+            };
             let name_end = inner_x + 2 + item.name.chars().count() as u16;
             let right_edge = modal.x + modal.width - 2;
             let avail = right_edge.saturating_sub(name_end + 2);
             let cmd_len = item.command.chars().count() as u16;
             if cmd_len <= avail {
-                buf.set_string(right_edge - cmd_len, y, &item.command, muted());
+                buf.set_string(right_edge - cmd_len, y, &item.command, cmd_style);
             } else if avail >= 8 {
                 let mut cut: String = item.command.chars().take(usize::from(avail) - 1).collect();
                 cut.push('…');
-                buf.set_string(right_edge - avail, y, &cut, muted());
-            }
-            if selected == Some(index) {
-                buf.set_style(
-                    Rect::new(modal.x + 1, y, modal.width - 2, 1),
-                    Style::default().add_modifier(Modifier::REVERSED),
-                );
+                buf.set_string(right_edge - avail, y, &cut, cmd_style);
             }
             y += 1;
         }
@@ -411,12 +441,15 @@ impl Widget for Launcher<'_> {
     }
 }
 
-/// Blank the modal's cells so panes underneath don't bleed through.
-pub(crate) fn fill(buf: &mut Buffer, rect: Rect) {
+/// Blank the modal's cells onto `bg` so panes underneath don't bleed
+/// through and the block reads as a surface, not a hole: dialogs sit on
+/// the raised surface, the welcome block on the base canvas.
+pub(crate) fn fill(buf: &mut Buffer, rect: Rect, bg: Color) {
     for y in rect.y..rect.y + rect.height {
         for x in rect.x..rect.x + rect.width {
             if let Some(cell) = buf.cell_mut((x, y)) {
                 cell.reset();
+                cell.set_style(Style::default().bg(bg));
             }
         }
     }
@@ -603,6 +636,100 @@ mod tests {
             padded.push(c);
         }
         assert_eq!(padded.command(&items).as_deref(), Some("zzz"));
+    }
+
+    #[test]
+    fn modal_sits_on_the_raised_surface_and_welcome_on_the_canvas() {
+        let items = items();
+        let state = LauncherState::new();
+        let area = Rect::new(0, 0, 80, 24);
+        // The mid-session modal is a dialog: raised fill edge to edge.
+        let launcher = Launcher::new(&items, &state);
+        let modal = launcher.modal_rect(area);
+        let mut buf = Buffer::empty(area);
+        Launcher::new(&items, &state).render(area, &mut buf);
+        for (x, y) in [
+            (modal.x, modal.y),
+            (modal.x + 2, modal.y + 1),
+            (modal.x + modal.width - 1, modal.y + modal.height - 1),
+        ] {
+            assert_eq!(
+                buf.cell((x, y)).unwrap().style().bg,
+                Some(SURFACE_RAISED),
+                "modal cell ({x},{y})"
+            );
+        }
+        // The selected row (the first item, at the items offset) is the
+        // selected surface — one continuous light fill, name and command
+        // both dark on it.
+        let row_y = modal.y + MODAL_ITEMS_OFFSET;
+        for x in [modal.x + 1, modal.x + 4, modal.x + modal.width - 2] {
+            assert_eq!(
+                buf.cell((x, row_y)).unwrap().style().bg,
+                selected_surface().bg,
+                "selected row cell ({x},{row_y})"
+            );
+        }
+        assert_eq!(
+            buf.cell((modal.x + 4, row_y)).unwrap().style().fg,
+            selected_surface().fg
+        );
+        // A cell outside the modal keeps whatever was under it.
+        assert_ne!(buf.cell((0, 0)).unwrap().style().bg, Some(SURFACE_RAISED));
+        // The welcome block is the opening screen, not a dialog: it sits
+        // directly on the base canvas.
+        let welcome = Launcher::new(&items, &state).welcome(true);
+        let block = welcome.modal_rect(area);
+        let mut buf = Buffer::empty(area);
+        Launcher::new(&items, &state)
+            .welcome(true)
+            .tick(64)
+            .render(area, &mut buf);
+        assert_eq!(
+            buf.cell((block.x + 1, block.y + 1)).unwrap().style().bg,
+            Some(SURFACE_BASE)
+        );
+    }
+
+    #[test]
+    fn wordmark_flicker_and_shine_are_explicit_tints_never_dim() {
+        let items = items();
+        let state = LauncherState::new();
+        let area = Rect::new(0, 0, 80, 24);
+        let block = Launcher::new(&items, &state).welcome(true).modal_rect(area);
+        // The wordmark owns the block's first rows; item names, commands,
+        // and hints below may legitimately contain the stand-in glyphs.
+        let mark_rows = block.y..block.y + WORDMARK.len() as u16;
+        let (mut saw_flicker, mut saw_shine) = (false, false);
+        for tick in 0..80u64 {
+            let mut buf = Buffer::empty(area);
+            Launcher::new(&items, &state)
+                .welcome(true)
+                .tick(tick)
+                .render(area, &mut buf);
+            for y in 0..24u16 {
+                for x in 0..80u16 {
+                    let cell = buf.cell((x, y)).unwrap();
+                    // The regression this extends (see style.rs): roster
+                    // chrome never leans on the DIM attribute — the
+                    // flicker's faint is an explicit deep accent tint.
+                    assert!(
+                        !cell.style().add_modifier.contains(Modifier::DIM),
+                        "DIM at ({x},{y}), tick {tick}"
+                    );
+                    let glyph = cell.symbol().chars().next().unwrap_or(' ');
+                    if mark_rows.contains(&y) && FLICKER_GLYPHS.contains(&glyph) {
+                        assert_eq!(cell.style().fg, Some(ACCENT_FAINT));
+                        saw_flicker = true;
+                    }
+                    if cell.style().fg == Some(ACCENT_SHINE) {
+                        saw_shine = true;
+                    }
+                }
+            }
+        }
+        assert!(saw_flicker, "no flicker cell rendered in 80 ticks");
+        assert!(saw_shine, "no shine cell rendered in 80 ticks");
     }
 
     #[test]
