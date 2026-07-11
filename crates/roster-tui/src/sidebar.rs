@@ -61,6 +61,20 @@ pub struct SidebarEntry {
     pub title: Option<String>,
 }
 
+impl SidebarEntry {
+    /// The name the chrome shows for this pane: the live task title when
+    /// the agent broadcast a non-blank one, else the agent's config name.
+    /// The one resolver shared by the sidebar card and the pane border, so
+    /// the two surfaces can't disagree about what a pane is called — and
+    /// the blank-title guard lives here rather than at each render site.
+    pub fn display_name(&self) -> &str {
+        match self.title.as_deref().map(str::trim) {
+            Some(title) if !title.is_empty() => title,
+            _ => &self.agent,
+        }
+    }
+}
+
 /// Build the sidebar rows from the session: every pane whose command
 /// identifies as a configured agent, ranked globally by
 /// `roster_core::attention` — blocked first (longest wait leading), then
@@ -554,7 +568,7 @@ impl Widget for Sidebar<'_> {
                     };
                     // The live task title beats the config name — every
                     // card saying `claude-code` says nothing.
-                    let name = entry.title.as_deref().unwrap_or(&entry.agent);
+                    let name = entry.display_name();
                     buf.set_string(name_start, y, truncate(name, name_width), name_style);
                 }
                 SidebarRow::EntryDetail(index) => {
@@ -1196,6 +1210,28 @@ mod tests {
             "fallback row: {}",
             buffer_row(&buf, 5)
         );
+    }
+
+    #[test]
+    fn blank_or_whitespace_title_falls_back_to_the_agent_name() {
+        // The binary trims and empty-filters titles before set_title, but
+        // display_name is the last line of defense: a blank title that
+        // reaches an entry by any other path must not blank the chrome.
+        let now = Instant::now();
+        let (mut session, panes) = populated_session(now);
+        session.set_title(panes[1], Some("   ".into()));
+        session.set_title(panes[2], Some("".into()));
+        session.set_title(panes[0], Some("  real task  ".into()));
+
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        for entry in &entries {
+            if entry.pane == panes[0] {
+                // A padded title is shown trimmed, not blank-wrapped.
+                assert_eq!(entry.display_name(), "real task");
+            } else {
+                assert_eq!(entry.display_name(), "claude-code", "pane {:?}", entry.pane);
+            }
+        }
     }
 
     #[test]

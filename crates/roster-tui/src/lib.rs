@@ -502,14 +502,14 @@ pub fn render(frame: &mut Frame, view: &View) {
     }
 }
 
-/// A pane's display name: its live terminal title when the agent set one,
-/// else its agent card's name when detected, else the basename of its
-/// command's binary. The title beats the config name for the same reason
-/// the sidebar prefers it: every Claude pane saying `claude-code` says
-/// nothing, but the task does.
+/// A pane's display name: its agent card's [`SidebarEntry::display_name`]
+/// when detected — the live task title, falling back to the config name —
+/// else the basename of its command's binary. One resolver for the pane
+/// border, the exited card, and (via the entry method) the sidebar card,
+/// so the surfaces can't disagree about what a pane is called.
 fn pane_display_name(view: &View, id: PaneId) -> String {
     if let Some(entry) = view.entries.iter().find(|e| e.pane == id) {
-        return entry.title.clone().unwrap_or_else(|| entry.agent.clone());
+        return entry.display_name().to_string();
     }
     let command = view
         .session
@@ -522,13 +522,18 @@ fn pane_display_name(view: &View, id: PaneId) -> String {
 
 /// One pane's title, riding the panel's top border: a space-padded live
 /// state glyph and the pane's display name breaking the border line —
-/// the live session title when the agent set one (the border has the width
-/// the sidebar card lacks, so the full task shows here untruncated), else
+/// the live session title when the agent set one (the border usually has
+/// the width the sidebar card lacks, so the task shows in full where the
+/// card truncates), else
 /// `╭ ⠋ claude-code ─╮`. Focus reads as the accent border and an accented
 /// name, not a heavy inverse bar. `span` is the panel's full top row;
 /// `close` is the ✕ button's absolute columns from `close_button_cols`,
 /// when the border hosts one — the caller resolves it so the drawn glyph
 /// and the hit target share one source.
+/// The border marker an exited pane's title carries. `draw_title` keeps it
+/// visible by truncating the task label instead of the marker.
+const EXITED_SUFFIX: &str = " · exited";
+
 fn draw_title(
     buf: &mut Buffer,
     span: Rect,
@@ -541,39 +546,24 @@ fn draw_title(
     if span.width < 7 {
         return;
     }
-    let entry = view.entries.iter().find(|e| e.pane == id);
-    let (glyph, glyph_style, label) = match entry {
-        // The shared glyph style keeps the title in step with the sidebar
-        // card: the same done pane pulses in both places.
+    // The shared glyph style keeps the title in step with the sidebar
+    // card: the same done pane pulses in both places. The label shares
+    // `pane_display_name` with the exited card, so a pane is called the
+    // same thing everywhere.
+    let (glyph, glyph_style) = match view.entries.iter().find(|e| e.pane == id) {
         Some(entry) => (
             state_glyph(entry.state, view.tick),
             style::state_glyph_style(entry.state, view.tick),
-            // The live task title beats the config name, same precedence
-            // as the sidebar card (see sidebar.rs).
-            entry.title.clone().unwrap_or_else(|| entry.agent.clone()),
         ),
-        None => {
-            let command = view
-                .session
-                .pane(id)
-                .and_then(|p| p.command.clone())
-                .unwrap_or_default();
-            let name = command.split_whitespace().next().unwrap_or("").to_string();
-            let name = name.rsplit('/').next().unwrap_or(&name).to_string();
-            ("○", style::muted(), name)
-        }
+        None => ("○", style::muted()),
     };
+    let label = pane_display_name(view, id);
 
     // ` ⠋ name ` punched into the border line, pads included, so the text
     // never touches the box-drawing chars.
     buf.set_string(span.x + 1, span.y, " ", style::muted());
     buf.set_string(span.x + 2, span.y, glyph, glyph_style);
     buf.set_string(span.x + 3, span.y, " ", style::muted());
-    let text = if view.exited.contains_key(&id) {
-        format!("{label} · exited")
-    } else {
-        label
-    };
     let text_style = if focused {
         Style::default()
             .fg(style::ACCENT)
@@ -588,6 +578,18 @@ fn draw_title(
         None => span.width - 2,
     };
     let budget = usize::from(text_end.saturating_sub(4));
+    let text = if view.exited.contains_key(&id) {
+        // The exit marker survives any task title: the label yields the
+        // cells, since a truncated name still reads but a truncated marker
+        // vanishes. Chars approximate cells here; a run of double-width
+        // glyphs can still cost the suffix its tail, which set_stringn
+        // clips safely.
+        let keep = budget.saturating_sub(EXITED_SUFFIX.chars().count());
+        let short: String = label.chars().take(keep).collect();
+        format!("{short}{EXITED_SUFFIX}")
+    } else {
+        label
+    };
     if budget > 0 {
         // set_stringn reports where the paint actually ended — cells, not
         // chars — so the border-repair pad can't land inside a

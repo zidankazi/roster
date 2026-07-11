@@ -729,6 +729,63 @@ fn exited_pane_overlay_card_and_title_marker() {
 }
 
 #[test]
+fn exited_marker_survives_a_long_task_title() {
+    // The task title yields cells to the ` · exited` marker: a truncated
+    // name still reads, a truncated marker vanishes.
+    let now = Instant::now();
+    let mut session = Session::new();
+    let only = session.focused().unwrap();
+    session.pane_mut(only).unwrap().command = Some("claude".into());
+    session.set_reading(only, AgentState::Idle, None, now);
+    session.set_title(
+        only,
+        Some("a very long task title that keeps going far past the border budget".into()),
+    );
+
+    let mut grids = HashMap::new();
+    grids.insert(only, Grid::from_text("final output"));
+    let mut exited = HashMap::new();
+    exited.insert(only, 3u32);
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+
+    let scrolled = HashMap::new();
+    let view = View {
+        session: &session,
+        grids: &grids,
+        exited: &exited,
+        entries: &entries,
+        selected: None,
+        hover: None,
+        zoomed: false,
+        side: SidebarSide::Left,
+        launcher: None,
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
+        welcome: false,
+        mode_badge: None,
+        status: "",
+        tick: 0,
+    };
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+    terminal.draw(|frame| render(frame, &view)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    let title = region_text(&buf, 34, 78, 1);
+    assert!(
+        title.contains("a very long task"),
+        "title lost the task: {title}"
+    );
+    assert!(
+        title.contains("· exited"),
+        "title lost the exit marker: {title}"
+    );
+}
+
+#[test]
 fn exited_pane_too_small_for_the_card_keeps_the_strip() {
     let mut session = Session::new();
     let only = session.focused().unwrap();

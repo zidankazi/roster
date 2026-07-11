@@ -92,8 +92,8 @@ most-blocked-first across every workspace, so the agent waiting on you rises
 to the top no matter where it lives — with more than one workspace each card
 carries a `⧉N` tag naming its home. cards and pane title bars name
 themselves after the task Claude Code is working on (`fix auth bug`, not
-`claude-code`) — the card truncates to its column, the title bar shows the
-full task.
+`claude-code`) — the card truncates to its column, the title bar has the
+pane's width for it.
 
 ## persistent sessions
 
