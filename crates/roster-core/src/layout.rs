@@ -222,7 +222,9 @@ impl LayoutNode {
         }
         match direction {
             SplitDirection::Horizontal if area.width >= 2 => {
-                let target = (to.0.saturating_sub(area.x) + 1) as f32 / f32::from(area.width);
+                // The +1 happens in f32: a terminal can report column
+                // u16::MAX, and adding in u16 first would overflow.
+                let target = (f32::from(to.0.saturating_sub(area.x)) + 1.0) / f32::from(area.width);
                 *ratio = target.clamp(0.05, 0.95);
                 let first_w = portion(area.width, *ratio);
                 Some((area.x + first_w - 1, from.1))
@@ -454,6 +456,22 @@ mod tests {
         let mut node = LayoutNode::Leaf(pid(1));
         assert!(!node.split_leaf(pid(9), pid(2), SplitDirection::Horizontal));
         assert_eq!(node.leaves(), vec![pid(1)]);
+    }
+
+    #[test]
+    fn divider_drag_to_the_maximal_column_clamps_without_overflow() {
+        let mut node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(pid(1))),
+            second: Box::new(LayoutNode::Leaf(pid(2))),
+        };
+        // A hostile or buggy terminal can report column u16::MAX; the drag
+        // must clamp to the 0.95 ratio cap instead of overflowing.
+        let pos = node
+            .drag_divider(Rect::new(0, 0, 80, 24), (39, 5), (u16::MAX, 5))
+            .expect("divider owned");
+        assert_eq!(pos, (75, 5));
     }
 
     #[test]
