@@ -9,11 +9,12 @@
 # See docs/02-state-detection.md.
 #
 # The claude-code patterns are tuned against Claude Code 2.1 captured live
-# (see crates/roster/examples/capture.rs; latest capture 2.1.206). Its
+# (see crates/roster/examples/capture.rs; latest capture 2.1.207). Its
 # permission prompts show "Do you want to proceed?" over a "❯ 1. Yes" menu;
 # while working it shows a spinner status line ("✻ Crunching…", a random
-# verb) — 2.1.205 no longer reliably shows "esc to interrupt" with it, so
-# the spinner line itself is a working signal; at rest the input line is "❯"
+# verb, or a multi-word live task description on 2.1.207) — 2.1.205 no
+# longer reliably shows "esc to interrupt" with it, so the spinner line
+# itself is a working signal; at rest the input line is "❯"
 # between horizontal rules (not a box-bordered "> "). When a backgrounded
 # task is running it shows "✳ Waiting for N background agent(s) to finish"
 # above the prompt, with the background-task tray ("Enter to view · x to
@@ -38,17 +39,32 @@ blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d+\. Yes']
 # The last pattern is the spinner status line itself ("✻ Sautéing…",
 # "✻ Crunching… (4s · thinking with high effort)"): since 2.1.205 a working
 # screen can show no interrupt hint at all, leaving the spinner as the only
-# on-screen working signal. The glyph class is the captured flower frames
-# (✻ ✢ ✶ live in 2.1.20x, ✳ from earlier flourish captures) and nothing
-# looser: a bare "*" or "·" would match markdown bullets in settled
-# responses ("* Loading…"), and a static false working never clears. The
-# braille livery ("⠹ Reticulating…") stays out for the same reason — its
-# glyphs are the stock cli-spinner set, so settled output quoting any
-# npm-style tool (or this repo's own fixtures) would pin a false working,
-# while every braille capture so far came with an interrupt hint that
-# already matches. The "…" right after the verb keeps the completion
-# flourish ("✻ Brewed for 5s") and response lines from matching.
-working = ['esc to interrupt', '(?i)ctrl\+c to interrupt', 'Waiting for \d+ background agent', '^\s*[✻✢✳✶] \w+…']
+# on-screen working signal. On 2.1.207 the status text can be several
+# words — an in-progress task's live description (working_task_status.txt)
+# — not just the random verb, so the pattern accepts word-run text from
+# the glyph to the first "…"; without the multi-word arm such a frame
+# matches nothing and the pane flickers working→done→working mid-task.
+# The line must END at that ellipsis or at a following " (elapsed/tokens"
+# suffix: a real spinner row has nothing else after the "…", while a
+# settled response line *mentioning* a spinner ("✻ the spinner shows
+# Crunching… while it works") carries prose there — without the tail
+# anchor such a line would pin a false working, which never clears. A
+# verbatim spinner-shaped quote (glyph + text + "…" at end of row) remains
+# indistinguishable from a live spinner by shape — accepted residual, same
+# as it always was for one-word quotes. A status long enough to wrap in a
+# narrow pane puts the "…" on a glyph-less continuation row and matches
+# nothing (captured live, 50 cols); the change signal covers it while the
+# glyph animates. The glyph class is the captured flower frames (✻ ✢ ✶
+# live in 2.1.20x, ✳ live 2.1.207 task-status and earlier flourish
+# captures) and nothing looser: a bare "*" or "·" would match markdown
+# bullets in settled responses ("* Loading…"). The braille livery
+# ("⠹ Reticulating…") stays out for the same reason — its glyphs are the
+# stock cli-spinner set, so settled output quoting any npm-style tool (or
+# this repo's own fixtures) would pin a false working, while every braille
+# capture so far came with an interrupt hint that already matches. The
+# required "…" keeps the completion flourish ("✻ Brewed for 5s") from
+# matching.
+working = ['esc to interrupt', '(?i)ctrl\+c to interrupt', 'Waiting for \d+ background agent', '^\s*[✻✢✳✶] \S[^…]*…( \(.*)?$']
 idle    = ['^❯']                                              # input prompt line
 reason.blocked = "matched_line"
 reason.working = "last_nonempty"

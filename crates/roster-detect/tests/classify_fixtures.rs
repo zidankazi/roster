@@ -168,6 +168,21 @@ fn claude_working_from_spinner_without_interrupt_hint() {
 }
 
 #[test]
+fn claude_working_from_multiword_task_status_spinner() {
+    // Captured from Claude Code 2.1.207: with an in-progress task the
+    // spinner shows the task's live description — several words, not the
+    // single random verb — and no interrupt hint. Before the multi-word
+    // pattern arm this frame matched nothing, so the settled composer read
+    // done and the next status tick flipped back to working: the reported
+    // working→done→working flicker mid-task.
+    assert_reading(
+        classify_fresh("claude-code", "claude", "working_task_status.txt"),
+        AgentState::Working,
+        Some("✳ Reviewing the roster fixture pipeline… (23s · ↓ 269 tokens)"),
+    );
+}
+
+#[test]
 fn claude_done_shortly_after_spinner_work() {
     // The settled screen from the same 2.1.205 run the spinner fixtures
     // came from: within the done window it reads done, with the response —

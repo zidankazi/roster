@@ -418,6 +418,26 @@ mod tests {
     }
 
     #[test]
+    fn settled_flower_glyph_lines_with_prose_after_the_ellipsis_stay_idle() {
+        // The multi-word spinner arm accepts any word-run up to the "…" —
+        // the tail anchor is what keeps a settled response line *about* a
+        // spinner from matching: prose continues after the ellipsis, a real
+        // spinner row ends there (or in its "(elapsed · tokens)" suffix).
+        // The completion flourish stays excluded by the required "…".
+        let detector = Detector::builtin();
+        let kind = detector.identify("claude").unwrap();
+        for line in [
+            "✻ the spinner shows a verb like Crunching… while it works",
+            "  ✶ Reviewing the fixture pipeline… then it settles here",
+            "✻ Worked for 1m 23s",
+        ] {
+            let grid = Grid::from_text(&format!("⏺ answer\n{line}\n❯"));
+            let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
+            assert_eq!(reading.state, AgentState::Idle, "line {line}");
+        }
+    }
+
+    #[test]
     fn task_header_rows_still_count_as_activity() {
         // activity.ignore's chip pattern requires indentation: flush-left
         // "● Task(…)" rows are real output, and their changes must keep
