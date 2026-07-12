@@ -1463,12 +1463,27 @@ impl App {
             self.selection = None;
             return;
         }
-        // The alternate screen has no history to scroll; the drag itself
-        // stays exactly as before.
-        if drag.alt {
+        if !matches!(self.mode, Mode::Normal) {
             return;
         }
-        if !matches!(self.mode, Mode::Normal) {
+        // The alternate screen has no history to scroll — the guest owns
+        // its scrollback (Claude Code virtualizes its transcript). The drag
+        // itself stays exactly as before, but a hold past the edge says so
+        // once instead of failing silently.
+        if drag.alt {
+            if !drag.hinted
+                && self.last_mouse.zip(self.pane_content_rect(id)).is_some_and(
+                    |((_, y), content)| edge_scroll_delta(y, content.y, content.height) != 0,
+                )
+            {
+                self.toast(
+                    "this app scrolls itself — selection covers the screen".to_string(),
+                    ToastLevel::Info,
+                );
+                if let Some(drag) = &mut self.sel_drag {
+                    drag.hinted = true;
+                }
+            }
             return;
         }
         if self.selection.map(|s| s.0) != Some(id) {
@@ -1868,6 +1883,7 @@ impl App {
                                         anchor,
                                         alt,
                                         scrolled: None,
+                                        hinted: false,
                                     });
                                 }
                             }
@@ -2315,6 +2331,9 @@ struct SelectionDrag {
     /// When the edge auto-scroll last stepped — the rate limit that keeps
     /// an event-burst frame rate from becoming a scroll burst.
     scrolled: Option<Instant>,
+    /// Whether this drag already explained that a self-scrolling pane
+    /// can't edge-scroll — the toast fires once per drag, not per tick.
+    hinted: bool,
 }
 
 /// Rows a drag auto-scroll steps per tick — modest, so the selection stays

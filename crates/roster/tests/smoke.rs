@@ -511,6 +511,50 @@ fn drag_held_past_the_top_edge_scrolls_history_into_view() {
 }
 
 #[test]
+fn edge_drag_on_a_self_scrolling_pane_explains_itself() {
+    // Same guest profile as below: alternate screen + SGR mouse (Claude
+    // Code's). Holding a drag past the pane's top edge can't scroll — the
+    // guest owns its scrollback — so roster must say so instead of
+    // failing silently.
+    let (cols, rows) = (120u16, 30u16);
+    let script = "printf \"\\033[?1049h\\033[?1000h\\033[?1002h\\033[?1006h\"; \
+                  i=1; while [ $i -le 20 ]; do printf \"row-%02d\\n\" $i; i=$((i+1)); done; \
+                  sleep 60";
+    let mut pty = Pty::spawn(&format!("'{}' '{script}'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+
+    let mut screen = Screen::new(cols, rows);
+    assert!(
+        drain_while(&mut screen, "row-20", true, &rx),
+        "guest content never rendered:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Press mid-content, drag up onto the pane's top border row, and hold.
+    pty.write(b"\x1b[<0;60;15M").expect("press");
+    pty.write(b"\x1b[<32;60;10M").expect("drag");
+    pty.write(b"\x1b[<32;60;2M").expect("drag to border");
+    assert!(
+        drain_while(&mut screen, "scrolls itself", true, &rx),
+        "edge-drag hold never explained the dead end:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    // The guest's viewport must not have moved: the first painted row is
+    // still on screen exactly as before.
+    assert!(
+        screen.grid().lines().iter().any(|l| l.contains("row-01")),
+        "alt-screen content shifted under an edge drag:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(b"\x1b[<0;60;2m").expect("release");
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
+#[test]
 fn wheel_forward_to_a_mouse_reporting_guest_drops_the_selection() {
     // A guest with Claude Code's terminal profile: alternate screen plus
     // SGR mouse tracking. It scrolls its own content on a forwarded wheel,
