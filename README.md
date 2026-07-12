@@ -42,7 +42,9 @@ without reading every screen.
   rounded panel, 10k lines of scrollback per pane, full-screen TUIs keep
   their keys, drag to select and copy (OSC 52, works over ssh) — hold the
   drag at a pane's edge and it scrolls on through history — bracketed
-  paste for multi-line prompts.
+  paste for multi-line prompts. full-screen apps that scroll themselves
+  (Claude Code's UI included) own the wheel, so selection there covers
+  what's on screen.
 - **mouse and keyboard, both first-class.** click a pane, drag a divider, hit
   the `+ new agent` button, or drive all of it with tmux-style `ctrl-b` keys.
 - **detach, agents keep running.** every pane lives in a background server.

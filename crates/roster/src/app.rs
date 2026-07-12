@@ -1961,6 +1961,7 @@ impl App {
                         let row = y.saturating_sub(c.y).min(c.height.saturating_sub(1)) + 1;
                         (col, row)
                     });
+                    let mut forwarded = false;
                     if let Some(rt) = self.runtimes.get_mut(&id) {
                         // A dead child can't receive input, so wheel_action
                         // routes exited panes to a history scroll instead.
@@ -1974,10 +1975,20 @@ impl App {
                         ) {
                             Some(WheelAction::Forward(bytes)) => {
                                 let _ = rt.io.write(&bytes);
+                                forwarded = true;
                             }
                             Some(WheelAction::Scroll(delta)) => rt.screen.scroll_display(delta),
                             None => {}
                         }
+                    }
+                    // A forwarded wheel hands scrolling to the guest (Claude
+                    // Code scrolls its own virtualized transcript): its
+                    // repaint re-keys every row under a highlight, so keeping
+                    // the selection would leave it covering different text.
+                    // Roster-side scrolls (`Scroll`) keep it — absolute rows
+                    // stay glued to their text through those.
+                    if forwarded {
+                        self.drop_selection(id);
                     }
                 }
             }

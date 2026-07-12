@@ -510,6 +510,85 @@ fn drag_held_past_the_top_edge_scrolls_history_into_view() {
     assert!(status.success, "exit: {status:?}");
 }
 
+#[test]
+fn wheel_forward_to_a_mouse_reporting_guest_drops_the_selection() {
+    // A guest with Claude Code's terminal profile: alternate screen plus
+    // SGR mouse tracking. It scrolls its own content on a forwarded wheel,
+    // re-keying every row — a roster-side highlight must not survive to
+    // cover different text.
+    let (cols, rows) = (120u16, 30u16);
+    let script = "printf \"\\033[?1049h\\033[?1000h\\033[?1002h\\033[?1006h\"; \
+                  i=1; while [ $i -le 20 ]; do printf \"row-%02d\\n\" $i; i=$((i+1)); done; \
+                  sleep 60";
+    let mut pty = Pty::spawn(&format!("'{}' '{script}'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+
+    let mut screen = Screen::new(cols, rows);
+    assert!(
+        drain_while(&mut screen, "row-20", true, &rx),
+        "guest content never rendered:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Locate row-05's first cell, then drag-select down to row-08 and
+    // release: the copy toast paints and the highlight stays (0-based grid
+    // coords; SGR mouse coords are the same +1).
+    let lines = screen.grid().lines();
+    let (sx, sy) = lines
+        .iter()
+        .enumerate()
+        .find_map(|(y, l)| l.find("row-05").map(|x| (x, y)))
+        .expect("row-05 on screen");
+    let (col, row) = (sx as u16 + 1, sy as u16 + 1);
+    pty.write(format!("\x1b[<0;{col};{row}M").as_bytes())
+        .expect("press");
+    pty.write(format!("\x1b[<32;{col};{}M", row + 3).as_bytes())
+        .expect("drag");
+    pty.write(format!("\x1b[<0;{col};{}m", row + 3).as_bytes())
+        .expect("release");
+    assert!(
+        drain_while(&mut screen, "copied 4 lines", true, &rx),
+        "drag never copied:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    let reversed = |screen: &mut Screen| {
+        screen
+            .grid()
+            .cell(sx, sy)
+            .is_some_and(|cell| cell.style.reverse)
+    };
+    assert!(reversed(&mut screen), "highlight never painted over row-05");
+
+    // A wheel notch over the pane forwards to the mouse-reporting guest;
+    // the stale highlight must clear even though the fake guest ignores
+    // the report and repaints nothing.
+    pty.write(format!("\x1b[<64;{col};{row}M").as_bytes())
+        .expect("wheel up");
+    let start = Instant::now();
+    let mut cleared = false;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if !reversed(&mut screen) {
+            cleared = true;
+            break;
+        }
+    }
+    assert!(
+        cleared,
+        "forwarded wheel left the selection highlighted:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
 /// Create an executable fake agent named `claude` that shows a blocked
 /// prompt, and return the directory holding it. Each call gets its own
 /// directory: tests run concurrently in one process, and on Linux exec'ing
