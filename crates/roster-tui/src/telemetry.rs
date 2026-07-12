@@ -10,7 +10,9 @@
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use roster_core::{context_alert, rate_limit_alert, AgentState, ContextAlert, Telemetry};
+use roster_core::{
+    context_alert, rate_limit_alert, AgentState, ContextAlert, LimitNotice, LimitWindow, Telemetry,
+};
 
 use crate::sidebar::format_age;
 use crate::style::{muted, normal, selected, selected_muted, state_color, WARN_ON_SELECTED};
@@ -111,37 +113,61 @@ pub fn telemetry_line(telemetry: &Telemetry, on_selected: bool) -> Line<'static>
 /// unreadable-on-light yellow for the fixed dark amber
 /// [`WARN_ON_SELECTED`].
 fn context_style(remaining_pct: Option<f32>, on_selected: bool) -> Style {
-    match (context_alert(remaining_pct), on_selected) {
-        (None, false) => muted(),
-        (None, true) => selected_muted(),
-        (Some(ContextAlert::Warn), false) => Style::default().fg(state_color(AgentState::Working)),
-        (Some(ContextAlert::Warn), true) => selected().fg(WARN_ON_SELECTED),
-        (Some(ContextAlert::Critical), on_selected) => {
-            let mut style = Style::default()
-                .fg(state_color(AgentState::Blocked))
-                .add_modifier(Modifier::BOLD);
-            if on_selected {
-                style = style.bg(selected().bg.expect("selected() always sets a fill"));
-            }
-            style
+    let alert = context_alert(remaining_pct);
+    if !on_selected {
+        return alert_style(alert, muted());
+    }
+    match alert {
+        None => selected_muted(),
+        Some(ContextAlert::Warn) => selected().fg(WARN_ON_SELECTED),
+        Some(ContextAlert::Critical) => {
+            alert_style(alert, muted()).bg(selected().bg.expect("selected() always sets a fill"))
         }
     }
 }
 
-/// The severity style for a rate-limit window's used share on the dark
-/// surfaces: the normal tier while healthy, escalating through the same
-/// color vocabulary as the context badge — the working yellow from 70%
-/// used, the blocked red (bold) from 90%. Thresholds live in
-/// [`roster_core::rate_limit_alert`], never here. No selected-surface
-/// variant: the fleet footer draws on the panel's base canvas only.
-pub(crate) fn limit_style(used_pct: f32) -> Style {
-    match rate_limit_alert(used_pct) {
-        None => normal(),
+/// The dark-surface escalation ramp shared by the context badge and the
+/// rate-limit footer, so "what critical looks like" lives in exactly one
+/// match: `quiet` while healthy (each caller's own rest tier), the working
+/// yellow at warn, the blocked red (bold) at critical. The selected
+/// surface's re-keys stay in [`context_style`] — the footer never draws
+/// there.
+fn alert_style(alert: Option<ContextAlert>, quiet: Style) -> Style {
+    match alert {
+        None => quiet,
         Some(ContextAlert::Warn) => Style::default().fg(state_color(AgentState::Working)),
         Some(ContextAlert::Critical) => Style::default()
             .fg(state_color(AgentState::Blocked))
             .add_modifier(Modifier::BOLD),
     }
+}
+
+/// The severity style for a rate-limit window's used share on the dark
+/// surfaces: the normal tier while healthy, escalating through the shared
+/// [`alert_style`] ramp — the working yellow from 70% used, the blocked
+/// red (bold) from 90%. Thresholds live in
+/// [`roster_core::rate_limit_alert`], never here. No selected-surface
+/// variant: the fleet footer draws on the panel's base canvas only.
+pub(crate) fn limit_style(used_pct: f32) -> Style {
+    alert_style(rate_limit_alert(used_pct), normal())
+}
+
+/// The user-facing sentence for a limit notice — `5-hour limit at 91% ·
+/// resets 2h`. Owned here beside [`format_age`] and the footer's line so
+/// the toast can't drift into its own dialect of the same reading; the
+/// binary only picks the toast's loudness. The percentage is floored,
+/// like the footer's: the number must never name a tier the notice's
+/// treatment doesn't wear (89.6 is "89%", still the warn tier).
+pub fn limit_notice_text(notice: &LimitNotice) -> String {
+    let label = match notice.window {
+        LimitWindow::FiveHour => "5-hour",
+        LimitWindow::SevenDay => "weekly",
+    };
+    let mut text = format!("{label} limit at {:.0}%", notice.used_pct.floor());
+    if let Some(resets) = notice.resets_in {
+        text.push_str(&format!(" · resets {}", format_age(resets)));
+    }
+    text
 }
 
 #[cfg(test)]
@@ -388,6 +414,25 @@ mod tests {
         assert_eq!(critical.style.fg, Some(state_color(AgentState::Blocked)));
         assert_eq!(critical.style.bg, selected().bg);
         assert!(critical.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn limit_notice_text_floors_the_percent_and_skips_absent_resets() {
+        let warn = LimitNotice {
+            window: LimitWindow::FiveHour,
+            alert: ContextAlert::Warn,
+            used_pct: 89.6,
+            resets_in: Some(Duration::from_secs(7500)),
+        };
+        // Floored, not rounded: a warn-tier notice must never read "90%".
+        assert_eq!(limit_notice_text(&warn), "5-hour limit at 89% · resets 2h");
+        let critical = LimitNotice {
+            window: LimitWindow::SevenDay,
+            alert: ContextAlert::Critical,
+            used_pct: 91.0,
+            resets_in: None,
+        };
+        assert_eq!(limit_notice_text(&critical), "weekly limit at 91%");
     }
 
     #[test]

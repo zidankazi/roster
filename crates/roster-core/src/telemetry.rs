@@ -91,13 +91,20 @@ where
 {
     let mut five_hour: Option<(&RateLimitWindow, Instant)> = None;
     let mut seven_day: Option<(&RateLimitWindow, Instant)> = None;
+    // A non-finite used share is garbage, not a measurement (the feed's
+    // f64→f32 cast can overflow to +inf): it must neither erase a finite
+    // reading on freshness nor occupy a footer row as a healthy-looking
+    // gauge — the same is-a-measurement bar `rate_limit_alert` holds.
+    fn finite(window: &Option<RateLimitWindow>) -> Option<&RateLimitWindow> {
+        window.as_ref().filter(|window| window.used_pct.is_finite())
+    }
     for (limit, at) in readings {
-        if let Some(window) = &limit.five_hour {
+        if let Some(window) = finite(&limit.five_hour) {
             if five_hour.is_none_or(|(_, seen)| at > seen) {
                 five_hour = Some((window, at));
             }
         }
-        if let Some(window) = &limit.seven_day {
+        if let Some(window) = finite(&limit.seven_day) {
             if seven_day.is_none_or(|(_, seen)| at > seen) {
                 seven_day = Some((window, at));
             }
@@ -305,6 +312,20 @@ mod tests {
         assert_eq!(fleet_rate_limit(std::iter::empty()), None);
         let empty = RateLimit::default();
         assert_eq!(fleet_rate_limit([(&empty, Instant::now())]), None);
+    }
+
+    #[test]
+    fn garbage_readings_never_erase_finite_ones() {
+        let now = Instant::now();
+        let valid = five_only(85.0);
+        // A newer non-finite reading is garbage, not a fresher measurement:
+        // the finite 85% must survive, not be replaced by an inf gauge.
+        let garbage = five_only(f32::INFINITY);
+        let fleet = fleet_rate_limit([(&valid, now), (&garbage, now + Duration::from_secs(5))])
+            .expect("the finite reading survives");
+        assert_eq!(fleet.five_hour.expect("five-hour kept").used_pct, 85.0);
+        // Garbage alone reports nothing at all — no window, no footer row.
+        assert_eq!(fleet_rate_limit([(&five_only(f32::NAN), now)]), None);
     }
 
     #[test]

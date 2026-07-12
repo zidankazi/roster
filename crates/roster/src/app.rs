@@ -23,8 +23,8 @@ use ratatui::crossterm::event::{
 use ratatui::layout::Rect;
 use ratatui::DefaultTerminal;
 use roster_core::{
-    fleet_rate_limit, AgentState, ContextAlert, LimitNotifier, LimitWindow, PaneId, RateLimit,
-    Session, SplitDirection,
+    fleet_rate_limit, AgentState, ContextAlert, LimitNotifier, PaneId, RateLimit, Session,
+    SplitDirection,
 };
 use roster_detect::{AgentKind, Detector, PaneTracker};
 use roster_pty::Pty;
@@ -1314,23 +1314,17 @@ impl App {
                 }),
         );
         // The notifier owns the edge state: one toast per threshold per
-        // window, re-armed when usage falls back or the window resets.
+        // window, re-armed when usage falls back or the window resets. The
+        // wording is the TUI's (`limit_notice_text`); only the loudness is
+        // picked here.
         let notices = self.limit_notifier.observe(self.rate_limits.as_ref());
         for notice in notices {
-            let label = match notice.window {
-                LimitWindow::FiveHour => "5-hour",
-                LimitWindow::SevenDay => "weekly",
-            };
-            let mut text = format!("{label} limit at {:.0}%", notice.used_pct);
-            if let Some(resets) = notice.resets_in {
-                text.push_str(&format!(" · resets {}", roster_tui::format_age(resets)));
-            }
             let level = match notice.alert {
                 ContextAlert::Warn => ToastLevel::Warn,
                 // 90% is the loud tier: the red, read-me treatment.
                 ContextAlert::Critical => ToastLevel::Error,
             };
-            self.toast(text, level);
+            self.toast(roster_tui::limit_notice_text(&notice), level);
         }
     }
 

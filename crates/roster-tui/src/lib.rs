@@ -36,7 +36,7 @@ pub use style::{
     cell_style, muted, selected, selected_muted, state_color, state_glyph, state_glyph_style,
     ACCENT, SURFACE_BASE,
 };
-pub use telemetry::telemetry_line;
+pub use telemetry::{limit_notice_text, telemetry_line};
 pub use toast::{draw_toasts, toast_rects, ToastLevel};
 
 /// A text selection: the pane and its two `(col, row)` endpoints in

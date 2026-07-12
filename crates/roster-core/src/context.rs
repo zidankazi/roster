@@ -10,9 +10,11 @@
 /// `Warn < Critical`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ContextAlert {
-    /// Context is getting low; worth a glance.
+    /// The reading deserves a glance soon: context getting low, or a
+    /// rate-limit window past its warn threshold.
     Warn,
-    /// Context is nearly exhausted; the agent is about to compact or stall.
+    /// The reading demands action: context nearly exhausted (the agent is
+    /// about to compact or stall), or a rate-limit window nearly spent.
     Critical,
 }
 
@@ -79,5 +81,15 @@ mod tests {
     #[test]
     fn boundary_exactly_twentyfive_is_warn() {
         assert_eq!(context_alert(Some(25.0)), Some(ContextAlert::Warn));
+    }
+
+    #[test]
+    fn severity_orders_warn_below_critical() {
+        // The derived Ord makes the variant declaration order load-bearing:
+        // `LimitNotifier`'s edge comparison (`level > held`) trusts it. A
+        // tier appended after Critical would silently outrank it — this
+        // pins the ordering in the type's own file.
+        assert!(ContextAlert::Warn < ContextAlert::Critical);
+        assert!(Some(ContextAlert::Warn) > None::<ContextAlert>);
     }
 }

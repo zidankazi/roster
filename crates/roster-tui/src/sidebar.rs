@@ -362,7 +362,10 @@ fn limit_line(label: &str, window: &RateLimitWindow) -> Line<'static> {
         Span::styled(format!("{label} "), muted()),
         Span::styled("▓".repeat(filled), severity),
         Span::styled("░".repeat(LIMIT_BAR_WIDTH - filled), muted()),
-        Span::styled(format!(" {:.0}%", window.used_pct), severity),
+        // Floored, not rounded: the color comes from the raw share, so a
+        // rounded 89.6 would read "90%" in the warn yellow — the number
+        // must never name a tier its color doesn't wear.
+        Span::styled(format!(" {:.0}%", window.used_pct.floor()), severity),
     ];
     if let Some(resets) = window.resets_in {
         spans.push(Span::styled(
@@ -2076,6 +2079,28 @@ mod tests {
         let critical = style_of(90.0);
         assert_eq!(critical.fg, Some(state_color(AgentState::Blocked)));
         assert!(critical.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn footer_percent_is_floored_so_the_number_never_outruns_its_color() {
+        // The color classifies the raw share; a rounded display would show
+        // "90%" in the warn yellow for 89.6 — the exact threshold number
+        // wearing the wrong tier. Floored, any rendered "90%" is truly red.
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let limits = five_hour_limits(89.6);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .rate_limits(Some(&limits))
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        let row = buffer_row(&buf, 13);
+        assert!(row.contains("89%"), "row: {row}");
+        let x = row[..row.find("89%").unwrap()].chars().count() as u16;
+        assert_eq!(
+            buf.cell((x, 13)).unwrap().style().fg,
+            Some(state_color(AgentState::Working))
+        );
     }
 
     #[test]

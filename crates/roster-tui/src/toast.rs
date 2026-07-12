@@ -9,10 +9,11 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
+use roster_core::AgentState;
+
 use crate::chrome_area;
 use crate::launcher::{fill, frame};
 use crate::style::{danger, normal, state_color, ACCENT, SURFACE_RAISED};
-use roster_core::AgentState;
 
 /// How loud a toast is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,9 +21,10 @@ pub enum ToastLevel {
     /// A quiet confirmation ("copied").
     Info,
     /// A caution the user should notice soon (a rate-limit window past its
-    /// warn threshold) — added because both existing glyphs mislead here:
-    /// Info's ✓ says something succeeded, Error's ✗ says something failed,
-    /// and a filling limit is neither.
+    /// warn threshold) — added because Info's quiet ✓ reads as success,
+    /// which a caution is not. The critical tier deliberately escalates
+    /// past this to [`ToastLevel::Error`]'s treatment: red-and-✗ is
+    /// roster's one act-now vocabulary, and 90% used has earned it.
     Warn,
     /// Something failed and the user should read it.
     Error,
