@@ -385,7 +385,7 @@ fn limit_line(label: &str, window: &RateLimitWindow) -> Line<'static> {
     ];
     if let Some(resets) = window.resets_in {
         spans.push(Span::styled(
-            format!(" · resets {}", format_age(resets)),
+            format!(" · resets {}", format_reset(resets)),
             muted(),
         ));
     }
@@ -790,32 +790,39 @@ impl Widget for Sidebar<'_> {
 }
 
 /// Compact age for the sidebar: seconds under a minute, then minutes,
-/// hours (with leftover minutes below ten hours — "2h5m"), days. The day
-/// unit exists for the weekly rate-limit reset — "5d" reads at a glance
-/// where "134h" is arithmetic homework. Beyond 10h every tier floors, so
-/// a value renders its unit's count-so-far ("1d" spans 24-47h).
+/// hours, days. The day unit exists for the weekly rate-limit reset —
+/// "5d" reads at a glance where "134h" is arithmetic homework. Every tier
+/// floors, so a value renders its unit's count-so-far ("1d" spans 24-47h),
+/// the same contract at every scale.
 pub fn format_age(age: Duration) -> String {
     let secs = age.as_secs();
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {
         format!("{}m", secs / 60)
-    } else if secs < 36_000 {
-        // Leftover minutes ride along below ten hours: the five-hour
-        // rate-limit window lives entirely under this line, where an
-        // hour-floor hides up to 59m of a wait a user is actively sitting
-        // out. From 10h the minute is noise, and "13h42m" would outrun
-        // the footer's reset tail budget where "9h59m" cannot.
-        let mins = (secs % 3600) / 60;
-        if mins == 0 {
-            format!("{}h", secs / 3600)
-        } else {
-            format!("{}h{}m", secs / 3600, mins)
-        }
     } else if secs < 86_400 {
         format!("{}h", secs / 3600)
     } else {
         format!("{}d", secs / 86_400)
+    }
+}
+
+/// A rate-limit reset countdown: [`format_age`], except hour-scale spans
+/// below ten hours carry their leftover minutes ("2h5m") — the five-hour
+/// window lives entirely under that line, where a bare hour-floor hides up
+/// to 59m of a wait the user is sitting out. Ages stay minute-free on
+/// purpose: a card's age is a staleness marker that competes with the
+/// agent name for cells. "9h59m" is the widest tail the footer's 29-cell
+/// budget admits; from 10h the minute is noise. The displayed minute
+/// stays honest because a quiet feed ages out of the tracker in seconds —
+/// a stalled countdown clears rather than reading fresh.
+pub(crate) fn format_reset(resets_in: Duration) -> String {
+    let secs = resets_in.as_secs();
+    let mins = (secs % 3600) / 60;
+    if (3600..36_000).contains(&secs) && mins != 0 {
+        format!("{}h{}m", secs / 3600, mins)
+    } else {
+        format_age(resets_in)
     }
 }
 
@@ -1078,16 +1085,22 @@ mod tests {
     fn format_age_scales_units() {
         assert_eq!(format_age(Duration::from_secs(12)), "12s");
         assert_eq!(format_age(Duration::from_secs(90)), "1m");
-        assert_eq!(format_age(Duration::from_secs(3600)), "1h");
-        assert_eq!(format_age(Duration::from_secs(3700)), "1h1m");
-        assert_eq!(format_age(Duration::from_secs(7200)), "2h");
-        assert_eq!(format_age(Duration::from_secs(7500)), "2h5m");
-        assert_eq!(format_age(Duration::from_secs(35_999)), "9h59m");
-        assert_eq!(format_age(Duration::from_secs(36_000)), "10h");
+        assert_eq!(format_age(Duration::from_secs(3700)), "1h");
         assert_eq!(format_age(Duration::from_secs(86_399)), "23h");
         assert_eq!(format_age(Duration::from_secs(86_400)), "1d");
         assert_eq!(format_age(Duration::from_secs(86_400 * 6 + 3600)), "6d");
         assert_eq!(format_age(Duration::ZERO), "0s");
+    }
+
+    #[test]
+    fn reset_times_carry_minutes_below_ten_hours_only() {
+        assert_eq!(format_reset(Duration::from_secs(3700)), "1h1m");
+        assert_eq!(format_reset(Duration::from_secs(7200)), "2h");
+        assert_eq!(format_reset(Duration::from_secs(7500)), "2h5m");
+        assert_eq!(format_reset(Duration::from_secs(35_999)), "9h59m");
+        assert_eq!(format_reset(Duration::from_secs(36_000)), "10h");
+        assert_eq!(format_reset(Duration::from_secs(90)), "1m");
+        assert_eq!(format_reset(Duration::from_secs(86_400 * 5)), "5d");
     }
 
     #[test]

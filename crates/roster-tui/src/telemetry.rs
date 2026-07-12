@@ -14,7 +14,7 @@ use roster_core::{
     context_alert, rate_limit_alert, AgentState, ContextAlert, LimitNotice, LimitWindow, Telemetry,
 };
 
-use crate::sidebar::format_age;
+use crate::sidebar::format_reset;
 use crate::style::{muted, normal, selected, selected_muted, state_color, WARN_ON_SELECTED};
 
 /// Whether a card earns its telemetry row: always on the focused card, and
@@ -86,7 +86,7 @@ pub fn telemetry_line(telemetry: &Telemetry, on_selected: bool) -> Line<'static>
     {
         let used = window.used_pct;
         let text = match window.resets_in {
-            Some(resets) => format!("limit {used:.0}% resets {}", format_age(resets)),
+            Some(resets) => format!("limit {used:.0}% resets {}", format_reset(resets)),
             None => format!("limit {used:.0}%"),
         };
         badges.push(Span::styled(text, quiet));
@@ -153,7 +153,7 @@ pub(crate) fn limit_style(used_pct: f32) -> Style {
 }
 
 /// The user-facing sentence for a limit notice — `5-hour limit at 91% ·
-/// resets 2h`. Owned here beside [`format_age`] and the footer's line so
+/// resets 2h5m`. Owned here beside [`format_reset`] and the footer's line so
 /// the toast can't drift into its own dialect of the same reading; the
 /// binary only picks the toast's loudness. The percentage is floored,
 /// like the footer's: the number must never name a tier the notice's
@@ -165,7 +165,7 @@ pub fn limit_notice_text(notice: &LimitNotice) -> String {
     };
     let mut text = format!("{label} limit at {:.0}%", notice.used_pct.floor());
     if let Some(resets) = notice.resets_in {
-        text.push_str(&format!(" · resets {}", format_age(resets)));
+        text.push_str(&format!(" · resets {}", format_reset(resets)));
     }
     text
 }
@@ -188,7 +188,7 @@ mod tests {
             rate_limit: Some(RateLimit {
                 five_hour: Some(RateLimitWindow {
                     used_pct: 40.0,
-                    resets_in: Some(Duration::from_secs(1800)),
+                    resets_in: Some(Duration::from_secs(7500)),
                 }),
                 seven_day: Some(RateLimitWindow {
                     used_pct: 12.0,
@@ -238,7 +238,7 @@ mod tests {
         let terminal = draw(&full_telemetry(), 70);
         assert_eq!(
             row_text(&terminal),
-            "claude-opus-4-8 · 62% context · $1.23 · limit 40% resets 30m"
+            "claude-opus-4-8 · 62% context · $1.23 · limit 40% resets 2h5m"
         );
         // Model, cost, rate-limit, and the separators are quiet chrome.
         for needle in ["claude-opus-4-8", "·", "$1.23", "limit 40%"] {

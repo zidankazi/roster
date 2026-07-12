@@ -172,7 +172,9 @@ mod tests {
     fn warnings_render_the_working_yellow_with_a_bang() {
         let area = Rect::new(0, 0, 80, 24);
         let mut buf = Buffer::empty(area);
-        let toasts = vec![("5-hour limit at 71% · resets 2h", ToastLevel::Warn)];
+        // The widest text a limit notice produces — a minute-carrying
+        // reset — so this layout fixture stays representative.
+        let toasts = vec![("5-hour limit at 71% · resets 9h59m", ToastLevel::Warn)];
         draw_toasts(&mut buf, area, &toasts);
         let rect = toast_rects(area, &toasts)[0];
         let row: String = (rect.x..rect.x + rect.width)

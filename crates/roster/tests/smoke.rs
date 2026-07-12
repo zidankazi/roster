@@ -1478,14 +1478,16 @@ fn statusline_rate_limits_reach_the_sidebar_footer_and_toast() {
     let dir = std::env::temp_dir().join(format!("roster-rl-smoke-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create fake agent dir");
     let script = dir.join("claude");
-    // 2h5m59s out: the rendered "2h5m" holds for a full 59 seconds of
-    // stamp-to-render latency — the widest cushion a minute-carrying
-    // reading allows.
+    // The needles below stop before the minute digit ("· resets 2h"
+    // prefix-matches "2h5m", "2h4m", … "2h0m"), so the assertion doesn't
+    // depend on how long the stamp-to-parse leg takes — resets_in is
+    // frozen once at statusline parse. Minute rendering itself is pinned
+    // deterministically by the unit and render tests.
     let resets_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock after the epoch")
         .as_secs()
-        + 7559;
+        + 7500;
     let payload = format!(
         r#"{{"rate_limits":{{"five_hour":{{"used_percentage":91.0,"resets_at":{resets_at}}},"seven_day":{{"used_percentage":41.0}}}}}}"#,
     );
@@ -1512,7 +1514,7 @@ fn statusline_rate_limits_reach_the_sidebar_footer_and_toast() {
     // The footer pins both windows to the sidebar bottom: the five-hour
     // bar with its percentage and reset, the seven-day one percent-only.
     assert!(
-        drain_while(&mut screen, "5h ▓▓▓▓▓░  91% · resets 2h5m", true, &rx),
+        drain_while(&mut screen, "5h ▓▓▓▓▓░  91% · resets 2h", true, &rx),
         "the five-hour footer line never rendered:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -1523,7 +1525,7 @@ fn statusline_rate_limits_reach_the_sidebar_footer_and_toast() {
     );
     // Crossing 90% in one reading fires exactly the loud toast.
     assert!(
-        drain_while(&mut screen, "5-hour limit at 91% · resets 2h5m", true, &rx),
+        drain_while(&mut screen, "5-hour limit at 91% · resets 2h", true, &rx),
         "the critical limit toast never showed:\n{}",
         screen.grid().lines().join("\n")
     );
