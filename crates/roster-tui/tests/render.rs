@@ -1128,7 +1128,10 @@ fn fleet_rate_limit_footer_shows_through_the_full_frame() {
     // The footer sits above the pinned + new agent button (row 21), both
     // windows labeled, the critical five-hour reading in the blocked red.
     let buf = draw(Some(&limits));
-    assert_eq!(region_text(&buf, 2, 33, 18), " 5h ▓▓▓▓▓░  91% · resets 2h");
+    assert_eq!(
+        region_text(&buf, 2, 33, 18),
+        " 5h ▓▓▓▓▓░  91% · resets 2h5m"
+    );
     assert_eq!(region_text(&buf, 2, 33, 19), " wk ▓▓░░░░  41%");
     assert!(region_text(&buf, 2, 33, 21).contains("+ new agent"));
     let critical = buf.cell((14, 18)).unwrap().style();

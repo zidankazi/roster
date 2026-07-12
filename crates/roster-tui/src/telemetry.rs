@@ -424,8 +424,12 @@ mod tests {
             used_pct: 89.6,
             resets_in: Some(Duration::from_secs(7500)),
         };
-        // Floored, not rounded: a warn-tier notice must never read "90%".
-        assert_eq!(limit_notice_text(&warn), "5-hour limit at 89% · resets 2h");
+        // Floored, not rounded: a warn-tier notice must never read "90%";
+        // the sub-10h reset carries its minutes ("2h5m", not "2h").
+        assert_eq!(
+            limit_notice_text(&warn),
+            "5-hour limit at 89% · resets 2h5m"
+        );
         let critical = LimitNotice {
             window: LimitWindow::SevenDay,
             alert: ContextAlert::Critical,

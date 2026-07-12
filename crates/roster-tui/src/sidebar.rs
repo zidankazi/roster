@@ -320,8 +320,9 @@ pub fn auto_all_cols(width: u16) -> Option<std::ops::Range<u16>> {
 /// the bar is a gauge read at a glance, and a length that changes with the
 /// sidebar would make the same percentage look different across layouts.
 /// Six cells rank the percentage beside them while leaving the reset tail
-/// slack on the default sidebar width — the worst realistic line runs 27
-/// of the 29 budgeted cells; the old 10-cell bar left the tail none.
+/// room on the default sidebar width — the worst realistic line ("100%",
+/// a "4h59m" reset) runs the 29-cell budget exactly; the old 10-cell bar
+/// truncated day-scale tails.
 const LIMIT_BAR_WIDTH: usize = 6;
 
 /// The rows the sidebar's fleet rate-limit footer occupies at the bottom
@@ -371,8 +372,8 @@ fn limit_line(label: &str, window: &RateLimitWindow) -> Line<'static> {
         filled
     };
     // Percent right-aligned to three cells so the two rows column-align
-    // and the reset tails start together; the worst line ("100%", a "23h"
-    // reset) is 27 cells against the default sidebar's 29-cell budget.
+    // and the reset tails start together; the worst line ("100%", a
+    // "4h59m" reset) runs the default sidebar's 29-cell budget exactly.
     let mut spans = vec![
         Span::styled(format!("{label} "), muted()),
         Span::styled("▓".repeat(filled), severity),
@@ -789,16 +790,28 @@ impl Widget for Sidebar<'_> {
 }
 
 /// Compact age for the sidebar: seconds under a minute, then minutes,
-/// hours, days. The day unit exists for the weekly rate-limit reset —
-/// "5d" reads at a glance where "134h" is arithmetic homework. Every tier
-/// floors, so a value renders its unit's count-so-far ("1d" spans 24-47h),
-/// the same contract at every scale.
+/// hours (with leftover minutes below ten hours — "2h5m"), days. The day
+/// unit exists for the weekly rate-limit reset — "5d" reads at a glance
+/// where "134h" is arithmetic homework. Beyond 10h every tier floors, so
+/// a value renders its unit's count-so-far ("1d" spans 24-47h).
 pub fn format_age(age: Duration) -> String {
     let secs = age.as_secs();
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {
         format!("{}m", secs / 60)
+    } else if secs < 36_000 {
+        // Leftover minutes ride along below ten hours: the five-hour
+        // rate-limit window lives entirely under this line, where an
+        // hour-floor hides up to 59m of a wait a user is actively sitting
+        // out. From 10h the minute is noise, and "13h42m" would outrun
+        // the footer's reset tail budget where "9h59m" cannot.
+        let mins = (secs % 3600) / 60;
+        if mins == 0 {
+            format!("{}h", secs / 3600)
+        } else {
+            format!("{}h{}m", secs / 3600, mins)
+        }
     } else if secs < 86_400 {
         format!("{}h", secs / 3600)
     } else {
@@ -1065,7 +1078,12 @@ mod tests {
     fn format_age_scales_units() {
         assert_eq!(format_age(Duration::from_secs(12)), "12s");
         assert_eq!(format_age(Duration::from_secs(90)), "1m");
-        assert_eq!(format_age(Duration::from_secs(3700)), "1h");
+        assert_eq!(format_age(Duration::from_secs(3600)), "1h");
+        assert_eq!(format_age(Duration::from_secs(3700)), "1h1m");
+        assert_eq!(format_age(Duration::from_secs(7200)), "2h");
+        assert_eq!(format_age(Duration::from_secs(7500)), "2h5m");
+        assert_eq!(format_age(Duration::from_secs(35_999)), "9h59m");
+        assert_eq!(format_age(Duration::from_secs(36_000)), "10h");
         assert_eq!(format_age(Duration::from_secs(86_399)), "23h");
         assert_eq!(format_age(Duration::from_secs(86_400)), "1d");
         assert_eq!(format_age(Duration::from_secs(86_400 * 6 + 3600)), "6d");
@@ -2051,7 +2069,7 @@ mod tests {
         // under a blank spacer, with the cards untouched above. The weekly
         // day-scale reset renders whole: no ellipsis, percent columns
         // aligned across the rows.
-        assert_eq!(buffer_row(&buf, 12), " 5h ▓▓▓▓░░  62% · resets 2h");
+        assert_eq!(buffer_row(&buf, 12), " 5h ▓▓▓▓░░  62% · resets 2h5m");
         assert_eq!(buffer_row(&buf, 13), " wk ▓▓░░░░  41% · resets 5d");
         assert_eq!(buffer_row(&buf, 11), "");
         assert!(buffer_row(&buf, 2).starts_with("  ◉ claude-code"));
