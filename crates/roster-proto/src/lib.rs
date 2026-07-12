@@ -7,15 +7,18 @@
 //! stdio remotely.
 //!
 //! Corrupt or oversized input is always an `io::Error`, never a panic — see
-//! `MAX_FRAME` and the length checks in `read_frame`. Tags are an
-//! append-only compatibility surface: never reuse or renumber one (see
+//! `MAX_FRAME` and the length checks in `read_frame`. Oversized output is
+//! refused before it hits the wire — see the cap in `write_frame`. Tags are
+//! an append-only compatibility surface: never reuse or renumber one (see
 //! `Frame::tag`).
 
 use std::io::{self, Read, Write};
 
-/// The largest frame either side will read or write. Enforced before the
-/// length-prefixed allocation happens — a corrupt or hostile length prefix
-/// must never drive an unbounded `Vec` allocation.
+/// The largest frame either side will read or write. Enforced on read
+/// before the length-prefixed allocation happens — a corrupt or hostile
+/// length prefix must never drive an unbounded `Vec` allocation — and on
+/// write before anything hits the wire, so a sender can never poison the
+/// peer's stream with a frame the peer is bound to reject.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
 
 /// One pane as described in a [`Frame::Hello`]: the server's id, the
@@ -295,6 +298,17 @@ pub fn write_frame(w: &mut impl Write, frame: &Frame) -> io::Result<()> {
         }
         Frame::Shutdown { reason } => put_bytes(&mut payload, reason.as_bytes()),
         Frame::SpawnFailed { error } => put_bytes(&mut payload, error.as_bytes()),
+    }
+    // Refuse before writing anything: a frame past MAX_FRAME reads as
+    // corruption on the other side (dropping the whole connection for the
+    // sender's fault), and a payload past u32::MAX would truncate the
+    // length prefix and desync the stream. Erroring here leaves the
+    // stream clean — nothing was sent.
+    if payload.len() + 1 > MAX_FRAME as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("protocol: frame too large ({} bytes)", payload.len() + 1),
+        ));
     }
     let len = payload.len() as u32 + 1;
     w.write_all(&len.to_le_bytes())?;
@@ -614,6 +628,31 @@ mod tests {
         ));
         assert_eq!(read_frame(&mut r).unwrap(), Some(Frame::Detach));
         assert_eq!(read_frame(&mut r).unwrap(), None, "clean EOF");
+    }
+
+    #[test]
+    fn oversized_writes_are_refused_with_a_clean_stream() {
+        // A frame the peer is bound to reject must error on the write
+        // side, leaving nothing on the wire — sending it would read as
+        // corruption over there and drop the whole connection.
+        let mut buf = Vec::new();
+        let err = write_frame(
+            &mut buf,
+            &Frame::Output {
+                pane: 1,
+                bytes: vec![0u8; MAX_FRAME as usize],
+            },
+        )
+        .expect_err("oversized frame must be refused");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(buf.is_empty(), "bytes leaked onto the wire");
+
+        // At exactly the limit the frame still writes and round-trips:
+        // payload = pane (8) + length prefix (4) + bytes; +1 for the tag.
+        round_trip(Frame::Output {
+            pane: 1,
+            bytes: vec![7u8; MAX_FRAME as usize - 13],
+        });
     }
 
     #[test]
