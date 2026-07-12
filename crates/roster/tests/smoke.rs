@@ -1729,11 +1729,18 @@ fn statusline_rate_limits_reach_the_sidebar_footer_and_toast() {
         screen.grid().lines().join("\n")
     );
 
-    // The script exits (~2s): the dead pane's tracker leaves the fleet,
-    // so the footer must clear rather than freeze its last numbers.
+    // The script exits (~2s): with no identified agent pane left, the
+    // carry clears — both windows, the with-reset five-hour row included —
+    // rather than asserting account limits over an agentless session.
     assert!(
         drain_while(&mut screen, "41%", false, &rx),
-        "the footer never cleared after the pane exited:\n{}",
+        "the seven-day footer row never cleared after the pane exited:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    // "5h ▓" matches only the footer bar, not the lingering toast text.
+    assert!(
+        drain_while(&mut screen, "5h ▓", false, &rx),
+        "the five-hour footer row never cleared after the pane exited:\n{}",
         screen.grid().lines().join("\n")
     );
 }

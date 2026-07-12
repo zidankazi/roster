@@ -817,8 +817,8 @@ pub fn format_age(age: Duration) -> String {
 /// stays honest at every site: the card badge and toast show a reading
 /// the tracker ages out within 30 quiet seconds, and the footer's carried
 /// fleet reading is re-aged every detect tick (`carry_rate_limit`) — a
-/// quiet feed's countdown keeps counting down and dies at zero rather
-/// than freezing.
+/// quiet feed's countdown keeps counting down rather than freezing,
+/// trailing reality by at most that same 30s freshness slack.
 pub(crate) fn format_reset(resets_in: Duration) -> String {
     let secs = resets_in.as_secs();
     let mins = (secs % 3600) / 60;

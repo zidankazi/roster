@@ -90,16 +90,6 @@ impl RateLimit {
             seven_day,
         })
     }
-
-    /// The report as it stands `elapsed` after its arrival: each window
-    /// aged independently ([`RateLimitWindow::aged`]), collapsing to `None`
-    /// once no window survives.
-    pub fn aged(&self, elapsed: Duration) -> Option<RateLimit> {
-        RateLimit::from_windows(
-            self.five_hour.as_ref().and_then(|w| w.aged(elapsed)),
-            self.seven_day.as_ref().and_then(|w| w.aged(elapsed)),
-        )
-    }
 }
 
 /// One window's carry step: the live reading always wins — a feed's own
@@ -402,29 +392,6 @@ mod tests {
             resets_in: None,
         };
         assert_eq!(window.aged(Duration::from_secs(86_400)), Some(window));
-    }
-
-    #[test]
-    fn a_report_collapses_when_its_last_window_dies() {
-        let report = RateLimit {
-            five_hour: Some(RateLimitWindow {
-                used_pct: 80.0,
-                resets_in: Some(Duration::from_secs(60)),
-            }),
-            seven_day: Some(RateLimitWindow {
-                used_pct: 30.0,
-                resets_in: Some(Duration::from_secs(86_400)),
-            }),
-        };
-        // The five-hour window resets; the seven-day one keeps counting.
-        let aged = report
-            .aged(Duration::from_secs(120))
-            .expect("seven-day survives");
-        assert_eq!(aged.five_hour, None);
-        let seven = aged.seven_day.expect("seven-day aged");
-        assert_eq!(seven.resets_in, Some(Duration::from_secs(86_280)));
-        // Past both horizons nothing survives — `None`, not an empty husk.
-        assert_eq!(report.aged(Duration::from_secs(100_000)), None);
     }
 
     /// A one-window report with the given five-hour reading.

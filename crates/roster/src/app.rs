@@ -59,6 +59,38 @@ const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 fn hook_pin_wins(pin_age: Duration, scraped: AgentState) -> bool {
     pin_age < HOOK_PIN_GRACE || scraped == AgentState::Blocked
 }
+/// One detection tick of the account rate-limit carry: the new displayed
+/// reading and its stamps, from the freshest live aggregation and the
+/// previously displayed reading (`roster_core::carry_rate_limit`). With no
+/// identified agent pane left there is nothing to carry *for* — the footer
+/// clears rather than asserting limits over an agentless session. Elapsed
+/// takes the larger of the two clocks (see `rate_limits_at`), and the
+/// carried value is re-stamped, so aging accumulates tick over tick. Live
+/// readings display as they arrived — the carry only ages what feeds have
+/// gone quiet on — so a countdown can run up to the tracker's 30s ageout
+/// behind reality before the carry takes over; the same freshness slack
+/// every badge already has.
+fn carry_tick(
+    live: Option<RateLimit>,
+    held: (Option<RateLimit>, Option<(Instant, SystemTime)>),
+    agents_present: bool,
+    now: Instant,
+    wall: SystemTime,
+) -> (Option<RateLimit>, Option<(Instant, SystemTime)>) {
+    if !agents_present {
+        return (None, None);
+    }
+    let (held_limits, held_at) = held;
+    let elapsed = held_at
+        .map(|(mono, wall_then)| {
+            now.saturating_duration_since(mono)
+                .max(wall.duration_since(wall_then).unwrap_or(Duration::ZERO))
+        })
+        .unwrap_or(Duration::ZERO);
+    let limits = carry_rate_limit(live, held_limits.as_ref(), elapsed);
+    let stamps = limits.is_some().then_some((now, wall));
+    (limits, stamps)
+}
 /// Whether the sidebar header's `auto-yes` fleet toggle reads armed for
 /// these agent cards' auto-approve flags: every card auto-approved, and at
 /// least one card. Mirrors the exact condition the header uses to light the
@@ -294,11 +326,13 @@ pub struct App {
     /// were before the field existed.
     rate_limits: Option<RateLimit>,
     /// When `rate_limits` was last computed, on both clocks: the monotonic
-    /// stamp is immune to clock adjustments, the wall stamp keeps ticking
-    /// through a system sleep (which pauses `Instant` on macOS and Linux),
-    /// and the carry ages by whichever elapsed more — so a countdown
-    /// neither jumps on an NTP step nor survives a reset slept through.
-    /// `None` exactly while `rate_limits` is `None`.
+    /// stamp keeps a backward clock step from freezing or rewinding the
+    /// carry, the wall stamp keeps ticking through a system sleep (which
+    /// pauses `Instant` on macOS and Linux), and the carry ages by
+    /// whichever elapsed more — so a reset slept through still retires its
+    /// window, and a forward clock step at worst retires a window early,
+    /// absence being the honest failure mode. `None` exactly while
+    /// `rate_limits` is `None`.
     rate_limits_at: Option<(Instant, SystemTime)>,
     /// Edge state behind the limit toasts: one notice per threshold per
     /// window, re-armed when usage falls back (see
@@ -1357,21 +1391,15 @@ impl App {
         // Claude Code re-runs the statusline only while the conversation
         // moves, so an idle fleet's feeds go quiet for far longer than the
         // trackers' 30s ageout — carry the previous fleet reading across
-        // the gap instead of blanking the footer. Elapsed takes the larger
-        // of the two clocks (see `rate_limits_at`); the carried value is
-        // re-stamped `now`, so aging accumulates tick over tick.
-        let elapsed = self
-            .rate_limits_at
-            .map(|(mono, wall)| {
-                now.saturating_duration_since(mono).max(
-                    SystemTime::now()
-                        .duration_since(wall)
-                        .unwrap_or(Duration::ZERO),
-                )
-            })
-            .unwrap_or(Duration::ZERO);
-        self.rate_limits = carry_rate_limit(live, self.rate_limits.as_ref(), elapsed);
-        self.rate_limits_at = self.rate_limits.is_some().then(|| (now, SystemTime::now()));
+        // the gap instead of blanking the footer.
+        let agents_present = self.runtimes.values().any(|rt| rt.kind.is_some());
+        (self.rate_limits, self.rate_limits_at) = carry_tick(
+            live,
+            (self.rate_limits.take(), self.rate_limits_at),
+            agents_present,
+            now,
+            SystemTime::now(),
+        );
         // The notifier owns the edge state: one toast per threshold per
         // window, re-armed when usage falls back or the window resets. The
         // wording is the TUI's (`limit_notice_text`); only the loudness is
@@ -2776,6 +2804,113 @@ impl Drop for App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A one-window rate limit for driving the carry.
+    fn five_limit(used_pct: f32, resets_in: Duration) -> RateLimit {
+        RateLimit {
+            five_hour: Some(roster_core::RateLimitWindow {
+                used_pct,
+                resets_in: Some(resets_in),
+            }),
+            seven_day: None,
+        }
+    }
+
+    /// The five-hour countdown inside a carry result.
+    fn resets(limits: &Option<RateLimit>) -> Duration {
+        limits
+            .as_ref()
+            .and_then(|l| l.five_hour.as_ref())
+            .and_then(|w| w.resets_in)
+            .expect("five-hour countdown present")
+    }
+
+    #[test]
+    fn the_carry_accumulates_aging_across_quiet_ticks() {
+        let t0 = Instant::now();
+        let w0 = SystemTime::now();
+        let live = five_limit(75.0, Duration::from_secs(7200));
+
+        // A live tick seeds the carry; the reading displays as it arrived.
+        let held = carry_tick(Some(live), (None, None), true, t0, w0);
+        assert_eq!(resets(&held.0), Duration::from_secs(7200));
+        assert_eq!(held.1, Some((t0, w0)));
+
+        // Two quiet ticks ten minutes apart: aging sums across the
+        // re-stamps, it does not restart from each tick's value.
+        let (t1, w1) = (t0 + Duration::from_secs(600), w0 + Duration::from_secs(600));
+        let held = carry_tick(None, held, true, t1, w1);
+        assert_eq!(resets(&held.0), Duration::from_secs(6600));
+        let (t2, w2) = (t1 + Duration::from_secs(600), w1 + Duration::from_secs(600));
+        let held = carry_tick(None, held, true, t2, w2);
+        assert_eq!(resets(&held.0), Duration::from_secs(6000));
+
+        // Quiet past the reset horizon: the window dies and the stamps
+        // clear with it — no corpse for a later tick to age.
+        let (t3, w3) = (
+            t2 + Duration::from_secs(6001),
+            w2 + Duration::from_secs(6001),
+        );
+        assert_eq!(carry_tick(None, held, true, t3, w3), (None, None));
+    }
+
+    #[test]
+    fn the_carry_clears_when_no_agent_pane_remains() {
+        let t0 = Instant::now();
+        let w0 = SystemTime::now();
+        let held = (
+            Some(five_limit(91.0, Duration::from_secs(7200))),
+            Some((t0, w0)),
+        );
+        // Every agent pane exited: a footer asserting account limits over
+        // an agentless session would outlive its own subjects.
+        assert_eq!(
+            carry_tick(None, held, false, t0 + Duration::from_secs(1), w0),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn a_sleep_gap_ages_the_carry_by_the_wall_clock() {
+        let t0 = Instant::now();
+        let w0 = SystemTime::now();
+        let held = (
+            Some(five_limit(92.0, Duration::from_secs(1800))),
+            Some((t0, w0)),
+        );
+        // The machine slept two hours: the monotonic clock barely moved,
+        // the wall clock did — the window's reset passed mid-sleep, so it
+        // must retire, not resume its countdown where the sleep paused it.
+        let (limits, stamps) = carry_tick(
+            None,
+            held,
+            true,
+            t0 + Duration::from_millis(400),
+            w0 + Duration::from_secs(7200),
+        );
+        assert_eq!(limits, None);
+        assert_eq!(stamps, None);
+    }
+
+    #[test]
+    fn a_backward_wall_step_falls_back_to_the_monotonic_clock() {
+        let t0 = Instant::now();
+        let w0 = SystemTime::now();
+        let held = (
+            Some(five_limit(75.0, Duration::from_secs(7200))),
+            Some((t0, w0)),
+        );
+        // The wall clock stepped backwards (NTP): elapsed comes from the
+        // monotonic side, and the countdown neither freezes nor rewinds.
+        let (limits, _) = carry_tick(
+            None,
+            held,
+            true,
+            t0 + Duration::from_secs(60),
+            w0 - Duration::from_secs(3600),
+        );
+        assert_eq!(resets(&limits), Duration::from_secs(7140));
+    }
 
     #[test]
     fn base64_matches_known_vectors() {
