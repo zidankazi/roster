@@ -294,6 +294,18 @@ impl PaneTracker {
         reading
     }
 
+    /// The held telemetry with its arrival stamp — the freshness key
+    /// fleet-level aggregation orders by (rate limits are account-scoped,
+    /// so `roster_core::fleet_rate_limit` merges panes by recency). Aging
+    /// is [`PaneTracker::update`]'s, exactly as for
+    /// [`PaneTracker::committed`]: a quiet feed's last payload lingers here
+    /// until the next update purges it.
+    pub fn telemetry_stamped(&self) -> Option<(&Telemetry, Instant)> {
+        self.telemetry
+            .as_ref()
+            .map(|(telemetry, at)| (telemetry, *at))
+    }
+
     /// The scrape-committed reading with the pane's held telemetry attached.
     /// Aging is evaluated by [`PaneTracker::update`], so a quiet feed's last
     /// payload lingers here until the next update purges it.
@@ -687,5 +699,25 @@ mod tests {
         tracker.set_telemetry(sample_telemetry(12.0), t_fresh);
         let seen = tracker.update(&detector, kind, &grid, t_fresh);
         assert_eq!(seen.telemetry, Some(sample_telemetry(12.0)));
+    }
+
+    #[test]
+    fn stamped_telemetry_carries_its_arrival_and_follows_the_purge() {
+        let (detector, kind) = tracker_detector();
+        let mut tracker = PaneTracker::new();
+        let t0 = Instant::now();
+        assert_eq!(tracker.telemetry_stamped(), None);
+
+        tracker.set_telemetry(sample_telemetry(41.0), t0);
+        let (telemetry, at) = tracker.telemetry_stamped().expect("payload held");
+        assert_eq!(*telemetry, sample_telemetry(41.0));
+        assert_eq!(at, t0);
+
+        // The stamp follows update's purge, so a fleet aggregation reading
+        // this after the detect tick can never see what the cards don't.
+        let grid = Grid::from_text("SPINNING away");
+        let t_stale = t0 + TELEMETRY_STALE_AFTER + Duration::from_secs(1);
+        tracker.update(&detector, kind, &grid, t_stale);
+        assert_eq!(tracker.telemetry_stamped(), None);
     }
 }

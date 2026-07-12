@@ -10,10 +10,10 @@
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use roster_core::{context_alert, AgentState, ContextAlert, Telemetry};
+use roster_core::{context_alert, rate_limit_alert, AgentState, ContextAlert, Telemetry};
 
 use crate::sidebar::format_age;
-use crate::style::{muted, selected, selected_muted, state_color, WARN_ON_SELECTED};
+use crate::style::{muted, normal, selected, selected_muted, state_color, WARN_ON_SELECTED};
 
 /// Whether a card earns its telemetry row: always on the focused card, and
 /// on any card whose context alert escalated — the one reading that must
@@ -125,6 +125,22 @@ fn context_style(remaining_pct: Option<f32>, on_selected: bool) -> Style {
             }
             style
         }
+    }
+}
+
+/// The severity style for a rate-limit window's used share on the dark
+/// surfaces: the normal tier while healthy, escalating through the same
+/// color vocabulary as the context badge — the working yellow from 70%
+/// used, the blocked red (bold) from 90%. Thresholds live in
+/// [`roster_core::rate_limit_alert`], never here. No selected-surface
+/// variant: the fleet footer draws on the panel's base canvas only.
+pub(crate) fn limit_style(used_pct: f32) -> Style {
+    match rate_limit_alert(used_pct) {
+        None => normal(),
+        Some(ContextAlert::Warn) => Style::default().fg(state_color(AgentState::Working)),
+        Some(ContextAlert::Critical) => Style::default()
+            .fg(state_color(AgentState::Blocked))
+            .add_modifier(Modifier::BOLD),
     }
 }
 

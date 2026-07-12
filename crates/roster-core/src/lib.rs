@@ -20,4 +20,7 @@ pub use context::{context_alert, ContextAlert, CRITICAL_THRESHOLD_PCT, WARN_THRE
 pub use grid::{Cell, CellStyle, Color, Cursor, Grid};
 pub use layout::{Rect, SplitDirection};
 pub use session::{AgentState, Pane, PaneId, Session};
-pub use telemetry::{RateLimit, RateLimitWindow, Telemetry};
+pub use telemetry::{
+    fleet_rate_limit, rate_limit_alert, LimitNotice, LimitNotifier, LimitWindow, RateLimit,
+    RateLimitWindow, Telemetry, LIMIT_CRITICAL_THRESHOLD_PCT, LIMIT_WARN_THRESHOLD_PCT,
+};

@@ -1301,6 +1301,76 @@ fn statusline_telemetry_reaches_the_sidebar_card() {
 }
 
 #[test]
+fn statusline_rate_limits_reach_the_sidebar_footer_and_toast() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A fake claude whose statusline payload carries the account's rate
+    // limits: the five-hour window past the 90% threshold (with a reset
+    // time), the seven-day window healthy. The screen never prints these
+    // numbers — the footer and the toast can only have come through the
+    // socket, the tracker, and the fleet aggregation.
+    let dir = std::env::temp_dir().join(format!("roster-rl-smoke-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create fake agent dir");
+    let script = dir.join("claude");
+    let resets_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after the epoch")
+        .as_secs()
+        + 7500;
+    let payload = format!(
+        r#"{{"rate_limits":{{"five_hour":{{"used_percentage":91.0,"resets_at":{resets_at}}},"seven_day":{{"used_percentage":41.0}}}}}}"#,
+    );
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nprintf 'thinking hard...\\n'\n\
+             printf '%s' '{payload}' | '{roster}' _statusline\n\
+             sleep 2\n",
+            roster = bin(),
+        ),
+    )
+    .expect("write fake agent");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod fake agent");
+
+    let (cols, rows) = (120u16, 30u16);
+    let pty = Pty::spawn(&format!("'{}' '{}'", bin(), script.display()), cols, rows)
+        .expect("spawn roster");
+    let rx = pump(&pty);
+
+    let mut screen = Screen::new(cols, rows);
+
+    // The footer pins both windows to the sidebar bottom: the five-hour
+    // bar with its percentage and reset, the seven-day one percent-only.
+    assert!(
+        drain_while(&mut screen, "5h ▓▓▓▓▓▓▓▓▓░ 91% · resets 2h", true, &rx),
+        "the five-hour footer line never rendered:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert!(
+        drain_while(&mut screen, "wk ▓▓▓▓░░░░░░ 41%", true, &rx),
+        "the seven-day footer line never rendered:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    // Crossing 90% in one reading fires exactly the loud toast.
+    assert!(
+        drain_while(&mut screen, "5-hour limit at 91% · resets 2h", true, &rx),
+        "the critical limit toast never showed:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // The script exits (~2s): the dead pane's tracker leaves the fleet,
+    // so the footer must clear rather than freeze its last numbers.
+    assert!(
+        drain_while(&mut screen, "41%", false, &rx),
+        "the footer never cleared after the pane exited:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn statusline_forwarder_sends_the_payload_verbatim_and_prints_nothing() {
     use std::io::Write as _;
     use std::os::unix::net::UnixListener;

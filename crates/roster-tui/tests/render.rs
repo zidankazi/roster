@@ -74,6 +74,7 @@ fn panes_get_title_bars_and_content_shifts_down() {
         launcher: None,
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: false,
@@ -209,6 +210,7 @@ fn pane_title_prefers_the_panes_terminal_title_over_the_agent_name() {
         launcher: None,
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: false,
@@ -267,6 +269,7 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
         launcher: None,
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: false,
@@ -338,6 +341,7 @@ fn hover_lights_up_interactive_chrome() {
             launcher: None,
             confirm: None,
             toasts: &[],
+            rate_limits: None,
             selection: None,
             scrolled: &scrolled,
             welcome: false,
@@ -418,6 +422,7 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
         launcher: None,
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: false,
@@ -506,6 +511,7 @@ fn degenerate_frames_render_without_panicking() {
                 launcher,
                 confirm,
                 toasts: &[],
+                rate_limits: None,
                 selection: None,
                 scrolled: &scrolled,
                 welcome: overlay == 2,
@@ -547,6 +553,7 @@ fn launcher_modal_overlays_the_frame() {
         launcher: Some((&items, &state)),
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: false,
@@ -590,6 +597,7 @@ fn welcome_screen_shows_wordmark_picker_and_command_hint() {
         launcher: Some((&items, &state)),
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: true,
@@ -648,6 +656,7 @@ fn welcome_wordmark_reveals_with_the_tick() {
             launcher: Some((&items, &state)),
             confirm: None,
             toasts: &[],
+            rate_limits: None,
             selection: None,
             scrolled: &scrolled,
             welcome: true,
@@ -716,6 +725,7 @@ fn exited_pane_overlay_card_and_title_marker() {
         launcher: None,
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: false,
@@ -777,6 +787,7 @@ fn exited_marker_survives_a_long_task_title() {
         launcher: None,
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: false,
@@ -835,6 +846,7 @@ fn exited_marker_survives_a_wide_char_task_title() {
         launcher: None,
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: false,
@@ -879,6 +891,7 @@ fn exited_pane_too_small_for_the_card_keeps_the_strip() {
         launcher: None,
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: false,
@@ -943,6 +956,7 @@ fn sidebar_ranks_globally_across_workspaces_and_tags_cards() {
         launcher: None,
         confirm: None,
         toasts: &[],
+        rate_limits: None,
         selection: None,
         scrolled: &scrolled,
         welcome: false,
@@ -1015,6 +1029,7 @@ fn done_pulse_keeps_sidebar_and_title_glyphs_in_step() {
             launcher: None,
             confirm: None,
             toasts: &[],
+            rate_limits: None,
             selection: None,
             scrolled: &scrolled,
             welcome: false,
@@ -1061,4 +1076,73 @@ fn done_pulse_keeps_sidebar_and_title_glyphs_in_step() {
     }
     assert_eq!(card_off.fg, card_on.fg, "the card pulse changes color");
     assert_eq!(title_off.fg, title_on.fg, "the title pulse changes color");
+}
+
+#[test]
+fn fleet_rate_limit_footer_shows_through_the_full_frame() {
+    let now = Instant::now();
+    let (session, left, right) = two_agent_session(now);
+    let mut grids = HashMap::new();
+    grids.insert(left, Grid::from_text("left"));
+    grids.insert(right, Grid::from_text("right"));
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+    let exited = HashMap::new();
+    let scrolled = HashMap::new();
+    let limits = roster_core::RateLimit {
+        five_hour: Some(roster_core::RateLimitWindow {
+            used_pct: 91.0,
+            resets_in: Some(Duration::from_secs(7500)),
+        }),
+        seven_day: Some(roster_core::RateLimitWindow {
+            used_pct: 41.0,
+            resets_in: None,
+        }),
+    };
+    let draw = |rate_limits: Option<&roster_core::RateLimit>| -> Buffer {
+        let view = View {
+            session: &session,
+            grids: &grids,
+            exited: &exited,
+            entries: &entries,
+            selected: None,
+            hover: None,
+            zoomed: false,
+            side: SidebarSide::Left,
+            launcher: None,
+            confirm: None,
+            toasts: &[],
+            rate_limits,
+            selection: None,
+            scrolled: &scrolled,
+            welcome: false,
+            mode_badge: None,
+            status: "hints",
+            tick: 0,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| render(frame, &view)).unwrap();
+        terminal.backend().buffer().clone()
+    };
+
+    // The footer sits above the pinned + new agent button (row 21), both
+    // windows labeled, the critical five-hour reading in the blocked red.
+    let buf = draw(Some(&limits));
+    assert_eq!(
+        region_text(&buf, 2, 33, 18),
+        " 5h ▓▓▓▓▓▓▓▓▓░ 91% · resets 2h"
+    );
+    assert_eq!(region_text(&buf, 2, 33, 19), " wk ▓▓▓▓░░░░░░ 41%");
+    assert!(region_text(&buf, 2, 33, 21).contains("+ new agent"));
+    let critical = buf.cell((17, 18)).unwrap().style();
+    assert_eq!(critical.fg, Some(state_color(AgentState::Blocked)));
+    assert!(critical.add_modifier.contains(Modifier::BOLD));
+
+    // Without a fleet reading the frame carries no trace of the footer —
+    // the bridge-less layout is exactly the pre-footer one.
+    let without = draw(None);
+    for y in 0..24 {
+        let row = region_text(&without, 0, 80, y);
+        assert!(!row.contains('▓'), "phantom footer row {y}: {row}");
+    }
 }

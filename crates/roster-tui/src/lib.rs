@@ -29,8 +29,8 @@ pub use hit::{hit_test, pointer_for, Hit, Pointer};
 pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
 pub use sidebar::{
-    auto_all_cols, auto_chip_cols, format_age, sidebar_entries, sidebar_rows, Message, Sidebar,
-    SidebarEntry, SidebarRow, SidebarState,
+    auto_all_cols, auto_chip_cols, format_age, limits_footer_height, sidebar_entries, sidebar_rows,
+    Message, Sidebar, SidebarEntry, SidebarRow, SidebarState,
 };
 pub use style::{
     cell_style, muted, selected, selected_muted, state_color, state_glyph, state_glyph_style,
@@ -89,6 +89,11 @@ pub struct View<'a> {
     pub confirm: Option<Option<ConfirmButton>>,
     /// Live toasts, newest first.
     pub toasts: &'a [(&'a str, ToastLevel)],
+    /// The account's fleet-aggregated rate-limit reading, when any pane's
+    /// statusline feed is reporting one — the sidebar pins it as a footer.
+    /// `None` (no bridge, feed gone stale) renders exactly the sidebar
+    /// from before the field existed.
+    pub rate_limits: Option<&'a roster_core::RateLimit>,
     /// An in-progress or finished text selection: the pane and its two
     /// endpoints in pane-content coordinates (either order).
     pub selection: Option<Selection>,
@@ -483,7 +488,8 @@ pub fn render(frame: &mut Frame, view: &View) {
         )
         .focused(focused_entry)
         .hovered_auto(hovered_auto)
-        .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll)),
+        .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
+        .rate_limits(view.rate_limits),
         cards,
     );
 

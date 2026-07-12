@@ -4,8 +4,11 @@
 //! percentage (see [`crate::Telemetry::context_pct`]); no reading means no
 //! alert, never a guess. See `docs/05-claude-native-attention.md`.
 
-/// The urgency of an agent's remaining-context reading.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The urgency of a telemetry reading — the shared warn/critical severity
+/// vocabulary for the remaining-context thresholds here and the rate-limit
+/// thresholds in [`crate::rate_limit_alert`]. Ordered by severity:
+/// `Warn < Critical`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ContextAlert {
     /// Context is getting low; worth a glance.
     Warn,

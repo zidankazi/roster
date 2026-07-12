@@ -145,7 +145,13 @@ pills still win, so one sensitive agent can stay manual. with the statusline
 feed on, the focused card carries a quiet telemetry line — model, context
 remaining, session cost, and the busiest rate-limit window — and any card's
 context badge surfaces on its own (yellow, then red) as that agent nears a
-compaction.
+compaction. the feed also drives fleet-level rate-limit awareness: your
+account's usage limits are one budget shared by every agent, so the sidebar
+pins a footer showing each reported window as a labeled bar (`5h`, `wk`) with
+its used share and reset time, colored quiet below 70%, yellow from 70%, red
+from 90% — and a toast fires once as a window crosses each threshold, so a
+fleet quietly burning through the budget can't surprise you. no feed, no
+footer: bridge-less panes keep the exact screen-scraped sidebar.
 
 this is the first slice of a Claude-native attention layer;
 [`docs/05-claude-native-attention.md`](docs/05-claude-native-attention.md) is

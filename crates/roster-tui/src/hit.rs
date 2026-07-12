@@ -8,7 +8,8 @@ use ratatui::layout::Rect;
 use roster_core::{PaneId, Session};
 
 use crate::sidebar::{
-    auto_all_cols, auto_chip_cols, focused_entry, sidebar_rows, SidebarEntry, SidebarRow,
+    auto_all_cols, auto_chip_cols, focused_entry, limits_footer_height, sidebar_rows, SidebarEntry,
+    SidebarRow,
 };
 use crate::{
     chrome_area, close_button_cols, panes_area, sidebar_button_row, sidebar_inner, status_controls,
@@ -102,12 +103,16 @@ pub fn pointer_for(hit: Hit) -> Pointer {
 
 /// Resolve what sits under (`x`, `y`) for a frame of `area`. With `zoomed`,
 /// the solo pane owns the whole pane region and the tiled layout is
-/// ignored — mirroring what `render` draws in solo view.
+/// ignored — mirroring what `render` draws in solo view. `limits` is the
+/// fleet rate-limit reading render was given: its footer shortens the card
+/// region, and the two sides disagreeing would land footer clicks on cards
+/// the shrunken region no longer shows.
 pub fn hit_test(
     area: Rect,
     session: &Session,
     side: SidebarSide,
     entries: &[SidebarEntry],
+    limits: Option<&roster_core::RateLimit>,
     zoomed: Option<PaneId>,
     pos: (u16, u16),
 ) -> Hit {
@@ -152,6 +157,11 @@ pub fn hit_test(
         if sidebar_button_row(area, side).is_some() {
             cards.height = cards.height.saturating_sub(2);
         }
+        // The fleet rate-limit footer shortens the card region exactly as
+        // render reserves it; its rows are informational, not clickable.
+        cards.height = cards
+            .height
+            .saturating_sub(limits_footer_height(limits, cards.height));
         if y >= cards.y + cards.height {
             return Hit::Sidebar;
         }
@@ -249,62 +259,166 @@ mod tests {
         // Chrome inset (2,1) → sidebar 2..34, panes 34..118, status row 28;
         // the margin itself is dead.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 0)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 0)
+            ),
             Hit::Outside
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (0, 5)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (0, 5)
+            ),
             Hit::Outside
         );
         // The sidebar's own header row is inert background.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 1)
+            ),
             Hit::Sidebar
         );
         // First card rows are 3 and 4 (header + blank above).
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 3)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 3)
+            ),
             Hit::SidebarEntry(0)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 4)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 4)
+            ),
             Hit::SidebarEntry(0)
         );
         // Spacer row, then the second card.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 5)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 5)
+            ),
             Hit::Sidebar
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 6)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 6)
+            ),
             Hit::SidebarEntry(1)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 28)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 28)
+            ),
             Hit::Status
         );
         // The bottom margin row is outside the chrome.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 29)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 29)
+            ),
             Hit::Outside
         );
         // The pinned + new agent button owns the sidebar's bottom row;
         // breathing above it is background (the layout switcher lives on
         // the status row now).
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 27)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 27)
+            ),
             Hit::SidebarNewAgent
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (4, 26)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (4, 26)
+            ),
             Hit::Sidebar
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (11, 26)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (11, 26)
+            ),
             Hit::Sidebar
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 25)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 25)
+            ),
             Hit::Sidebar
         );
     }
@@ -325,10 +439,26 @@ mod tests {
         let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);
 
         let area = Rect::new(0, 0, 120, 30);
-        let first = hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 3));
+        let first = hit_test(
+            area,
+            &session,
+            SidebarSide::Left,
+            &entries,
+            None,
+            None,
+            (5, 3),
+        );
         assert_eq!(first, Hit::SidebarEntry(0));
         assert_eq!(entries[0].pane, b);
-        let second = hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 6));
+        let second = hit_test(
+            area,
+            &session,
+            SidebarSide::Left,
+            &entries,
+            None,
+            None,
+            (5, 6),
+        );
         assert_eq!(second, Hit::SidebarEntry(1));
         assert_eq!(entries[1].pane, a);
     }
@@ -341,48 +471,128 @@ mod tests {
         // toggle at inner cols 20..30 → absolute 22..32; the rest of the
         // header is inert sidebar.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (22, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (22, 1)
+            ),
             Hit::SidebarAutoAll
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (31, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (31, 1)
+            ),
             Hit::SidebarAutoAll
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (32, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (32, 1)
+            ),
             Hit::Sidebar
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (21, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (21, 1)
+            ),
             Hit::Sidebar
         );
 
         // Sidebar inner is 31 wide, so every card's chip spans inner cols
         // 24..30 → absolute 26..32 of its detail row — rows 4 and 7.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (26, 4)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (26, 4)
+            ),
             Hit::SidebarAuto(0)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (31, 4)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (31, 4)
+            ),
             Hit::SidebarAuto(0)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (29, 7)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (29, 7)
+            ),
             Hit::SidebarAuto(1)
         );
         // Off the chip — before it, past it, or the name row above — the
         // click is the card.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (25, 4)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (25, 4)
+            ),
             Hit::SidebarEntry(0)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (32, 4)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (32, 4)
+            ),
             Hit::SidebarEntry(0)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (28, 3)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (28, 3)
+            ),
             Hit::SidebarEntry(0)
         );
     }
@@ -408,22 +618,54 @@ mod tests {
         // Card 0 spans rows 3-5 (name, detail, telemetry); the badge row is
         // the card, not a chip — clicking it jumps.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 5)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 5)
+            ),
             Hit::SidebarEntry(0)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (29, 5)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (29, 5)
+            ),
             Hit::SidebarEntry(0),
             "the chip columns on a telemetry row are still the card"
         );
         // The second card sits a row lower than the two-line layout put it —
         // its chip included. (The full row plan is sidebar.rs's test.)
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 7)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 7)
+            ),
             Hit::SidebarEntry(1)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (29, 8)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (29, 8)
+            ),
             Hit::SidebarAuto(1)
         );
     }
@@ -441,7 +683,15 @@ mod tests {
         // inset) is plain status.
         for x in [100, 108, 115] {
             assert_eq!(
-                hit_test(area, &session, SidebarSide::Left, &entries, None, (x, 28)),
+                hit_test(
+                    area,
+                    &session,
+                    SidebarSide::Left,
+                    &entries,
+                    None,
+                    None,
+                    (x, 28)
+                ),
                 Hit::Status
             );
         }
@@ -460,7 +710,15 @@ mod tests {
             (117, Hit::Status),
         ] {
             assert_eq!(
-                hit_test(area, &session, SidebarSide::Left, &entries, None, (x, 28)),
+                hit_test(
+                    area,
+                    &session,
+                    SidebarSide::Left,
+                    &entries,
+                    None,
+                    None,
+                    (x, 28)
+                ),
                 hit,
                 "at x={x}"
             );
@@ -484,7 +742,15 @@ mod tests {
         // The flat plan has no workspace headers, so the top card row (3)
         // is the globally top-ranked agent — the blocked one in window 1.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 3)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 3)
+            ),
             Hit::SidebarEntry(0)
         );
         assert_eq!(entries[0].pane, b);
@@ -492,7 +758,15 @@ mod tests {
         // The removed triage switcher's old row resolves as inert sidebar
         // background, not a phantom toggle.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (3, 26)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (3, 26)
+            ),
             Hit::Sidebar
         );
     }
@@ -507,30 +781,78 @@ mod tests {
         // Pane area starts at x=34, y=1 (chrome inset). The panel's top
         // border row is the title, rows below are content.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (40, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (40, 1)
+            ),
             Hit::PaneTitle(left_id)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (40, 10)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (40, 10)
+            ),
             Hit::Pane(left_id)
         );
         // Right half begins at local x 42 → absolute 76.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (80, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (80, 1)
+            ),
             Hit::PaneTitle(right_id)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (80, 20)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (80, 20)
+            ),
             Hit::Pane(right_id)
         );
         // Side and bottom borders are the pane — a click anywhere in the
         // panel focuses it.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (34, 10)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (34, 10)
+            ),
             Hit::Pane(left_id)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (40, 27)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (40, 27)
+            ),
             Hit::Pane(left_id)
         );
     }
@@ -545,31 +867,79 @@ mod tests {
         // Left pane: local rect 0..42, ✕ target one column in from the
         // panel corner — local cols 38..41 → absolute 72..75.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (72, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (72, 1)
+            ),
             Hit::PaneClose(left_id)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (74, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (74, 1)
+            ),
             Hit::PaneClose(left_id)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (71, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (71, 1)
+            ),
             Hit::PaneTitle(left_id)
         );
         // The corner itself is the title, not the ✕.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (75, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (75, 1)
+            ),
             Hit::PaneTitle(left_id)
         );
         // Below the title row the same columns are pane content.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (74, 5)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (74, 5)
+            ),
             Hit::Pane(left_id)
         );
         // Right pane: local rect 42..84, ✕ target local 80..83 →
         // absolute 114..117.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (115, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (115, 1)
+            ),
             Hit::PaneClose(right_id)
         );
     }
@@ -590,13 +960,22 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
+                None,
                 zoomed,
                 (80, 10)
             ),
             Hit::Pane(left_id)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, zoomed, (80, 1)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                zoomed,
+                (80, 1)
+            ),
             Hit::PaneTitle(left_id)
         );
         // Full-width panel: 84 wide → ✕ at local 80..83 (absolute
@@ -607,6 +986,7 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
+                None,
                 zoomed,
                 (115, 1)
             ),
@@ -614,7 +994,15 @@ mod tests {
         );
         // The sidebar still resolves normally, so cards switch panes.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, zoomed, (5, 3)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                zoomed,
+                (5, 3)
+            ),
             Hit::SidebarEntry(0)
         );
         let _ = right_id;
@@ -637,15 +1025,39 @@ mod tests {
         // Rows: the agent's card at y3-4, then blank — no header or
         // placeholder rows for the agentless window.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 3)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 3)
+            ),
             Hit::SidebarEntry(0)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 4)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 4)
+            ),
             Hit::SidebarEntry(0)
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 5)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 5)
+            ),
             Hit::Sidebar
         );
     }
@@ -657,11 +1069,27 @@ mod tests {
         // One window: no ⧉ indicator — its columns fall to the solo pill
         // (two panes exist) and plain status beyond it.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (115, 28)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (115, 28)
+            ),
             Hit::StatusViewSolo
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (117, 28)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (117, 28)
+            ),
             Hit::Status
         );
         session.new_window();
@@ -670,16 +1098,111 @@ mod tests {
         // single pane, so the pills hide with it — layouts to switch
         // between are the active window's.
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (115, 28)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (115, 28)
+            ),
             Hit::StatusWindows
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (108, 28)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (108, 28)
+            ),
             Hit::Status
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (60, 28)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (60, 28)
+            ),
             Hit::Status
+        );
+    }
+
+    #[test]
+    fn footer_rows_are_inert_and_never_phantom_cards() {
+        // Enough agents that the row plan reaches past the footer's rows:
+        // without the limits-aware shrink, a click on the footer would
+        // resolve to a card render no longer draws there.
+        let now = Instant::now();
+        let mut session = Session::new();
+        let mut target = session.focused().unwrap();
+        for _ in 0..7 {
+            target = session.split(target, SplitDirection::Horizontal).unwrap();
+        }
+        let ids: Vec<PaneId> = session.panes().into_iter().map(|pane| pane.id).collect();
+        for id in ids {
+            session.pane_mut(id).unwrap().command = Some("claude".into());
+            session.set_reading(id, AgentState::Idle, None, now);
+        }
+        let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);
+        assert_eq!(entries.len(), 8);
+        let limits = roster_core::RateLimit {
+            five_hour: Some(roster_core::RateLimitWindow {
+                used_pct: 62.0,
+                resets_in: None,
+            }),
+            seven_day: Some(roster_core::RateLimitWindow {
+                used_pct: 41.0,
+                resets_in: None,
+            }),
+        };
+        let area = Rect::new(0, 0, 120, 30);
+        // Footer-less, row 24 is the eighth card's name row…
+        assert_eq!(
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 24)
+            ),
+            Hit::SidebarEntry(7)
+        );
+        // …with the footer reserved (3 rows off the card region), the same
+        // click is inert sidebar background, mirroring what render shows.
+        assert_eq!(
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                Some(&limits),
+                None,
+                (5, 24)
+            ),
+            Hit::Sidebar
+        );
+        // Cards above the footer keep their targets.
+        assert_eq!(
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                Some(&limits),
+                None,
+                (5, 21)
+            ),
+            Hit::SidebarEntry(6)
         );
     }
 
@@ -688,11 +1211,27 @@ mod tests {
         let (session, entries) = setup();
         let area = Rect::new(0, 0, 120, 30);
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (121, 5)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (121, 5)
+            ),
             Hit::Outside
         );
         assert_eq!(
-            hit_test(area, &session, SidebarSide::Left, &entries, None, (5, 30)),
+            hit_test(
+                area,
+                &session,
+                SidebarSide::Left,
+                &entries,
+                None,
+                None,
+                (5, 30)
+            ),
             Hit::Outside
         );
     }

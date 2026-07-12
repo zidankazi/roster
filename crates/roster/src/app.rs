@@ -22,7 +22,10 @@ use ratatui::crossterm::event::{
 };
 use ratatui::layout::Rect;
 use ratatui::DefaultTerminal;
-use roster_core::{AgentState, PaneId, Session, SplitDirection};
+use roster_core::{
+    fleet_rate_limit, AgentState, ContextAlert, LimitNotifier, LimitWindow, PaneId, RateLimit,
+    Session, SplitDirection,
+};
 use roster_detect::{AgentKind, Detector, PaneTracker};
 use roster_pty::Pty;
 use roster_term::Screen;
@@ -273,6 +276,16 @@ pub struct App {
     /// set (told via `SetAutoApprove`) and this local copy only drives the
     /// card's `auto` chip. Default empty — auto-approve is opt-in per pane.
     auto_approve: Arc<Mutex<HashSet<u64>>>,
+    /// The account's fleet-aggregated rate-limit reading, recomputed each
+    /// detection tick from the panes' stamped telemetry (rate limits are
+    /// account-scoped; the freshest live reading wins). Drives the sidebar
+    /// footer and the hit-test mirror; `None` — no live feed — leaves both
+    /// exactly as they were before the field existed.
+    rate_limits: Option<RateLimit>,
+    /// Edge state behind the limit toasts: one notice per threshold per
+    /// window, re-armed when usage falls back (see
+    /// `roster_core::LimitNotifier`).
+    limit_notifier: LimitNotifier,
 }
 
 impl App {
@@ -321,6 +334,8 @@ impl App {
             output_rx,
             hook_sock,
             auto_approve,
+            rate_limits: None,
+            limit_notifier: LimitNotifier::new(),
         };
 
         let first = app.session.focused().expect("new session has a pane");
@@ -513,6 +528,8 @@ impl App {
                     .map(|p| p.pane)
                     .collect(),
             )),
+            rate_limits: None,
+            limit_notifier: LimitNotifier::new(),
         };
         for pane in &panes {
             app.attach_remote_pane(PaneId::from_raw(pane.pane), pane.pane, &pane.command);
@@ -746,6 +763,7 @@ impl App {
                 launcher,
                 confirm,
                 toasts: &toast_view,
+                rate_limits: self.rate_limits.as_ref(),
                 selection: self.selection,
                 scrolled: &scrolled,
                 welcome: self.placeholder.is_some(),
@@ -1280,6 +1298,40 @@ impl App {
             self.session
                 .set_reading(*id, reading.state, reading.reason, now);
         }
+        // Rate limits are account-scoped, so the sidebar footer wants one
+        // fleet reading, not a per-card one: merge the panes' stamped
+        // telemetry, freshest window first. The gate matches the loop
+        // above (`kind` cleared on exit takes a pane out), and the stamps
+        // come from the trackers that just purged stale payloads — the
+        // footer can never assert what the cards no longer do.
+        self.rate_limits = fleet_rate_limit(
+            self.runtimes
+                .values()
+                .filter(|rt| rt.kind.is_some())
+                .filter_map(|rt| rt.tracker.telemetry_stamped())
+                .filter_map(|(telemetry, at)| {
+                    telemetry.rate_limit.as_ref().map(|limit| (limit, at))
+                }),
+        );
+        // The notifier owns the edge state: one toast per threshold per
+        // window, re-armed when usage falls back or the window resets.
+        let notices = self.limit_notifier.observe(self.rate_limits.as_ref());
+        for notice in notices {
+            let label = match notice.window {
+                LimitWindow::FiveHour => "5-hour",
+                LimitWindow::SevenDay => "weekly",
+            };
+            let mut text = format!("{label} limit at {:.0}%", notice.used_pct);
+            if let Some(resets) = notice.resets_in {
+                text.push_str(&format!(" · resets {}", roster_tui::format_age(resets)));
+            }
+            let level = match notice.alert {
+                ContextAlert::Warn => ToastLevel::Warn,
+                // 90% is the loud tier: the red, read-me treatment.
+                ContextAlert::Critical => ToastLevel::Error,
+            };
+            self.toast(text, level);
+        }
     }
 
     /// The index of the toast under (`x`, `y`), when one is there.
@@ -1348,6 +1400,7 @@ impl App {
             &self.session,
             self.side,
             &self.last_entries,
+            self.rate_limits.as_ref(),
             self.zoomed_pane(),
             (x, y),
         );

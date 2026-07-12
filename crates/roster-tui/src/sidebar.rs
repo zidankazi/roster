@@ -14,7 +14,11 @@
 //! raised surfaces on the panel's base canvas; the card whose pane holds
 //! focus is the one *inverted* card — light fill, dark text, plus the
 //! accent bar down its left edge — so the sidebar always answers "which
-//! agent am I looking at" from across the room.
+//! agent am I looking at" from across the room. When any pane's feed
+//! reports the account's rate limits, a footer pinned to the panel's
+//! bottom shows each window as a labeled usage bar
+//! (see [`limits_footer_height`]); without one the sidebar renders exactly
+//! its footer-less self.
 
 use std::time::{Duration, Instant};
 
@@ -23,14 +27,16 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
-use roster_core::{AgentState, AttentionItem, PaneId, Session, Telemetry};
+use roster_core::{
+    AgentState, AttentionItem, PaneId, RateLimit, RateLimitWindow, Session, Telemetry,
+};
 use roster_detect::Detector;
 
 use crate::style::{
     bright, chip, muted, normal, selected, selected_muted, state_color, state_glyph,
     state_glyph_style, state_glyph_style_selected, state_label, SURFACE_BASE, SURFACE_RAISED,
 };
-use crate::telemetry::{context_badge, telemetry_line, telemetry_row_visible};
+use crate::telemetry::{context_badge, limit_style, telemetry_line, telemetry_row_visible};
 
 /// One sidebar row: an agent pane and everything shown about it.
 #[derive(Clone, Debug, PartialEq)]
@@ -310,6 +316,63 @@ pub fn auto_all_cols(width: u16) -> Option<std::ops::Range<u16>> {
     (width > taken + button).then(|| width - 1 - button..width - 1)
 }
 
+/// Cells of a footer window's usage bar. Fixed rather than width-scaled:
+/// the bar is a gauge read at a glance, and a length that changes with the
+/// sidebar would make the same percentage look different across layouts.
+const LIMIT_BAR_WIDTH: usize = 10;
+
+/// The rows the sidebar's fleet rate-limit footer occupies at the bottom
+/// of a card region `height` rows tall: one row per reported window plus a
+/// blank spacer above, or 0 with nothing to show. The footer yields whole
+/// on a sidebar too short to keep the header and at least one card above
+/// it — the cards are the product, the footer is chrome. Render draws this
+/// plan and `hit_test` subtracts it, so a click on the footer can't land
+/// on a card the shrunken region no longer shows.
+pub fn limits_footer_height(limits: Option<&RateLimit>, height: u16) -> u16 {
+    let lines = limits.map_or(0, |limits| {
+        u16::from(limits.five_hour.is_some()) + u16::from(limits.seven_day.is_some())
+    });
+    if lines == 0 {
+        return 0;
+    }
+    // Header + its blank + a two-row card + its blank must survive above.
+    let total = lines + 1;
+    if height < total + 5 {
+        return 0;
+    }
+    total
+}
+
+/// One footer line: label, usage bar, percentage, and the reset time when
+/// the window carries one. The filled cells and the percentage wear the
+/// window's severity (see `limit_style`); the empty cells and the reset
+/// stay quiet chrome, so the escalation reads from the numbers that mean
+/// it.
+fn limit_line(label: &str, window: &RateLimitWindow) -> Line<'static> {
+    let severity = limit_style(window.used_pct);
+    // A NaN share casts to 0 filled cells — the bar under-promises on
+    // garbage rather than painting a full gauge.
+    let filled = (window.used_pct / 100.0 * LIMIT_BAR_WIDTH as f32)
+        .round()
+        .clamp(0.0, LIMIT_BAR_WIDTH as f32) as usize;
+    // One space after the label: with the reset tail the line is exactly
+    // the default sidebar's 29-cell budget — a second space would cost the
+    // tail its "2h" on every frame.
+    let mut spans = vec![
+        Span::styled(format!("{label} "), muted()),
+        Span::styled("▓".repeat(filled), severity),
+        Span::styled("░".repeat(LIMIT_BAR_WIDTH - filled), muted()),
+        Span::styled(format!(" {:.0}%", window.used_pct), severity),
+    ];
+    if let Some(resets) = window.resets_in {
+        spans.push(Span::styled(
+            format!(" · resets {}", format_age(resets)),
+            muted(),
+        ));
+    }
+    Line::from(spans)
+}
+
 /// The agent-state sidebar widget.
 pub struct Sidebar<'a> {
     entries: &'a [SidebarEntry],
@@ -320,6 +383,7 @@ pub struct Sidebar<'a> {
     focused: Option<usize>,
     workspaces: usize,
     tick: u64,
+    rate_limits: Option<&'a RateLimit>,
 }
 
 impl<'a> Sidebar<'a> {
@@ -344,7 +408,17 @@ impl<'a> Sidebar<'a> {
             focused: None,
             workspaces,
             tick,
+            rate_limits: None,
         }
+    }
+
+    /// The account's fleet-aggregated rate-limit reading, shown as a footer
+    /// pinned to the panel's bottom. `None` — no pane has live rate-limit
+    /// telemetry — renders exactly the footer-less sidebar from before the
+    /// field existed.
+    pub fn rate_limits(mut self, limits: Option<&'a RateLimit>) -> Self {
+        self.rate_limits = limits;
+        self
     }
 
     /// The entry index whose pane holds focus, marked with an accent bar
@@ -395,7 +469,28 @@ impl Widget for Sidebar<'_> {
         // self-contained for direct rendering in tests.)
         buf.set_style(area, Style::default().bg(SURFACE_BASE));
         let width = usize::from(area.width);
-        let bottom = area.y + area.height;
+        // The fleet rate-limit footer claims the bottom rows first; cards
+        // stop above it. Drawn on the base canvas — account-scoped data
+        // belongs to the panel, not to any one card's raised surface.
+        let footer = limits_footer_height(self.rate_limits, area.height);
+        let bottom = area.y + area.height - footer;
+        if footer > 0 {
+            let five = self
+                .rate_limits
+                .and_then(|limits| limits.five_hour.as_ref());
+            let seven = self
+                .rate_limits
+                .and_then(|limits| limits.seven_day.as_ref());
+            // Indent + right margin, like the header row above.
+            let budget = width.saturating_sub(2);
+            let mut line_y = bottom + 1;
+            for (label, window) in [("5h", five), ("wk", seven)] {
+                let Some(window) = window else { continue };
+                let line = truncate_line(limit_line(label, window), budget, muted());
+                buf.set_line(area.x + 1, line_y, &line, area.width.saturating_sub(1));
+                line_y += 1;
+            }
+        }
         let mut y = area.y;
 
         // Quiet header: lowercase, dim; the blocked count follows it inline
@@ -1872,13 +1967,198 @@ mod tests {
         let now = Instant::now();
         let (session, _) = populated_session(now);
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let limits = both_limits();
         for (w, h) in [(0, 0), (1, 1), (7, 20), (8, 1), (8, 2), (9, 3), (32, 1)] {
             let area = Rect::new(0, 0, w, h);
             let mut buf = Buffer::empty(area);
-            Sidebar::new(&entries, None, None, 1, 0).render(area, &mut buf);
+            Sidebar::new(&entries, None, None, 1, 0)
+                .rate_limits(Some(&limits))
+                .render(area, &mut buf);
             let mut buf = Buffer::empty(area);
-            Sidebar::new(&[], None, None, 1, 0).render(area, &mut buf);
+            Sidebar::new(&[], None, None, 1, 0)
+                .rate_limits(Some(&limits))
+                .render(area, &mut buf);
         }
+    }
+
+    /// A fleet reading with both windows: five-hour healthy with a reset,
+    /// seven-day healthy without one.
+    fn both_limits() -> roster_core::RateLimit {
+        roster_core::RateLimit {
+            five_hour: Some(roster_core::RateLimitWindow {
+                used_pct: 62.0,
+                resets_in: Some(Duration::from_secs(7500)),
+            }),
+            seven_day: Some(roster_core::RateLimitWindow {
+                used_pct: 41.0,
+                resets_in: None,
+            }),
+        }
+    }
+
+    /// A fleet reading with only the five-hour window at `used_pct`, no
+    /// reset time.
+    fn five_hour_limits(used_pct: f32) -> roster_core::RateLimit {
+        roster_core::RateLimit {
+            five_hour: Some(roster_core::RateLimitWindow {
+                used_pct,
+                resets_in: None,
+            }),
+            seven_day: None,
+        }
+    }
+
+    #[test]
+    fn fleet_footer_pins_labeled_usage_bars_to_the_panel_bottom() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let limits = both_limits();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .rate_limits(Some(&limits))
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+
+        // The two windows hold the panel's last rows — five-hour first,
+        // with its reset time; seven-day percent-only — under a blank
+        // spacer, with the cards untouched above.
+        assert_eq!(buffer_row(&buf, 12), " 5h ▓▓▓▓▓▓░░░░ 62% · resets 2h");
+        assert_eq!(buffer_row(&buf, 13), " wk ▓▓▓▓░░░░░░ 41%");
+        assert_eq!(buffer_row(&buf, 11), "");
+        assert!(buffer_row(&buf, 2).starts_with("  ◉ claude-code"));
+
+        // Labels, empty bar cells, and the reset stay quiet chrome; the
+        // healthy filled cells and percentage take the normal tier — and
+        // nothing in the footer leans on DIM (the style.rs regression).
+        assert_eq!(buf.cell((1, 12)).unwrap().style().fg, muted().fg);
+        assert_eq!(buf.cell((5, 12)).unwrap().style().fg, normal().fg);
+        assert_eq!(buf.cell((12, 12)).unwrap().style().fg, muted().fg);
+        assert_eq!(buf.cell((17, 12)).unwrap().style().fg, normal().fg);
+        assert_eq!(buf.cell((21, 12)).unwrap().style().fg, muted().fg);
+        for y in [12, 13] {
+            for x in 0..32 {
+                let style = buf.cell((x, y)).unwrap().style();
+                assert!(
+                    !style.add_modifier.contains(Modifier::DIM),
+                    "footer cell ({x},{y}) uses DIM"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn footer_colors_escalate_at_seventy_and_ninety_used() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let style_of = |used: f32| -> Style {
+            let limits = five_hour_limits(used);
+            let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+            Sidebar::new(&entries, None, None, session.window_count(), 0)
+                .rate_limits(Some(&limits))
+                .render(Rect::new(0, 0, 32, 14), &mut buf);
+            let row = buffer_row(&buf, 13);
+            let x = row[..row.find('%').expect("percent rendered")]
+                .chars()
+                .count() as u16
+                - 2;
+            buf.cell((x, 13)).unwrap().style()
+        };
+        // 69: still the normal ramp. 70: the working yellow says look
+        // soon. 90: the blocked red, bold — the same escalation the
+        // context badge wears, thresholds owned by roster-core.
+        let healthy = style_of(69.0);
+        assert_eq!(healthy.fg, normal().fg);
+        assert!(!healthy.add_modifier.contains(Modifier::BOLD));
+        let warn = style_of(70.0);
+        assert_eq!(warn.fg, Some(state_color(AgentState::Working)));
+        assert!(!warn.add_modifier.contains(Modifier::BOLD));
+        let critical = style_of(90.0);
+        assert_eq!(critical.fg, Some(state_color(AgentState::Blocked)));
+        assert!(critical.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn footer_skips_unreported_windows() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let limits = five_hour_limits(41.0);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .rate_limits(Some(&limits))
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        // One reported window is one footer line on the last row — no
+        // blank "wk" placeholder, no stray reset text.
+        assert_eq!(buffer_row(&buf, 13), " 5h ▓▓▓▓░░░░░░ 41%");
+        assert_eq!(buffer_row(&buf, 12), "");
+        let all: String = (0..14).map(|y| buffer_row(&buf, y) + "\n").collect();
+        assert!(!all.contains("wk"), "unreported window drawn:\n{all}");
+    }
+
+    #[test]
+    fn footerless_sidebars_render_exactly_the_prior_chrome() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let area = Rect::new(0, 0, 32, 14);
+        // A sidebar handed no fleet reading must be cell-for-cell the
+        // sidebar from before the footer existed — the builder's `None`
+        // arm changes nothing a bridge-less user sees.
+        let mut with_none = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .rate_limits(None)
+            .render(area, &mut with_none);
+        let mut without = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, session.window_count(), 0).render(area, &mut without);
+        assert_eq!(with_none, without);
+        let all: String = (0..14).map(|y| buffer_row(&with_none, y) + "\n").collect();
+        assert!(!all.contains('▓'), "phantom footer bar:\n{all}");
+        assert!(!all.contains('░'), "phantom footer bar:\n{all}");
+    }
+
+    #[test]
+    fn narrow_footer_lines_truncate_with_an_ellipsis() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let limits = both_limits();
+        let area = Rect::new(0, 0, 20, 14);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .rate_limits(Some(&limits))
+            .render(area, &mut buf);
+        // Too narrow for the reset tail: the cut is marked like every
+        // other truncated row, never a silent hard clip.
+        let row = buffer_row(&buf, 12);
+        assert!(row.starts_with(" 5h"), "footer line lost: {row}");
+        assert!(row.ends_with('…'), "cut not marked: {row}");
+    }
+
+    #[test]
+    fn footer_yields_whole_when_cards_would_starve() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let limits = both_limits();
+        // Two windows want 3 rows; at height 7 the header and first card
+        // would starve, so the footer disappears entirely rather than
+        // rendering a sliver of it.
+        assert_eq!(limits_footer_height(Some(&limits), 14), 3);
+        assert_eq!(limits_footer_height(Some(&five_hour_limits(50.0)), 14), 2);
+        assert_eq!(limits_footer_height(Some(&limits), 7), 0);
+        assert_eq!(limits_footer_height(None, 14), 0);
+        assert_eq!(
+            limits_footer_height(Some(&roster_core::RateLimit::default()), 14),
+            0
+        );
+        let area = Rect::new(0, 0, 32, 7);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .rate_limits(Some(&limits))
+            .render(area, &mut buf);
+        let all: String = (0..7).map(|y| buffer_row(&buf, y) + "\n").collect();
+        assert!(!all.contains('▓'), "footer on a starved sidebar:\n{all}");
     }
 
     #[test]

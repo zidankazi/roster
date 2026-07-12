@@ -1,6 +1,7 @@
 //! Toast notifications: transient cards stacked in the frame's top-right
-//! corner. Errors (launch failures) get a red border and a ✗; confirmations
-//! a quiet accent ✓. The binary owns their lifetime — spawning, expiry, and
+//! corner. Errors (launch failures) get a red border and a ✗; warnings
+//! (a rate limit filling up) the working yellow and a !; confirmations a
+//! quiet accent ✓. The binary owns their lifetime — spawning, expiry, and
 //! click-to-dismiss — this module only lays them out and draws them.
 
 use ratatui::buffer::Buffer;
@@ -10,13 +11,19 @@ use ratatui::text::Span;
 
 use crate::chrome_area;
 use crate::launcher::{fill, frame};
-use crate::style::{danger, normal, ACCENT, SURFACE_RAISED};
+use crate::style::{danger, normal, state_color, ACCENT, SURFACE_RAISED};
+use roster_core::AgentState;
 
 /// How loud a toast is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToastLevel {
     /// A quiet confirmation ("copied").
     Info,
+    /// A caution the user should notice soon (a rate-limit window past its
+    /// warn threshold) — added because both existing glyphs mislead here:
+    /// Info's ✓ says something succeeded, Error's ✗ says something failed,
+    /// and a filling limit is neither.
+    Warn,
     /// Something failed and the user should read it.
     Error,
 }
@@ -60,9 +67,11 @@ pub fn draw_toasts(buf: &mut Buffer, area: Rect, toasts: &[(&str, ToastLevel)]) 
         }
         fill(buf, *rect, SURFACE_RAISED);
         frame(buf, *rect, "");
-        // Re-tint the border by level: errors read as red.
+        // Re-tint the border by level: errors read as red, warnings as the
+        // working yellow — the same escalation hues the sidebar badges use.
         let border = match level {
             ToastLevel::Info => Style::default().fg(ACCENT),
+            ToastLevel::Warn => Style::default().fg(state_color(AgentState::Working)),
             ToastLevel::Error => Style::default().fg(danger()),
         };
         for y in rect.y..rect.y + rect.height {
@@ -80,6 +89,12 @@ pub fn draw_toasts(buf: &mut Buffer, area: Rect, toasts: &[(&str, ToastLevel)]) 
         }
         let (glyph, glyph_style) = match level {
             ToastLevel::Info => ("✓", Style::default().fg(ACCENT)),
+            ToastLevel::Warn => (
+                "!",
+                Style::default()
+                    .fg(state_color(AgentState::Working))
+                    .add_modifier(Modifier::BOLD),
+            ),
             ToastLevel::Error => (
                 "✗",
                 Style::default().fg(danger()).add_modifier(Modifier::BOLD),
@@ -149,6 +164,26 @@ mod tests {
             .map(|x| buf.cell((x, rect.y + 1)).unwrap().symbol().to_string())
             .collect();
         assert!(row.contains('在'), "message tail clipped: {row}");
+    }
+
+    #[test]
+    fn warnings_render_the_working_yellow_with_a_bang() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        let toasts = vec![("5-hour limit at 71% · resets 2h", ToastLevel::Warn)];
+        draw_toasts(&mut buf, area, &toasts);
+        let rect = toast_rects(area, &toasts)[0];
+        let row: String = (rect.x..rect.x + rect.width)
+            .map(|x| buf.cell((x, rect.y + 1)).unwrap().symbol().to_string())
+            .collect();
+        assert!(row.contains("! 5-hour limit at 71%"), "row: {row}");
+        // Border and glyph take the escalation yellow — the same hue the
+        // sidebar's warn badges use — never the error red or the quiet ✓.
+        let yellow = Some(state_color(AgentState::Working));
+        assert_eq!(buf.cell((rect.x, rect.y)).unwrap().style().fg, yellow);
+        let glyph = buf.cell((rect.x + 2, rect.y + 1)).unwrap().style();
+        assert_eq!(glyph.fg, yellow);
+        assert!(glyph.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
