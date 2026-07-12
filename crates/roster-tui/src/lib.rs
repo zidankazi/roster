@@ -583,12 +583,11 @@ fn draw_title(
     let text = if view.exited.contains_key(&id) {
         // The exit marker survives any task title: the label yields the
         // cells, since a truncated name still reads but a truncated marker
-        // vanishes. Chars approximate cells here; a run of double-width
-        // glyphs can still cost the suffix its tail, which set_stringn
-        // clips safely.
-        let keep = budget.saturating_sub(EXITED_SUFFIX.chars().count());
-        let short: String = label.chars().take(keep).collect();
-        format!("{short}{EXITED_SUFFIX}")
+        // vanishes. The label's cut is cell-budgeted (the suffix itself is
+        // ASCII) so a run of double-width glyphs cannot cost the suffix
+        // its tail.
+        let room = budget.saturating_sub(EXITED_SUFFIX.chars().count());
+        format!("{}{EXITED_SUFFIX}", sidebar::truncate(&label, room))
     } else {
         label
     };

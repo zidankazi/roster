@@ -6,6 +6,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 
 use crate::chrome_area;
 use crate::launcher::{fill, frame};
@@ -33,8 +34,11 @@ pub fn toast_rects(area: Rect, toasts: &[(&str, ToastLevel)]) -> Vec<Rect> {
     toasts
         .iter()
         .map(|(text, _)| {
-            // ✗, spaces, and the border take 6 columns around the text.
-            let width = (text.chars().count() as u16 + 6)
+            // ✗, spaces, and the border take 6 columns around the text,
+            // which is measured in display cells — launch-failure toasts
+            // quote the user's command, and wide chars cost two.
+            let cells = Span::raw(*text).width().min(usize::from(MAX_WIDTH)) as u16;
+            let width = (cells + 6)
                 .clamp(12, MAX_WIDTH)
                 .min(area.width.saturating_sub(2));
             let x = area.x + area.width.saturating_sub(width + 1);
@@ -129,6 +133,22 @@ mod tests {
         assert_eq!(rects[0].height, TOAST_HEIGHT);
         assert_eq!(rects[1].height, 0);
         assert_eq!(rects[2].height, 0);
+    }
+
+    #[test]
+    fn wide_char_toasts_size_by_cells() {
+        // Ten double-width chars are twenty cells; sized by chars the card
+        // would be sixteen wide and clip the message's tail.
+        let area = Rect::new(0, 0, 120, 30);
+        let toasts = vec![("启动失败：命令不存在", ToastLevel::Error)];
+        let rect = toast_rects(area, &toasts)[0];
+        assert_eq!(rect.width, 26);
+        let mut buf = Buffer::empty(area);
+        draw_toasts(&mut buf, area, &toasts);
+        let row: String = (rect.x..rect.x + rect.width)
+            .map(|x| buf.cell((x, rect.y + 1)).unwrap().symbol().to_string())
+            .collect();
+        assert!(row.contains('在'), "message tail clipped: {row}");
     }
 
     #[test]

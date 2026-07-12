@@ -8,9 +8,11 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 use ratatui::widgets::Widget;
 use roster_detect::Detector;
 
+use crate::sidebar::truncate;
 use crate::style::{
     bright, muted, normal, selected as selected_surface, selected_muted, ACCENT, ACCENT_FAINT,
     ACCENT_SHINE, SURFACE_BASE, SURFACE_RAISED,
@@ -507,21 +509,26 @@ impl Widget for Launcher<'_> {
             );
             // The command sits right-aligned and quiet — truncated with an
             // ellipsis when it would otherwise run into the item's name.
+            // Width math is in display cells (user config can hold wide
+            // chars): counted in chars, a wide command both starts too far
+            // right and paints through the modal's right border.
             let cmd_style = if is_selected {
                 selected_muted()
             } else {
                 muted()
             };
-            let name_end = inner_x + 2 + item.name.chars().count() as u16;
-            let right_edge = modal.x + modal.width - 2;
+            // usize throughout: a config string past 65k cells would wrap
+            // u16 arithmetic; the casts back down are bounded by the modal.
+            let name_end = usize::from(inner_x) + 2 + Span::raw(item.name.as_str()).width();
+            let right_edge = usize::from(modal.x + modal.width - 2);
             let avail = right_edge.saturating_sub(name_end + 2);
-            let cmd_len = item.command.chars().count() as u16;
-            if cmd_len <= avail {
-                buf.set_string(right_edge - cmd_len, y, &item.command, cmd_style);
+            let cmd_cells = Span::raw(item.command.as_str()).width();
+            if cmd_cells <= avail {
+                buf.set_string((right_edge - cmd_cells) as u16, y, &item.command, cmd_style);
             } else if avail >= 8 {
-                let mut cut: String = item.command.chars().take(usize::from(avail) - 1).collect();
-                cut.push('…');
-                buf.set_string(right_edge - avail, y, &cut, cmd_style);
+                let cut = truncate(&item.command, avail);
+                let cut_cells = Span::raw(cut.as_str()).width();
+                buf.set_string((right_edge - cut_cells) as u16, y, &cut, cmd_style);
             }
             y += 1;
         }
@@ -692,6 +699,34 @@ mod tests {
         let items = items();
         let state = LauncherState::new();
         assert_eq!(state.command(&items).as_deref(), Some("claude"));
+    }
+
+    #[test]
+    fn wide_char_commands_stay_inside_the_modal() {
+        // User config can put wide chars in a launch command; counted in
+        // chars the right-aligned column starts too far right and paints
+        // through the modal's right border.
+        let items = vec![LaunchItem {
+            name: "claude-code".into(),
+            command: "claude 二十文字のコマンド".into(),
+        }];
+        let state = LauncherState::new();
+        let area = Rect::new(0, 0, 60, 20);
+        let mut buf = Buffer::empty(area);
+        Launcher::new(&items, &state).render(area, &mut buf);
+        let row_y = (0..20u16)
+            .find(|y| (0..60u16).any(|x| buf.cell((x, *y)).unwrap().symbol() == "二"))
+            .expect("command row rendered");
+        let row: Vec<String> = (0..60u16)
+            .map(|x| buf.cell((x, row_y)).unwrap().symbol().to_string())
+            .collect();
+        let last = row.iter().rposition(|s| !s.trim().is_empty()).unwrap();
+        assert_eq!(
+            row[last],
+            "│",
+            "command painted through the modal border: {}",
+            row.concat()
+        );
     }
 
     #[test]

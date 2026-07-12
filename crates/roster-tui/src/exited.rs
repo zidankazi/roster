@@ -6,8 +6,10 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
+use ratatui::text::Span;
 
 use crate::launcher::{fill, frame};
+use crate::sidebar::truncate;
 use crate::style::{bright, SURFACE_RAISED};
 
 const CARD_WIDTH: u16 = 30;
@@ -63,17 +65,16 @@ pub fn draw_exited(
     frame(buf, card, " exited ");
 
     // The exit code is the payload — truncate the name, never the code.
+    // All width math is in display cells: a wide-char task title that fits
+    // by char count would run the paint budget out inside the suffix and
+    // push the char-centered start past the card's right border.
     let suffix = format!(" · exit {code}");
-    let room = usize::from(card.width.saturating_sub(4)).saturating_sub(suffix.chars().count());
-    let name: String = if name.chars().count() > room {
-        let mut cut: String = name.chars().take(room.saturating_sub(1)).collect();
-        cut.push('…');
-        cut
-    } else {
-        name.to_string()
-    };
+    let budget = usize::from(card.width.saturating_sub(4));
+    let room = budget.saturating_sub(Span::raw(suffix.as_str()).width());
+    let name = truncate(name, room);
     let message = format!("{name}{suffix}");
-    let msg_x = card.x + (card.width.saturating_sub(message.chars().count() as u16)) / 2;
+    let cells = Span::raw(message.as_str()).width() as u16;
+    let msg_x = card.x + (card.width.saturating_sub(cells)) / 2;
     buf.set_stringn(
         msg_x.max(card.x + 2),
         card.y + 1,
@@ -162,6 +163,35 @@ mod tests {
             .collect();
         assert!(all.contains("· exit 127"), "code cut off:\n{all}");
         assert!(all.contains('…'), "name should show truncation:\n{all}");
+    }
+
+    #[test]
+    fn wide_char_names_keep_the_exit_code_and_border() {
+        // Agent task titles carry wide chars verbatim; counted in chars
+        // the cell budget ran out inside the suffix and the char-centered
+        // start pushed the paint over the card's right border.
+        let area = Rect::new(0, 0, 60, 12);
+        let mut buf = Buffer::empty(area);
+        assert!(draw_exited(
+            &mut buf,
+            area,
+            "修复认证模块的错误处理",
+            127,
+            false,
+            false
+        ));
+        let card = exited_card_rect(area).unwrap();
+        let row: String = (card.x..card.x + card.width)
+            .map(|x| buf.cell((x, card.y + 1)).unwrap().symbol().to_string())
+            .collect();
+        assert!(row.contains("· exit 127"), "exit code lost: {row}");
+        assert_eq!(
+            buf.cell((card.x + card.width - 1, card.y + 1))
+                .unwrap()
+                .symbol(),
+            "│",
+            "card border overwritten: {row}"
+        );
     }
 
     #[test]

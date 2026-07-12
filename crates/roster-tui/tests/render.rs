@@ -801,6 +801,62 @@ fn exited_marker_survives_a_long_task_title() {
 }
 
 #[test]
+fn exited_marker_survives_a_wide_char_task_title() {
+    // The same guarantee measured in cells: agent task titles carry wide
+    // chars verbatim, and a run of double-width glyphs must not cost the
+    // ` · exited` marker its tail.
+    let now = Instant::now();
+    let mut session = Session::new();
+    let only = session.focused().unwrap();
+    session.pane_mut(only).unwrap().command = Some("claude".into());
+    session.set_reading(only, AgentState::Idle, None, now);
+    session.set_title(
+        only,
+        Some("修复认证模块的错误处理逻辑然后重新运行测试修复认证模块的错误处理".into()),
+    );
+
+    let mut grids = HashMap::new();
+    grids.insert(only, Grid::from_text("final output"));
+    let mut exited = HashMap::new();
+    exited.insert(only, 3u32);
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+
+    let scrolled = HashMap::new();
+    let view = View {
+        session: &session,
+        grids: &grids,
+        exited: &exited,
+        entries: &entries,
+        selected: None,
+        hover: None,
+        zoomed: false,
+        side: SidebarSide::Left,
+        launcher: None,
+        confirm: None,
+        toasts: &[],
+        selection: None,
+        scrolled: &scrolled,
+        welcome: false,
+        mode_badge: None,
+        status: "",
+        tick: 0,
+    };
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+    terminal.draw(|frame| render(frame, &view)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    let title = region_text(&buf, 34, 78, 1);
+    // Wide glyphs read back with placeholder-cell gaps, so match one char.
+    assert!(title.contains('修'), "title lost the task: {title}");
+    assert!(
+        title.contains("· exited"),
+        "title lost the exit marker: {title}"
+    );
+}
+
+#[test]
 fn exited_pane_too_small_for_the_card_keeps_the_strip() {
     let mut session = Session::new();
     let only = session.focused().unwrap();

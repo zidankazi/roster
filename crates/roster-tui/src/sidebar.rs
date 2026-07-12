@@ -679,13 +679,41 @@ pub fn format_age(age: Duration) -> String {
     }
 }
 
-fn truncate(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
+/// Truncate `text` to at most `width` display cells, marking a cut with a
+/// trailing `…`. Budgets by cells, not chars — the buffer clips by cells,
+/// and a double-width char (names and reasons copy agent output verbatim)
+/// counted as one would paint past its budget into whatever sits to the
+/// right. A wide char that doesn't fit whole is dropped whole. Shared by
+/// the exited card and the launcher, whose columns have the same hazard.
+pub(crate) fn truncate(text: &str, width: usize) -> String {
+    if Span::raw(text).width() <= width {
         return text.to_string();
     }
-    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
+    if width == 0 {
+        return String::new();
+    }
+    let mut out = text[..cell_cut(text, width - 1)].to_string();
     out.push('…');
     out
+}
+
+/// The byte end of the widest prefix of `text` fitting `budget` display
+/// cells — a wide char that doesn't fit whole is dropped whole. The single
+/// owner of the cell-counting cut both [`truncate`] and [`truncate_line`]
+/// rely on; two copies of this loop would drift.
+fn cell_cut(text: &str, budget: usize) -> usize {
+    let mut used = 0;
+    let mut end = 0;
+    for (at, ch) in text.char_indices() {
+        let next = at + ch.len_utf8();
+        let cells = Span::raw(&text[at..next]).width();
+        if used + cells > budget {
+            break;
+        }
+        used += cells;
+        end = next;
+    }
+    end
 }
 
 /// [`truncate`] for a styled line, keeping each span's style: a cut is
@@ -710,19 +738,7 @@ fn truncate_line(line: Line<'static>, width: usize, ellipsis: Style) -> Line<'st
             budget -= span.width();
             spans.push(span);
         } else {
-            // Cut inside the span on a char boundary, counting cells: a
-            // wide char that doesn't fit whole is dropped whole.
-            let mut end = 0;
-            let mut used = 0;
-            for (at, ch) in span.content.char_indices() {
-                let next = at + ch.len_utf8();
-                let cells = Span::raw(&span.content[at..next]).width();
-                if used + cells > budget {
-                    break;
-                }
-                used += cells;
-                end = next;
-            }
+            let end = cell_cut(&span.content, budget);
             spans.push(Span::styled(span.content[..end].to_string(), span.style));
             budget = 0;
         }
@@ -1466,6 +1482,42 @@ mod tests {
             "second card detail: {}",
             buffer_row(&buf, 7)
         );
+    }
+
+    #[test]
+    fn truncate_budgets_by_cells_not_chars() {
+        // Five double-width chars are ten cells; a five-cell budget keeps
+        // two whole chars (four cells) plus the one-cell ellipsis.
+        assert_eq!(truncate("修复认证模", 5), "修复…");
+        assert_eq!(truncate("修复认证模", 10), "修复认证模");
+        assert_eq!(truncate("plain", 5), "plain");
+        assert_eq!(truncate("plainer", 5), "plai…");
+        // Zero width paints nothing — an `…` would land in a cell the
+        // budget doesn't own (the age column on the narrowest sidebar).
+        assert_eq!(truncate("anything", 0), "");
+    }
+
+    #[test]
+    fn wide_char_names_stay_inside_their_cell_budget() {
+        let now = Instant::now();
+        let (mut session, ids) = populated_session(now);
+        // The live task title wins the name row (display_name), and agent
+        // task titles carry wide chars verbatim. Counted in chars it would
+        // paint over the right-aligned age and everything past it.
+        session.set_title(
+            ids[1],
+            Some("修复认证模块的错误处理逻辑然后重新运行测试".into()),
+        );
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 24, 16));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 24, 16), &mut buf);
+        let all: String = (0..16).map(|y| buffer_row(&buf, y) + "\n").collect();
+        assert!(
+            all.contains("30s"),
+            "age overwritten by a wide name:\n{all}"
+        );
+        assert!(all.contains('…'), "cut not marked:\n{all}");
     }
 
     #[test]
