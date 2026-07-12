@@ -3,9 +3,11 @@
 //! [`Screen`] wraps `alacritty_terminal`'s parser and grid — escape
 //! sequences, scroll regions, the alternate screen buffer (what makes
 //! full-screen TUIs render right) are all alacritty's battle-tested code.
-//! This crate only feeds it bytes and reads back a plain
-//! [`roster_core::Grid`] snapshot, which is the boundary that keeps
-//! `roster-detect` and `roster-tui` free of any emulator dependency.
+//! This crate feeds it bytes and reads back a plain
+//! [`roster_core::Grid`] snapshot of the viewport — the boundary that
+//! keeps `roster-detect` and `roster-tui` free of any emulator dependency
+//! — plus, for the binary's copy path only, linear selection text that may
+//! span scrollback history ([`Screen::linear_text`]).
 
 use std::sync::{Arc, Mutex};
 
@@ -509,6 +511,27 @@ mod tests {
         assert_eq!(screen.history_size(), 0);
         for (a, b) in [((6, 0), (3, 2)), ((0, 0), (11, 3)), ((4, 1), (4, 1))] {
             assert_eq!(screen.linear_text(a, b), screen.grid().linear_text(a, b));
+        }
+    }
+
+    #[test]
+    fn absolute_and_viewport_extraction_agree_while_scrolled() {
+        // grid() returns a window into history while scrolled; extracting
+        // the same span through viewport coordinates and through absolute
+        // rows must agree — this is the guard against the two linear_text
+        // implementations drifting apart on history reads.
+        let mut screen = Screen::new(10, 3);
+        for i in 0..20 {
+            screen.advance(format!("line{i}\r\n").as_bytes());
+        }
+        screen.scroll_display(7);
+        let top = screen.history_size() - screen.display_offset();
+        for (a, b) in [((0, 0), (9, 2)), ((3, 0), (2, 1)), ((5, 2), (5, 2))] {
+            assert_eq!(
+                screen.linear_text((a.0, top + a.1), (b.0, top + b.1)),
+                screen.grid().linear_text(a, b),
+                "span {a:?}..{b:?} diverged"
+            );
         }
     }
 

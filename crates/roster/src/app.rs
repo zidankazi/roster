@@ -255,19 +255,16 @@ pub struct App {
     pointer: Pointer,
     /// Transient notification cards, newest first.
     toasts: Vec<Toast>,
-    /// A mouse-drag selection being made: the pane and the anchor cell, as
-    /// a content-local column and a scrollback-absolute row (see
-    /// [`absolute_row`]) — anchored to the text, not the screen, so the
-    /// drag survives the view scrolling under it.
-    sel_anchor: Option<(PaneId, SelPoint)>,
-    /// The current selection: pane and both endpoints in the same absolute
-    /// coordinates as [`Self::sel_anchor`]. Highlighted (converted to
+    /// A mouse-drag selection being made, `None` outside a drag — one
+    /// field, so every path that ends the drag drops all of its state at
+    /// once.
+    sel_drag: Option<SelectionDrag>,
+    /// The current selection: pane and both endpoints as content-local
+    /// columns and scrollback-absolute rows (see [`absolute_row`]) —
+    /// anchored to the text, not the screen. Highlighted (converted to
     /// viewport cells each frame) until the next click or keystroke;
     /// copied on release.
     selection: Option<(PaneId, SelPoint, SelPoint)>,
-    /// When the drag auto-scroll last stepped, so an event-burst frame
-    /// rate doesn't turn into a scroll burst. `None` outside a drag.
-    sel_scrolled: Option<Instant>,
     /// The persistent session this app is attached to, if any.
     remote: Option<RemoteSession>,
     quit: bool,
@@ -333,9 +330,8 @@ impl App {
             last_click: None,
             pointer: Pointer::Default,
             toasts: Vec::new(),
-            sel_anchor: None,
+            sel_drag: None,
             selection: None,
-            sel_scrolled: None,
             remote: None,
             quit: false,
             output_tx,
@@ -507,9 +503,8 @@ impl App {
             last_click: None,
             pointer: Pointer::Default,
             toasts: Vec::new(),
-            sel_anchor: None,
+            sel_drag: None,
             selection: None,
-            sel_scrolled: None,
             remote: Some(RemoteSession {
                 name: name.to_string(),
                 writer: Arc::new(Mutex::new(writer)),
@@ -584,9 +579,7 @@ impl App {
     /// Attach a freshly spawned command to an existing model pane and start
     /// its reader thread.
     fn attach(&mut self, id: PaneId, command: &str) -> Result<(), String> {
-        if self.selection.map(|s| s.0) == Some(id) {
-            self.selection = None;
-        }
+        self.drop_selection(id);
         // Every pane learns its identity and the hook socket, so a claude
         // running in it can report exact state back through its hooks.
         // (Reports render only for identified claude panes — see
@@ -655,9 +648,7 @@ impl App {
             .expect("remote pane outside a session")
             .writer
             .clone();
-        if self.selection.map(|s| s.0) == Some(id) {
-            self.selection = None;
-        }
+        self.drop_selection(id);
         self.runtimes.insert(
             id,
             PaneRuntime {
@@ -700,7 +691,7 @@ impl App {
             let size = terminal.size()?;
             self.last_area = Rect::new(0, 0, size.width, size.height);
             self.sync_layout(self.last_area);
-            self.autoscroll_selection();
+            self.tick_drag_selection();
             self.detect_if_due();
             self.toasts.retain(|toast| toast.born.elapsed() < TOAST_TTL);
             self.sync_remote_layout();
@@ -1267,6 +1258,10 @@ impl App {
             if rt.screen.size() != (content.width, content.height) {
                 rt.screen.resize(content.width, content.height);
                 let _ = rt.io.resize(content.width, content.height);
+                // Reflow rewrites history line boundaries, so the
+                // selection's absolute rows now name different text —
+                // drop it rather than highlight (or copy) the wrong lines.
+                self.drop_selection(id);
             }
         }
     }
@@ -1419,9 +1414,8 @@ impl App {
     fn pointer_sel_point(&self, id: PaneId, x: u16, y: u16) -> Option<SelPoint> {
         let content = self.pane_content_rect(id)?;
         let rt = self.runtimes.get(&id)?;
-        let clamp = |v: u16, lo: u16, hi: u16| v.max(lo).min(hi);
-        let cx = clamp(x, content.x, content.x + content.width.saturating_sub(1));
-        let cy = clamp(y, content.y, content.y + content.height.saturating_sub(1));
+        let cx = x.clamp(content.x, content.x + content.width.saturating_sub(1));
+        let cy = y.clamp(content.y, content.y + content.height.saturating_sub(1));
         Some((
             cx - content.x,
             absolute_row(
@@ -1432,25 +1426,59 @@ impl App {
         ))
     }
 
-    /// While a drag-selection is held at a pane's top or bottom content
-    /// edge, scroll that pane's history one step toward the pointer and
-    /// re-extend the selection — drag events only arrive while the mouse
-    /// moves, so the render loop drives this for a held-still pointer.
-    /// Rate-limited by [`DRAG_SCROLL_EVERY`]; a no-op on the alternate
-    /// screen (no history) and before the drag has produced a selection,
-    /// so a held click on an edge row never scrolls.
-    fn autoscroll_selection(&mut self) {
-        let Some((id, anchor)) = self.sel_anchor else {
+    /// Drop the selection and any in-progress drag that belong to `id` —
+    /// the shared invalidation for every event that re-keys or replaces
+    /// the pane's buffer (close, reattach, resize reflow).
+    fn drop_selection(&mut self, id: PaneId) {
+        if self.selection.map(|s| s.0) == Some(id) {
+            self.selection = None;
+        }
+        if self.sel_drag.map(|d| d.pane) == Some(id) {
+            self.sel_drag = None;
+        }
+    }
+
+    /// Per-frame upkeep of an in-progress drag-selection. Drops the drag
+    /// (and its selection) when the pane is gone or flipped between the
+    /// primary and alternate screens — either re-keys the absolute rows,
+    /// and copying remapped text would be worse than losing the drag.
+    /// Otherwise, while the drag is held past the pane's top or bottom
+    /// content edge, scrolls that pane's history one step toward the
+    /// pointer and re-extends the selection — drag events only arrive
+    /// while the mouse moves, so the render loop drives this for a
+    /// held-still pointer. Rate-limited by [`DRAG_SCROLL_EVERY`]; inert
+    /// while a modal owns the mouse and before the drag has produced a
+    /// selection, so a held click on an edge row never scrolls.
+    fn tick_drag_selection(&mut self) {
+        let Some(drag) = self.sel_drag else {
             return;
         };
+        let id = drag.pane;
+        let alive = self
+            .runtimes
+            .get(&id)
+            .is_some_and(|rt| rt.screen.alternate_screen() == drag.alt);
+        if !alive {
+            self.sel_drag = None;
+            self.selection = None;
+            return;
+        }
+        // The alternate screen has no history to scroll; the drag itself
+        // stays exactly as before.
+        if drag.alt {
+            return;
+        }
+        if !matches!(self.mode, Mode::Normal) {
+            return;
+        }
         if self.selection.map(|s| s.0) != Some(id) {
             return;
         }
         let Some((x, y)) = self.last_mouse else {
             return;
         };
-        if self
-            .sel_scrolled
+        if drag
+            .scrolled
             .is_some_and(|at| at.elapsed() < DRAG_SCROLL_EVERY)
         {
             return;
@@ -1465,15 +1493,14 @@ impl App {
         let Some(rt) = self.runtimes.get_mut(&id) else {
             return;
         };
-        if rt.screen.alternate_screen() {
-            return;
-        }
         rt.screen.scroll_display(delta);
-        self.sel_scrolled = Some(Instant::now());
+        if let Some(drag) = &mut self.sel_drag {
+            drag.scrolled = Some(Instant::now());
+        }
         // The pointer sits still while the text moves under it: re-read the
         // endpoint so the selection keeps extending.
         if let Some(end) = self.pointer_sel_point(id, x, y) {
-            self.selection = Some((id, anchor, end));
+            self.selection = Some((id, drag.anchor, end));
         }
     }
 
@@ -1822,23 +1849,26 @@ impl App {
                         // absolute rows so it stays glued to its text
                         // while the view scrolls.
                         if !grabbed && matches!(hit, Hit::Pane(_)) {
-                            if let Some(content) = self.pane_content_rect(id) {
-                                if x >= content.x
+                            let inside = self.pane_content_rect(id).is_some_and(|content| {
+                                x >= content.x
                                     && x < content.x + content.width
                                     && y >= content.y
                                     && y < content.y + content.height
-                                {
-                                    if let Some(rt) = self.runtimes.get(&id) {
-                                        let point = (
-                                            x - content.x,
-                                            absolute_row(
-                                                y - content.y,
-                                                rt.screen.history_size(),
-                                                rt.screen.display_offset(),
-                                            ),
-                                        );
-                                        self.sel_anchor = Some((id, point));
-                                    }
+                            });
+                            if inside {
+                                // Inside the rect the clamp is the identity,
+                                // so this is the press cell itself.
+                                if let Some(anchor) = self.pointer_sel_point(id, x, y) {
+                                    let alt = self
+                                        .runtimes
+                                        .get(&id)
+                                        .is_some_and(|rt| rt.screen.alternate_screen());
+                                    self.sel_drag = Some(SelectionDrag {
+                                        pane: id,
+                                        anchor,
+                                        alt,
+                                        scrolled: None,
+                                    });
                                 }
                             }
                         }
@@ -1857,19 +1887,26 @@ impl App {
                     {
                         self.dragging = Some(new_pos);
                     }
-                } else if let Some((id, anchor)) = self.sel_anchor {
+                } else if let Some(drag) = self.sel_drag {
                     // Extend the selection to the cell under the pointer,
                     // clamped into the pane's content and converted to the
                     // pane's absolute rows at the current scroll position.
-                    if let Some(end) = self.pointer_sel_point(id, x, y) {
-                        self.selection = Some((id, anchor, end));
+                    // (A pane that flipped screens since the press is
+                    // dropped by the next tick; don't extend into it.)
+                    let same_screen = self
+                        .runtimes
+                        .get(&drag.pane)
+                        .is_some_and(|rt| rt.screen.alternate_screen() == drag.alt);
+                    if same_screen {
+                        if let Some(end) = self.pointer_sel_point(drag.pane, x, y) {
+                            self.selection = Some((drag.pane, drag.anchor, end));
+                        }
                     }
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.dragging = None;
-                self.sel_anchor = None;
-                self.sel_scrolled = None;
+                self.sel_drag = None;
                 // A completed drag-selection copies itself — click-drag,
                 // release, pasted anywhere. Extraction reads the emulator's
                 // full buffer, so a selection that auto-scrolled through
@@ -1900,6 +1937,12 @@ impl App {
                 }
             }
             MouseEventKind::Moved => {
+                // Motion with no button held means the release happened
+                // where we couldn't see it (outside the window, over a
+                // modal): end the drag, or the edge auto-scroll would keep
+                // running off a phantom button. The highlight stays; the
+                // copy is lost with the release.
+                self.sel_drag = None;
                 let shape = self.pointer_shape_at(x, y);
                 set_pointer(&mut self.pointer, shape);
             }
@@ -2111,12 +2154,7 @@ impl App {
         if self.placeholder == Some(id) {
             self.placeholder = None;
         }
-        if self.selection.map(|s| s.0) == Some(id) {
-            self.selection = None;
-        }
-        if self.sel_anchor.map(|s| s.0) == Some(id) {
-            self.sel_anchor = None;
-        }
+        self.drop_selection(id);
         // A session-owned pane dies on the server, not by drop.
         if let Some(PaneIo::Remote { pane, .. }) = self.runtimes.get(&id).map(|rt| &rt.io) {
             self.remote_send(&Frame::Close { pane: *pane });
@@ -2238,6 +2276,23 @@ fn is_prefix(key: &KeyEvent) -> bool {
 /// (see [`absolute_row`]).
 type SelPoint = (u16, usize);
 
+/// An in-progress mouse drag-selection: where it anchored, plus the upkeep
+/// state that must end with the drag.
+#[derive(Clone, Copy)]
+struct SelectionDrag {
+    /// The pane being selected in.
+    pane: PaneId,
+    /// The anchor endpoint, fixed at press time.
+    anchor: SelPoint,
+    /// Whether the pane was on the alternate screen at press time. A flip
+    /// mid-drag re-keys every absolute row (the alternate screen has no
+    /// history), so the drag is dropped rather than copy remapped text.
+    alt: bool,
+    /// When the edge auto-scroll last stepped — the rate limit that keeps
+    /// an event-burst frame rate from becoming a scroll burst.
+    scrolled: Option<Instant>,
+}
+
 /// Rows a drag auto-scroll steps per tick — modest, so the selection stays
 /// readable while it grows.
 const DRAG_SCROLL_ROWS: i32 = 2;
@@ -2279,7 +2334,7 @@ fn viewport_selection(
     if (a.1, a.0) > (b.1, b.0) {
         std::mem::swap(&mut a, &mut b);
     }
-    let top = history_size.saturating_sub(display_offset);
+    let top = absolute_row(0, history_size, display_offset);
     let bottom = top + usize::from(rows);
     if b.1 < top || a.1 >= bottom {
         return None;
@@ -2299,15 +2354,17 @@ fn viewport_selection(
 
 /// The auto-scroll step for a drag whose pointer sits at `pointer_y`
 /// against a content rect spanning `top..top + height`: positive (into
-/// history) at or above the top edge row, negative at or below the bottom
-/// edge row, zero in the interior. Panes of one row or less never scroll —
-/// both edges are the same cell.
+/// history) above the content, negative below it, zero anywhere inside.
+/// Content rows themselves — including the first and last — never scroll,
+/// so text on them stays precisely selectable; the pane's border row is
+/// always reachable as the trigger because content is inset from the
+/// panel frame.
 fn edge_scroll_delta(pointer_y: u16, top: u16, height: u16) -> i32 {
-    if height <= 1 {
+    if height == 0 {
         0
-    } else if pointer_y <= top {
+    } else if pointer_y < top {
         DRAG_SCROLL_ROWS
-    } else if pointer_y >= top + height - 1 {
+    } else if pointer_y >= top + height {
         -DRAG_SCROLL_ROWS
     } else {
         0
@@ -2626,19 +2683,20 @@ mod tests {
     }
 
     #[test]
-    fn drags_scroll_at_the_content_edges_only() {
+    fn drags_scroll_only_past_the_content_edges() {
         // A content rect spanning rows 5..15 (top 5, height 10).
-        // At or past the top edge: scroll up into history.
-        assert!(edge_scroll_delta(5, 5, 10) > 0);
+        // Above the content (the pane border row and beyond): scroll up.
+        assert!(edge_scroll_delta(4, 5, 10) > 0);
         assert!(edge_scroll_delta(0, 5, 10) > 0);
-        // At or past the bottom edge row (14): scroll back down.
-        assert!(edge_scroll_delta(14, 5, 10) < 0);
+        // Below the content: scroll back down.
+        assert!(edge_scroll_delta(15, 5, 10) < 0);
         assert!(edge_scroll_delta(30, 5, 10) < 0);
-        // The interior never scrolls.
-        assert_eq!(edge_scroll_delta(6, 5, 10), 0);
-        assert_eq!(edge_scroll_delta(13, 5, 10), 0);
-        // One-row (or zero-row) panes have no distinct edges to hold.
-        assert_eq!(edge_scroll_delta(5, 5, 1), 0);
+        // Content rows never scroll — the first and last visible rows
+        // must stay precisely selectable, not run away under the drag.
+        assert_eq!(edge_scroll_delta(5, 5, 10), 0);
+        assert_eq!(edge_scroll_delta(14, 5, 10), 0);
+        assert_eq!(edge_scroll_delta(9, 5, 10), 0);
+        // Degenerate rects never scroll.
         assert_eq!(edge_scroll_delta(5, 5, 0), 0);
     }
 
