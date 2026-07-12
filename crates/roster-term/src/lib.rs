@@ -162,6 +162,50 @@ impl Screen {
         self.term.scroll_display(Scroll::Bottom);
     }
 
+    /// The text of a linear (reading-order) selection between two absolute
+    /// points, `(col, row)` in either order, where rows count from the top
+    /// of scrollback history: row 0 is the oldest kept line and row
+    /// [`history_size()`](Self::history_size) is the top of the live
+    /// viewport. Unlike [`Grid::linear_text`], the span may cross lines
+    /// scrolled out of view. The semantics otherwise match: single-row
+    /// selections take the cell span; multi-row ones take the first row
+    /// from its column to the end, whole rows between, and the last row up
+    /// to its column; rows and columns clamp to the buffer, rows are
+    /// trailing-trimmed and joined with newlines.
+    pub fn linear_text(&self, start: (usize, usize), end: (usize, usize)) -> String {
+        let grid = self.term.grid();
+        let history = grid.history_size();
+        let total = history + self.size.screen_lines();
+        let cols = self.size.columns();
+        if total == 0 || cols == 0 {
+            return String::new();
+        }
+        let (mut a, mut b) = (start, end);
+        // Normalize to reading order: (col, row) sorts by row, then col.
+        if (a.1, a.0) > (b.1, b.0) {
+            std::mem::swap(&mut a, &mut b);
+        }
+        let clamp_row = |r: usize| r.min(total - 1);
+        let (a, b) = ((a.0, clamp_row(a.1)), (b.0, clamp_row(b.1)));
+        let row_span = |row: usize, from: usize, to: usize| -> String {
+            // Absolute rows sit above the viewport as negative Line values.
+            let line = &grid[Line(row as i32 - history as i32)];
+            let text: String = (from..=to.min(cols - 1))
+                .map(|col| line[Column(col)].c)
+                .collect();
+            text.trim_end().to_string()
+        };
+        if a.1 == b.1 {
+            return row_span(a.1, a.0.min(b.0), a.0.max(b.0));
+        }
+        let mut out = vec![row_span(a.1, a.0, cols - 1)];
+        for row in a.1 + 1..b.1 {
+            out.push(row_span(row, 0, cols - 1));
+        }
+        out.push(row_span(b.1, 0, b.0));
+        out.join("\n")
+    }
+
     /// Snapshot the displayed viewport as a plain [`Grid`] — the visible
     /// screen, or a window into history while scrolled up (cursor hidden).
     pub fn grid(&self) -> Grid {
@@ -371,6 +415,122 @@ mod tests {
         // The view is pinned to the same history lines, not dragged along.
         assert_eq!(screen.grid().lines(), before);
         assert!(screen.display_offset() > 4);
+    }
+
+    #[test]
+    fn linear_text_spans_scrollback_history() {
+        let mut screen = Screen::new(10, 3);
+        for i in 0..10 {
+            screen.advance(format!("line{i}\r\n").as_bytes());
+        }
+        // 11 buffer lines (ten printed plus the empty prompt row), three
+        // visible: eight lines sit in history above the viewport.
+        assert_eq!(screen.history_size(), 8);
+        let expected = (0..10).map(|i| format!("line{i}")).collect::<Vec<_>>();
+        assert_eq!(screen.linear_text((0, 0), (9, 9)), expected.join("\n"));
+        // Either direction selects the same text.
+        assert_eq!(screen.linear_text((9, 9), (0, 0)), expected.join("\n"));
+        // A span wholly inside history never touches the viewport.
+        assert_eq!(screen.linear_text((0, 2), (9, 3)), "line2\nline3");
+    }
+
+    #[test]
+    fn absolute_selection_survives_scrolling_between_readings() {
+        let mut screen = Screen::new(10, 3);
+        for i in 0..20 {
+            screen.advance(format!("line{i}\r\n").as_bytes());
+        }
+        // Anchor on the viewport's top row while live, the way the app
+        // converts a pointer reading: buffer row = history - offset + row.
+        let anchor = screen.history_size() - screen.display_offset();
+        assert_eq!(screen.linear_text((0, anchor), (9, anchor)), "line18");
+        // Scroll up; the same pointer position now reads five lines earlier,
+        // and the span between the two readings covers the scrolled lines.
+        screen.scroll_display(5);
+        let end = screen.history_size() - screen.display_offset();
+        assert_eq!(anchor - end, 5);
+        let expected = (13..=18).map(|i| format!("line{i}")).collect::<Vec<_>>();
+        assert_eq!(
+            screen.linear_text((0, end), (9, anchor)),
+            expected.join("\n")
+        );
+    }
+
+    #[test]
+    fn new_output_leaves_absolute_rows_pinned_to_their_text() {
+        let mut screen = Screen::new(10, 3);
+        for i in 0..10 {
+            screen.advance(format!("line{i}\r\n").as_bytes());
+        }
+        let anchor = screen.history_size();
+        assert_eq!(screen.linear_text((0, anchor), (9, anchor)), "line8");
+        // More output pushes lines into history; the absolute row still
+        // names the same text because both count from the history top.
+        for i in 10..15 {
+            screen.advance(format!("line{i}\r\n").as_bytes());
+        }
+        assert_eq!(screen.linear_text((0, anchor), (9, anchor)), "line8");
+    }
+
+    #[test]
+    fn linear_text_clamps_out_of_range_absolute_points() {
+        let mut screen = Screen::new(10, 3);
+        for i in 0..10 {
+            screen.advance(format!("line{i}\r\n").as_bytes());
+        }
+        // Rows past the buffer clamp to the last (blank) viewport row,
+        // columns past the width clamp to the width.
+        let total = screen.history_size() + 3;
+        assert_eq!(
+            screen.linear_text((0, 9), (99, total + 50)),
+            "line9\n",
+            "clamped tail row is the trailing blank viewport row"
+        );
+        assert_eq!(screen.linear_text((99, 0), (99, 0)), "");
+    }
+
+    #[test]
+    fn linear_text_on_the_alternate_screen_reads_the_viewport() {
+        let mut screen = Screen::new(10, 3);
+        screen.advance(b"shell\r\n");
+        screen.advance(b"\x1b[?1049h\x1b[2J\x1b[Halpha\r\nbeta");
+        // The alternate screen keeps no history, so absolute rows are
+        // plain viewport rows — exactly today's visible-grid behavior.
+        assert_eq!(screen.history_size(), 0);
+        assert_eq!(screen.linear_text((0, 0), (9, 1)), "alpha\nbeta");
+    }
+
+    #[test]
+    fn absolute_and_viewport_extraction_agree_on_the_live_screen() {
+        let mut screen = Screen::new(12, 4);
+        screen.advance(b"first line\r\nmiddle\r\nlast line");
+        // With no history the two APIs share a coordinate space and must
+        // return byte-identical text — the consistency contract.
+        assert_eq!(screen.history_size(), 0);
+        for (a, b) in [((6, 0), (3, 2)), ((0, 0), (11, 3)), ((4, 1), (4, 1))] {
+            assert_eq!(screen.linear_text(a, b), screen.grid().linear_text(a, b));
+        }
+    }
+
+    #[test]
+    fn history_trimming_clamps_but_never_panics() {
+        let mut screen = Screen::new(10, 3);
+        for i in 0..10_100 {
+            screen.advance(format!("l{i}\r\n").as_bytes());
+        }
+        // History is capped: the oldest lines are gone and row 0 now names
+        // the oldest *kept* line. A selection held across the trim drifts
+        // by the trimmed amount — the clamp keeps it valid, not exact.
+        assert_eq!(screen.history_size(), Screen::SCROLLBACK);
+        let all = screen.linear_text((0, 0), (9, usize::MAX));
+        // 10,101 lines ever (10,100 printed + the prompt row), 10,003 kept
+        // (10,000 history + 3 viewport): the first 98 are gone.
+        assert!(
+            all.starts_with("l98\n"),
+            "unexpected head: {:?}",
+            &all[..12]
+        );
+        assert!(all.ends_with("l10099\n"), "unexpected tail");
     }
 
     #[test]

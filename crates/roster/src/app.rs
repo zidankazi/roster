@@ -255,12 +255,19 @@ pub struct App {
     pointer: Pointer,
     /// Transient notification cards, newest first.
     toasts: Vec<Toast>,
-    /// A mouse-drag selection being made: the pane and the anchor cell, in
-    /// pane-content coordinates.
-    sel_anchor: Option<(PaneId, (u16, u16))>,
-    /// The current selection: pane and both endpoints, content-local.
-    /// Highlighted until the next click or keystroke; copied on release.
-    selection: Option<roster_tui::Selection>,
+    /// A mouse-drag selection being made: the pane and the anchor cell, as
+    /// a content-local column and a scrollback-absolute row (see
+    /// [`absolute_row`]) — anchored to the text, not the screen, so the
+    /// drag survives the view scrolling under it.
+    sel_anchor: Option<(PaneId, SelPoint)>,
+    /// The current selection: pane and both endpoints in the same absolute
+    /// coordinates as [`Self::sel_anchor`]. Highlighted (converted to
+    /// viewport cells each frame) until the next click or keystroke;
+    /// copied on release.
+    selection: Option<(PaneId, SelPoint, SelPoint)>,
+    /// When the drag auto-scroll last stepped, so an event-burst frame
+    /// rate doesn't turn into a scroll burst. `None` outside a drag.
+    sel_scrolled: Option<Instant>,
     /// The persistent session this app is attached to, if any.
     remote: Option<RemoteSession>,
     quit: bool,
@@ -328,6 +335,7 @@ impl App {
             toasts: Vec::new(),
             sel_anchor: None,
             selection: None,
+            sel_scrolled: None,
             remote: None,
             quit: false,
             output_tx,
@@ -501,6 +509,7 @@ impl App {
             toasts: Vec::new(),
             sel_anchor: None,
             selection: None,
+            sel_scrolled: None,
             remote: Some(RemoteSession {
                 name: name.to_string(),
                 writer: Arc::new(Mutex::new(writer)),
@@ -691,6 +700,7 @@ impl App {
             let size = terminal.size()?;
             self.last_area = Rect::new(0, 0, size.width, size.height);
             self.sync_layout(self.last_area);
+            self.autoscroll_selection();
             self.detect_if_due();
             self.toasts.retain(|toast| toast.born.elapsed() < TOAST_TTL);
             self.sync_remote_layout();
@@ -743,6 +753,22 @@ impl App {
                 .iter()
                 .map(|toast| (toast.text.as_str(), toast.level))
                 .collect();
+            // The selection lives in absolute rows; the renderer wants
+            // viewport cells at the pane's current scroll position, with
+            // off-screen spans clipped away.
+            let selection = self.selection.and_then(|(id, a, b)| {
+                let rt = self.runtimes.get(&id)?;
+                let (cols, rows) = rt.screen.size();
+                let visible = viewport_selection(
+                    a,
+                    b,
+                    rt.screen.history_size(),
+                    rt.screen.display_offset(),
+                    cols,
+                    rows,
+                )?;
+                Some((id, visible.0, visible.1))
+            });
             let scrolled: HashMap<PaneId, usize> = self
                 .runtimes
                 .iter()
@@ -764,7 +790,7 @@ impl App {
                 confirm,
                 toasts: &toast_view,
                 rate_limits: self.rate_limits.as_ref(),
-                selection: self.selection,
+                selection,
                 scrolled: &scrolled,
                 welcome: self.placeholder.is_some(),
                 mode_badge,
@@ -1385,6 +1411,72 @@ impl App {
         ))
     }
 
+    /// The selection endpoint under an absolute pointer position: clamped
+    /// into the pane's content rect (a drag past the border still selects
+    /// the border row) and converted to the pane's scrollback-absolute
+    /// rows at its current scroll position. `None` when the pane isn't
+    /// visible or has no runtime.
+    fn pointer_sel_point(&self, id: PaneId, x: u16, y: u16) -> Option<SelPoint> {
+        let content = self.pane_content_rect(id)?;
+        let rt = self.runtimes.get(&id)?;
+        let clamp = |v: u16, lo: u16, hi: u16| v.max(lo).min(hi);
+        let cx = clamp(x, content.x, content.x + content.width.saturating_sub(1));
+        let cy = clamp(y, content.y, content.y + content.height.saturating_sub(1));
+        Some((
+            cx - content.x,
+            absolute_row(
+                cy - content.y,
+                rt.screen.history_size(),
+                rt.screen.display_offset(),
+            ),
+        ))
+    }
+
+    /// While a drag-selection is held at a pane's top or bottom content
+    /// edge, scroll that pane's history one step toward the pointer and
+    /// re-extend the selection — drag events only arrive while the mouse
+    /// moves, so the render loop drives this for a held-still pointer.
+    /// Rate-limited by [`DRAG_SCROLL_EVERY`]; a no-op on the alternate
+    /// screen (no history) and before the drag has produced a selection,
+    /// so a held click on an edge row never scrolls.
+    fn autoscroll_selection(&mut self) {
+        let Some((id, anchor)) = self.sel_anchor else {
+            return;
+        };
+        if self.selection.map(|s| s.0) != Some(id) {
+            return;
+        }
+        let Some((x, y)) = self.last_mouse else {
+            return;
+        };
+        if self
+            .sel_scrolled
+            .is_some_and(|at| at.elapsed() < DRAG_SCROLL_EVERY)
+        {
+            return;
+        }
+        let Some(content) = self.pane_content_rect(id) else {
+            return;
+        };
+        let delta = edge_scroll_delta(y, content.y, content.height);
+        if delta == 0 {
+            return;
+        }
+        let Some(rt) = self.runtimes.get_mut(&id) else {
+            return;
+        };
+        if rt.screen.alternate_screen() {
+            return;
+        }
+        rt.screen.scroll_display(delta);
+        self.sel_scrolled = Some(Instant::now());
+        // The pointer sits still while the text moves under it: re-read the
+        // endpoint so the selection keeps extending.
+        if let Some(end) = self.pointer_sel_point(id, x, y) {
+            self.selection = Some((id, anchor, end));
+        }
+    }
+
     /// What sits under (`x`, `y`), with app-state refinements the pure
     /// hit-test can't see: an exited pane's content resolves to its
     /// overlay's restart/close buttons.
@@ -1726,7 +1818,9 @@ impl App {
                         }
                         // Pressing on live content anchors a text
                         // selection; it only becomes one if the mouse
-                        // moves before release.
+                        // moves before release. The anchor is taken in
+                        // absolute rows so it stays glued to its text
+                        // while the view scrolls.
                         if !grabbed && matches!(hit, Hit::Pane(_)) {
                             if let Some(content) = self.pane_content_rect(id) {
                                 if x >= content.x
@@ -1734,7 +1828,17 @@ impl App {
                                     && y >= content.y
                                     && y < content.y + content.height
                                 {
-                                    self.sel_anchor = Some((id, (x - content.x, y - content.y)));
+                                    if let Some(rt) = self.runtimes.get(&id) {
+                                        let point = (
+                                            x - content.x,
+                                            absolute_row(
+                                                y - content.y,
+                                                rt.screen.history_size(),
+                                                rt.screen.display_offset(),
+                                            ),
+                                        );
+                                        self.sel_anchor = Some((id, point));
+                                    }
                                 }
                             }
                         }
@@ -1755,29 +1859,28 @@ impl App {
                     }
                 } else if let Some((id, anchor)) = self.sel_anchor {
                     // Extend the selection to the cell under the pointer,
-                    // clamped into the pane's content.
-                    if let Some(content) = self.pane_content_rect(id) {
-                        let clamp = |v: u16, lo: u16, hi: u16| v.max(lo).min(hi);
-                        let cx = clamp(x, content.x, content.x + content.width.saturating_sub(1));
-                        let cy = clamp(y, content.y, content.y + content.height.saturating_sub(1));
-                        self.selection = Some((id, anchor, (cx - content.x, cy - content.y)));
+                    // clamped into the pane's content and converted to the
+                    // pane's absolute rows at the current scroll position.
+                    if let Some(end) = self.pointer_sel_point(id, x, y) {
+                        self.selection = Some((id, anchor, end));
                     }
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.dragging = None;
                 self.sel_anchor = None;
+                self.sel_scrolled = None;
                 // A completed drag-selection copies itself — click-drag,
-                // release, pasted anywhere.
+                // release, pasted anywhere. Extraction reads the emulator's
+                // full buffer, so a selection that auto-scrolled through
+                // history copies the scrolled-past lines too.
                 if let Some((id, a, b)) = self.selection {
                     let text = self
                         .runtimes
                         .get(&id)
                         .map(|rt| {
-                            rt.screen.grid().linear_text(
-                                (usize::from(a.0), usize::from(a.1)),
-                                (usize::from(b.0), usize::from(b.1)),
-                            )
+                            rt.screen
+                                .linear_text((usize::from(a.0), a.1), (usize::from(b.0), b.1))
                         })
                         .unwrap_or_default();
                     if text.trim().is_empty() {
@@ -2131,6 +2234,86 @@ fn is_prefix(key: &KeyEvent) -> bool {
     key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
+/// A selection endpoint: content-local column and scrollback-absolute row
+/// (see [`absolute_row`]).
+type SelPoint = (u16, usize);
+
+/// Rows a drag auto-scroll steps per tick — modest, so the selection stays
+/// readable while it grows.
+const DRAG_SCROLL_ROWS: i32 = 2;
+
+/// Minimum time between drag auto-scroll steps. The render loop ticks
+/// faster under an event burst; this keeps the scroll rate steady.
+const DRAG_SCROLL_EVERY: Duration = Duration::from_millis(50);
+
+/// The buffer row under a viewport row, counted from the top of scrollback
+/// history: row 0 is the oldest kept line, row `history_size` the top of
+/// the live screen. `display_offset` counts up from the bottom, so the
+/// viewport's top row sits `history_size - display_offset` rows into the
+/// buffer. Absolute rows stay pinned to their text as output grows —
+/// history grows by exactly what the screen sheds — and drift only when
+/// the scrollback cap trims the oldest lines.
+fn absolute_row(viewport_row: u16, history_size: usize, display_offset: usize) -> usize {
+    history_size.saturating_sub(display_offset) + usize::from(viewport_row)
+}
+
+/// The visible part of an absolute selection at the current scroll
+/// position, as viewport cells for the renderer. The span is linear
+/// (reading order), so an endpoint scrolled off the top clips to the
+/// viewport's first cell and one scrolled off the bottom to its last —
+/// exactly the cells of the span still on screen. `None` when the whole
+/// selection is out of view or the viewport is degenerate.
+fn viewport_selection(
+    a: SelPoint,
+    b: SelPoint,
+    history_size: usize,
+    display_offset: usize,
+    cols: u16,
+    rows: u16,
+) -> Option<((u16, u16), (u16, u16))> {
+    if cols == 0 || rows == 0 {
+        return None;
+    }
+    let (mut a, mut b) = (a, b);
+    // Normalize to reading order: (col, row) sorts by row, then col.
+    if (a.1, a.0) > (b.1, b.0) {
+        std::mem::swap(&mut a, &mut b);
+    }
+    let top = history_size.saturating_sub(display_offset);
+    let bottom = top + usize::from(rows);
+    if b.1 < top || a.1 >= bottom {
+        return None;
+    }
+    let start = if a.1 < top {
+        (0, 0)
+    } else {
+        (a.0, (a.1 - top) as u16)
+    };
+    let end = if b.1 >= bottom {
+        (cols - 1, rows - 1)
+    } else {
+        (b.0, (b.1 - top) as u16)
+    };
+    Some((start, end))
+}
+
+/// The auto-scroll step for a drag whose pointer sits at `pointer_y`
+/// against a content rect spanning `top..top + height`: positive (into
+/// history) at or above the top edge row, negative at or below the bottom
+/// edge row, zero in the interior. Panes of one row or less never scroll —
+/// both edges are the same cell.
+fn edge_scroll_delta(pointer_y: u16, top: u16, height: u16) -> i32 {
+    if height <= 1 {
+        0
+    } else if pointer_y <= top {
+        DRAG_SCROLL_ROWS
+    } else if pointer_y >= top + height - 1 {
+        -DRAG_SCROLL_ROWS
+    } else {
+        0
+    }
+}
+
 /// What a wheel notch does over a pane, decided by the guest's terminal
 /// modes.
 enum WheelAction {
@@ -2391,6 +2574,72 @@ mod tests {
         ));
         // A live forwarding guest with no resolvable pointer does nothing.
         assert!(wheel_action(true, true, true, true, true, None).is_none());
+    }
+
+    #[test]
+    fn absolute_rows_pin_viewport_cells_to_history() {
+        // Live at the bottom: the viewport sits directly under history.
+        assert_eq!(absolute_row(0, 100, 0), 100);
+        assert_eq!(absolute_row(5, 100, 0), 105);
+        // Scrolled up: the same viewport row reads earlier buffer lines.
+        assert_eq!(absolute_row(0, 100, 30), 70);
+        // Scrolled to history's very top, the first kept line is row 0.
+        assert_eq!(absolute_row(0, 100, 100), 0);
+        // No history (a fresh pane, or the alternate screen): absolute rows
+        // are plain viewport rows, so behavior degrades to exactly the old
+        // visible-grid coordinates.
+        assert_eq!(absolute_row(2, 0, 0), 2);
+        // An offset beyond history can't underflow (defensive; alacritty
+        // clamps offsets to the history extent).
+        assert_eq!(absolute_row(1, 3, 9), 1);
+    }
+
+    #[test]
+    fn viewport_selection_clips_offscreen_endpoints() {
+        // A 10x4 viewport over 100 history lines, scrolled up 20: showing
+        // absolute rows 80..84.
+        let show = |a, b| viewport_selection(a, b, 100, 20, 10, 4);
+        // Fully visible spans convert row-by-row, either endpoint order.
+        assert_eq!(show((2, 81), (7, 83)), Some(((2, 1), (7, 3))));
+        assert_eq!(show((7, 83), (2, 81)), Some(((2, 1), (7, 3))));
+        // A start scrolled off the top clips to the viewport's first cell —
+        // the linear span covers everything from the top-left on.
+        assert_eq!(show((4, 10), (7, 82)), Some(((0, 0), (7, 2))));
+        // An end scrolled off the bottom clips to the last cell.
+        assert_eq!(show((4, 82), (3, 99)), Some(((4, 2), (9, 3))));
+        // Both off: the whole viewport is inside the span.
+        assert_eq!(show((4, 10), (3, 99)), Some(((0, 0), (9, 3))));
+        // Boundary rows: the viewport's own first and last rows convert.
+        assert_eq!(show((0, 80), (9, 83)), Some(((0, 0), (9, 3))));
+    }
+
+    #[test]
+    fn viewport_selection_hides_a_fully_offscreen_span() {
+        let show = |a, b| viewport_selection(a, b, 100, 20, 10, 4);
+        // Entirely above the view, entirely below, and the row just past
+        // each boundary.
+        assert_eq!(show((0, 10), (9, 79)), None);
+        assert_eq!(show((0, 84), (9, 99)), None);
+        // Degenerate viewports never render a selection.
+        assert_eq!(viewport_selection((0, 0), (9, 9), 10, 0, 0, 4), None);
+        assert_eq!(viewport_selection((0, 0), (9, 9), 10, 0, 10, 0), None);
+    }
+
+    #[test]
+    fn drags_scroll_at_the_content_edges_only() {
+        // A content rect spanning rows 5..15 (top 5, height 10).
+        // At or past the top edge: scroll up into history.
+        assert!(edge_scroll_delta(5, 5, 10) > 0);
+        assert!(edge_scroll_delta(0, 5, 10) > 0);
+        // At or past the bottom edge row (14): scroll back down.
+        assert!(edge_scroll_delta(14, 5, 10) < 0);
+        assert!(edge_scroll_delta(30, 5, 10) < 0);
+        // The interior never scrolls.
+        assert_eq!(edge_scroll_delta(6, 5, 10), 0);
+        assert_eq!(edge_scroll_delta(13, 5, 10), 0);
+        // One-row (or zero-row) panes have no distinct edges to hold.
+        assert_eq!(edge_scroll_delta(5, 5, 1), 0);
+        assert_eq!(edge_scroll_delta(5, 5, 0), 0);
     }
 
     #[test]
