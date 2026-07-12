@@ -40,6 +40,7 @@ The multiplexer's model, with no I/O. Pure data + logic.
 
 - The pane tree (splits), windows/tabs, focus, geometry, and per-pane metadata (which agent, current state, last-activity timestamp, live telemetry when the statusline bridge feeds one).
 - Layout math: given a terminal size and a split tree, compute each pane's rect.
+- Fleet telemetry logic, all pure: `fleet_rate_limit` (account-scoped merge of per-pane rate-limit readings, freshest per window), `rate_limit_alert` (the 70/90 used-share thresholds), and `LimitNotifier` (the edge-triggered crossing detector behind the limit toasts). See `05-claude-native-attention.md`.
 - Public surface (sketch): `Session`, `Pane { id, agent, rect, state, reason, last_change, telemetry }`, `session.split(...)`, `session.focus(...)`, `session.layout(size) -> Vec<(PaneId, Rect)>`.
 - **Why agent-safe:** it's a tree and some arithmetic. Fully unit-testable, no terminal, no processes. Prime candidate for unattended agent work.
 
