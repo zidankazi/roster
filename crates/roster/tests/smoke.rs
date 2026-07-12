@@ -194,7 +194,6 @@ fn launcher_spawns_an_agent_at_runtime() {
     pty.write(b"q").expect("quit");
     let status = pty.wait().expect("wait");
     assert!(status.success, "roster exited with failure: {status:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// SGR mouse press+release at 1-based (col, row).
@@ -334,7 +333,6 @@ fn mouse_clicks_focus_launch_and_jump() {
     pty.write(b"q").expect("quit");
     let status = pty.wait().expect("wait");
     assert!(status.success, "exit: {status:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -845,7 +843,13 @@ fn guest_osc52_copy_is_relayed_only_from_the_focused_pane() {
 /// Create an executable fake agent named `claude` that shows a blocked
 /// prompt, and return the directory holding it. Each call gets its own
 /// directory: tests run concurrently in one process, and on Linux exec'ing
-/// a script another test is rewriting fails with ETXTBSY.
+/// a script another test is rewriting fails with ETXTBSY. The directories
+/// are deliberately never deleted: `PATH` is process-global and tests
+/// prepend to it with read-modify-write, so a roster spawned between two
+/// writes can inherit a `PATH` whose only claude dir belongs to another
+/// test — deleting dirs at test end turned that into a flaky
+/// `claude: not found` (any leaked dir serves the identical script; the
+/// per-pid names keep runs from colliding).
 fn fake_agent_dir() -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -896,7 +900,7 @@ fn bare_start() -> (PathBuf, Pty, mpsc::Receiver<Vec<u8>>, Screen) {
 
 #[test]
 fn bare_start_first_launch_replaces_the_placeholder_shell() {
-    let (dir, mut pty, rx, mut screen) = bare_start();
+    let (_dir, mut pty, rx, mut screen) = bare_start();
 
     // The wordmark sweeps in over ~1s; wait for its leading glyphs.
     assert!(
@@ -943,12 +947,11 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
     pty.write(b"q").expect("quit");
     let status = pty.wait().expect("wait");
     assert!(status.success, "exit: {status:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn typing_into_the_backdrop_shell_does_not_save_it() {
-    let (dir, mut pty, rx, mut screen) = bare_start();
+    let (_dir, mut pty, rx, mut screen) = bare_start();
 
     // Dismiss the launcher and let it flush as a lone Esc (a following byte
     // would coalesce into an Alt-chord) before typing into the backdrop
@@ -1015,7 +1018,6 @@ fn typing_into_the_backdrop_shell_does_not_save_it() {
     pty.write(b"q").expect("quit");
     let status = pty.wait().expect("wait");
     assert!(status.success, "exit: {status:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1092,7 +1094,6 @@ fn closing_a_live_agent_asks_first() {
     pty.write(b"y").expect("confirm");
     let status = pty.wait().expect("wait");
     assert!(status.success, "exit: {status:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1426,8 +1427,6 @@ fn full_pipeline_shows_blocked_agent_and_quits() {
         "roster did not exit after prefix-q"
     );
     assert!(status.success, "roster exited with failure: {status:?}");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1545,7 +1544,6 @@ fn unfocused_done_pane_stays_done_until_visited() {
     pty.write(b"q").expect("quit");
     let status = pty.wait().expect("wait");
     assert!(status.success, "roster exited with failure: {status:?}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1601,8 +1599,6 @@ fn hook_bridge_pins_blocked_and_clears_end_to_end() {
         "hook block never cleared:\n{}",
         screen.grid().lines().join("\n")
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1666,8 +1662,6 @@ fn statusline_telemetry_reaches_the_sidebar_card() {
         "the exited card itself should linger:\n{}",
         screen.grid().lines().join("\n")
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1741,8 +1735,6 @@ fn statusline_rate_limits_reach_the_sidebar_footer_and_toast() {
         "the footer never cleared after the pane exited:\n{}",
         screen.grid().lines().join("\n")
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -1818,6 +1810,4 @@ fn statusline_forwarder_sends_the_payload_verbatim_and_prints_nothing() {
         .expect("run _statusline without env");
     assert!(output.status.success(), "no-op must still exit 0");
     assert!(output.stdout.is_empty(), "no-op must print nothing");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
