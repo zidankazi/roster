@@ -32,13 +32,22 @@ struct EventSink {
     clipboard: Arc<Mutex<Vec<String>>>,
 }
 
+/// Most clipboard writes kept queued between drains. A guest looping OSC 52
+/// must not grow host memory; the oldest writes give way — the newest is
+/// what a real clipboard would end up holding anyway.
+const CLIPBOARD_QUEUE_CAP: usize = 8;
+
 impl EventListener for EventSink {
     fn send_event(&self, event: Event) {
         match event {
             Event::Title(title) => *self.title.lock().expect("title lock") = Some(title),
             Event::ResetTitle => *self.title.lock().expect("title lock") = None,
             Event::ClipboardStore(_, text) => {
-                self.clipboard.lock().expect("clipboard lock").push(text);
+                let mut queue = self.clipboard.lock().expect("clipboard lock");
+                if queue.len() == CLIPBOARD_QUEUE_CAP {
+                    queue.remove(0);
+                }
+                queue.push(text);
             }
             _ => {}
         }
@@ -153,6 +162,15 @@ impl Screen {
         self.term.mode().intersects(
             TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
         )
+    }
+
+    /// Whether the application asked for drag/motion reports (DECSET
+    /// 1002/1003). Click-only tracking (1000) alone must not receive
+    /// synthetic button-motion reports it never subscribed to.
+    pub fn mouse_drag_reporting(&self) -> bool {
+        self.term
+            .mode()
+            .intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
     }
 
     /// Whether the application negotiated SGR mouse encoding (DECSET 1006).
@@ -332,6 +350,26 @@ mod tests {
         screen.advance(b"\x1b]52;c;!!!not-base64!!!\x07");
         screen.advance(b"\x1b]52;c;?\x07");
         assert!(screen.take_clipboard_writes().is_empty());
+    }
+
+    #[test]
+    fn clipboard_queue_caps_and_keeps_the_newest_writes() {
+        let mut screen = Screen::new(20, 4);
+        // 4× "hello", 7× "world", then one last "hello" — 12 writes into a
+        // cap of 8. The oldest give way: a guest looping OSC 52 can't grow
+        // host memory, and the newest write (what a real clipboard would
+        // hold) always survives.
+        for _ in 0..4 {
+            screen.advance(b"\x1b]52;c;aGVsbG8=\x07");
+        }
+        for _ in 0..7 {
+            screen.advance(b"\x1b]52;c;d29ybGQ=\x07");
+        }
+        screen.advance(b"\x1b]52;c;aGVsbG8=\x07");
+        let writes = screen.take_clipboard_writes();
+        assert_eq!(writes.len(), 8);
+        assert_eq!(writes.first().map(String::as_str), Some("world"));
+        assert_eq!(writes.last().map(String::as_str), Some("hello"));
     }
 
     #[test]

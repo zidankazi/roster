@@ -715,37 +715,126 @@ fn mouse_native_guest_gets_press_drag_and_release() {
 }
 
 #[test]
-fn guest_osc52_copy_is_relayed_to_the_host_terminal() {
-    // A guest that copies via OSC 52 (Claude Code does, when it finishes
-    // its own drag-selection) must reach the real clipboard: roster
-    // re-emits the write on its own stdout instead of letting it die
-    // inside the emulator.
-    let (cols, rows) = (100u16, 24u16);
-    // "aGVsbG8=" is "hello"; the relay re-encodes the decoded text, so the
-    // same base64 comes out the other side.
-    let script = "printf \"marker\\n\"; sleep 1; printf \"\\033]52;c;aGVsbG8=\\007\"; sleep 60";
+fn click_only_guest_gets_no_synthetic_drag_reports() {
+    // A guest tracking clicks only (DECSET 1000, no 1002/1003) never
+    // subscribed to motion: a click-drag across it forwards the press and
+    // the release, but no button-32 moves it would misread.
+    let (cols, rows) = (120u16, 30u16);
+    let log = std::env::temp_dir().join(format!("roster-clickonly-{}.log", std::process::id()));
+    let _ = std::fs::remove_file(&log);
+    let script = format!(
+        "printf \"\\033[?1049h\\033[?1000h\\033[?1006h\"; \
+         stty raw -echo; printf \"guest-%s\\r\\n\" ready; exec cat > {}",
+        log.display()
+    );
     let mut pty = Pty::spawn(&format!("'{}' '{script}'", bin()), cols, rows).expect("spawn");
     let rx = pump(&pty);
 
     let mut screen = Screen::new(cols, rows);
+    assert!(
+        drain_while(&mut screen, "guest-ready", true, &rx),
+        "guest never started:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(b"\x1b[<0;60;10M\x1b[<32;60;13M\x1b[<0;60;13m")
+        .expect("press-drag-release");
+
+    // The release is written last, so once the log ends in `m` every
+    // report roster forwarded has landed — then the drag must be absent.
     let start = Instant::now();
-    let mut raw: Vec<u8> = Vec::new();
-    let mut relayed = false;
+    let mut got = Vec::new();
     while start.elapsed() < DEADLINE {
-        match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(chunk) => {
-                raw.extend_from_slice(&chunk);
-                screen.advance(&chunk);
-            }
+        got = std::fs::read(&log).unwrap_or_default();
+        if String::from_utf8_lossy(&got).ends_with('m') {
+            break;
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(chunk) => screen.advance(&chunk),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
-        if raw.windows(15).any(|w| w == b"\x1b]52;c;aGVsbG8=") {
-            relayed = true;
-            break;
-        }
     }
-    assert!(relayed, "guest OSC 52 write never re-emitted by roster");
+    let s = String::from_utf8_lossy(&got);
+    assert!(
+        s.contains("\x1b[<0;") && s.ends_with('m'),
+        "press/release never reached the guest; log was {s:?}"
+    );
+    assert!(
+        !s.contains("\x1b[<32;"),
+        "click-only guest received synthetic drag reports; log was {s:?}"
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+    let _ = std::fs::remove_file(&log);
+}
+
+#[test]
+fn guest_osc52_copy_is_relayed_only_from_the_focused_pane() {
+    // A guest that copies via OSC 52 (Claude Code does, when it finishes
+    // its own drag-selection) must reach the real clipboard — but only
+    // from the pane the user is in: a background pane silently replacing
+    // the clipboard is a hijack, and its writes are drained and dropped.
+    let (cols, rows) = (120u16, 30u16);
+    // Pane 1 writes "first" (Zmlyc3Q=) while unfocused — the second
+    // command holds focus at startup — then waits for one byte of input
+    // and writes "second" (c2Vjb25k). The test focuses it by click before
+    // sending that byte, so the second write is the focused-pane case.
+    let script = "printf \"\\033]52;c;Zmlyc3Q=\\007\"; stty raw -echo; \
+                  printf \"m-%s\\r\\n\" one; dd bs=1 count=1 2>/dev/null >/dev/null; \
+                  printf \"\\033]52;c;c2Vjb25k\\007\"; printf \"m-%s\\r\\n\" two; sleep 60";
+    let mut pty =
+        Pty::spawn(&format!("'{}' '{script}' 'sleep 60'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+
+    let mut screen = Screen::new(cols, rows);
+    let mut raw: Vec<u8> = Vec::new();
+    let drain_raw = |screen: &mut Screen, raw: &mut Vec<u8>, needle: &str| -> bool {
+        let start = Instant::now();
+        while start.elapsed() < DEADLINE {
+            if screen.grid().lines().iter().any(|l| l.contains(needle)) {
+                return true;
+            }
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(chunk) => {
+                    raw.extend_from_slice(&chunk);
+                    screen.advance(&chunk);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+            }
+        }
+        false
+    };
+
+    assert!(
+        drain_raw(&mut screen, &mut raw, "m-one"),
+        "unfocused pane never wrote its first payload:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Focus pane 1 by clicking its content (left half of the pane area),
+    // then send the byte that triggers the focused-pane write.
+    pty.write(&click(40, 10)).expect("click pane 1");
+    pty.write(b"x").expect("trigger byte");
+    assert!(
+        drain_raw(&mut screen, &mut raw, "m-two"),
+        "focused pane never wrote its second payload:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    let has = |needle: &[u8]| raw.windows(needle.len()).any(|w| w == needle);
+    assert!(
+        has(b"\x1b]52;c;c2Vjb25k"),
+        "focused pane's OSC 52 write never re-emitted by roster"
+    );
+    assert!(
+        !has(b"\x1b]52;c;Zmlyc3Q="),
+        "an unfocused pane's OSC 52 write reached the host clipboard"
+    );
 
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"q").expect("quit");

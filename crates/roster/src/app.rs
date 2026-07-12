@@ -1484,15 +1484,24 @@ impl App {
         }
     }
 
-    /// Relay every OSC 52 clipboard write a guest made since the last
-    /// frame out to the hosting terminal — a mouse-native guest (Claude
-    /// Code) copies its own drag-selection this way, and without the relay
-    /// the copy would die inside the emulator. One sweep covers local and
-    /// remote panes alike; the queue is empty in the common frame.
+    /// Relay the focused pane's OSC 52 clipboard writes out to the hosting
+    /// terminal — a mouse-native guest (Claude Code) copies its own
+    /// drag-selection this way, and without the relay the copy would die
+    /// inside the emulator. Every pane's queue drains each frame so a
+    /// looping guest can't pile up payloads, but only the focused pane
+    /// reaches the real clipboard: a background pane silently replacing
+    /// what the user copied is a hijack, not a copy — and the gesture that
+    /// matters (a drag in the pane) focuses it first. One sweep covers
+    /// local and remote panes alike; the queues are empty in the common
+    /// frame.
     fn relay_clipboard_writes(&mut self) {
-        for rt in self.runtimes.values_mut() {
-            for text in rt.screen.take_clipboard_writes() {
-                copy_to_clipboard(&text);
+        let focused = self.session.focused();
+        for (id, rt) in self.runtimes.iter_mut() {
+            let writes = rt.screen.take_clipboard_writes();
+            if Some(*id) == focused {
+                for text in writes {
+                    copy_to_clipboard(&text);
+                }
             }
         }
     }
@@ -1758,6 +1767,19 @@ impl App {
         let previous_mouse = self.last_mouse;
         self.last_mouse = Some((x, y));
 
+        // A press while a guest grab is still held means its release was
+        // swallowed where this handler couldn't see it (a modal owned the
+        // mouse): finish the old grab with a synthetic release before
+        // anything routes the new press, or the guest keeps drag-selecting
+        // a button that is no longer down.
+        if matches!(mouse.kind, MouseEventKind::Down(_)) {
+            if let Some(id) = self.mouse_fwd.take() {
+                if self.guest_takes_mouse(id) {
+                    self.forward_mouse(id, x, y, MouseEventKind::Up(MouseButton::Left));
+                }
+            }
+        }
+
         // The confirm dialog owns the mouse while open: its buttons decide,
         // and clicking anywhere else dismisses it.
         if let Mode::ConfirmClose(pending) = self.mode {
@@ -1975,9 +1997,18 @@ impl App {
                 } else if let Some(id) = self.mouse_fwd {
                     // The grab routes the whole drag to the pressed pane,
                     // clamped into its content — matching what a terminal
-                    // does when a drag leaves the window.
+                    // does when a drag leaves the window. Click-only
+                    // tracking (DECSET 1000) never subscribed to motion,
+                    // so only drag/motion-tracking guests get the moves;
+                    // the release still arrives either way.
                     if self.guest_takes_mouse(id) {
-                        self.forward_mouse(id, x, y, mouse.kind);
+                        let wants_motion = self
+                            .runtimes
+                            .get(&id)
+                            .is_some_and(|rt| rt.screen.mouse_drag_reporting());
+                        if wants_motion {
+                            self.forward_mouse(id, x, y, mouse.kind);
+                        }
                     } else {
                         // The guest died or turned tracking off mid-drag.
                         self.mouse_fwd = None;
