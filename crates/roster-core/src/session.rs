@@ -107,6 +107,12 @@ pub struct Session {
     next_id: u64,
 }
 
+/// Adoptable pane ids stop here (exclusive): ids at or above `2^63` only
+/// arise from corrupt or hostile input (servers allocate sequentially from
+/// 1), and adopting one would leave `alloc_pane`'s unchecked sequential
+/// `next_id` without meaningful overflow headroom.
+const MAX_ADOPTABLE_ID: u64 = 1 << 63;
+
 impl Session {
     /// A session with one window holding one pane, which has focus.
     pub fn new() -> Self {
@@ -177,7 +183,7 @@ impl Session {
 
     /// Adopt a pane whose id was allocated elsewhere (a session server)
     /// into a fresh window, activate it, and focus the pane. Returns `None`
-    /// when the id is already taken.
+    /// when the id is already taken (ids at or above `2^63` are never adoptable).
     pub fn adopt_window(&mut self, raw: u64) -> Option<PaneId> {
         let id = self.adopt_pane(raw)?;
         self.windows.push(Window {
@@ -189,8 +195,8 @@ impl Session {
     }
 
     /// Adopt an elsewhere-allocated pane by splitting `target`, like
-    /// [`Session::split`]. Returns `None` when the id is taken or the
-    /// target does not exist.
+    /// [`Session::split`]. Returns `None` when the id is taken
+    /// (ids at or above `2^63` are never adoptable) or the target does not exist.
     pub fn adopt_split(
         &mut self,
         target: PaneId,
@@ -216,7 +222,7 @@ impl Session {
     /// Swap the pane `old` for a fresh pane with the elsewhere-allocated id
     /// `raw`, in place: same spot in the layout, focus follows. The new
     /// pane starts with empty metadata. Returns `None` when `old` is
-    /// missing or the id is taken.
+    /// missing or the id is taken (ids at or above `2^63` are never adoptable).
     pub fn replace_pane(&mut self, old: PaneId, raw: u64) -> Option<PaneId> {
         if self.panes.contains_key(&PaneId(raw)) {
             return None;
@@ -233,6 +239,16 @@ impl Session {
     }
 
     fn adopt_pane(&mut self, raw: u64) -> Option<PaneId> {
+        // Adopting bumps `next_id` past `raw`, and `alloc_pane` increments
+        // from there unchecked — so an id near the top of the space would
+        // eventually overflow it (refusing only `u64::MAX` still lets
+        // `u64::MAX - 1` set `next_id` to the very edge). Real servers
+        // allocate sequentially from 1; anything in the top half of the id
+        // space is corrupt or hostile input, refused like a taken id. The
+        // remaining 2^63 of headroom cannot be walked off sequentially.
+        if raw >= MAX_ADOPTABLE_ID {
+            return None;
+        }
         let id = PaneId(raw);
         if self.panes.contains_key(&id) {
             return None;
@@ -273,8 +289,10 @@ impl Session {
         for id in ids {
             if let Some(command) = &self.panes[id].command {
                 // Commands are one line by construction; keep the format
-                // line-oriented regardless.
-                let clean = command.replace('\n', " ");
+                // line-oriented regardless. `\r` sanitized too: the
+                // line-based reader would strip it before a `\n`, silently
+                // altering the command and breaking snapshot stability.
+                let clean = command.replace(['\n', '\r'], " ");
                 out.push_str(&format!("pane {} {}\n", id.0, clean));
             }
         }
@@ -299,7 +317,7 @@ impl Session {
                 let (focused, node_text) = rest.split_once(' ')?;
                 let focused = PaneId(focused.parse().ok()?);
                 let mut tokens = tokenize(node_text);
-                let root = parse_node(&mut tokens, &mut session)?;
+                let root = parse_node(&mut tokens, &mut session, 0)?;
                 if !tokens.is_empty() || !root.leaves().contains(&focused) {
                     return None;
                 }
@@ -602,11 +620,26 @@ fn tokenize(text: &str) -> std::collections::VecDeque<String> {
         .collect()
 }
 
-/// Parse one node, registering its leaf panes into `session`.
+/// Split-nesting bound for [`parse_node`]. Repeatedly splitting the
+/// newest pane chains one level per split, so the writer can exceed any
+/// small bound — but a window cannot usefully render even a hundred
+/// panes, while stack exhaustion needs tens of thousands of levels. 1024
+/// leaves the writer enormous headroom and the stack none of the risk;
+/// anything deeper is malformed input refused rather than recursed into
+/// (the snapshot arrives over the wire, sized only by `MAX_FRAME`).
+const MAX_SNAPSHOT_DEPTH: u32 = 1024;
+
+/// Parse one node, registering its leaf panes into `session`. `depth`
+/// counts split nesting from the window root, bounded by
+/// [`MAX_SNAPSHOT_DEPTH`].
 fn parse_node(
     tokens: &mut std::collections::VecDeque<String>,
     session: &mut Session,
+    depth: u32,
 ) -> Option<LayoutNode> {
+    if depth > MAX_SNAPSHOT_DEPTH {
+        return None;
+    }
     if tokens.pop_front()? != "(" {
         return None;
     }
@@ -622,8 +655,8 @@ fn parse_node(
             if !(0.0..=1.0).contains(&ratio) {
                 return None;
             }
-            let first = parse_node(tokens, session)?;
-            let second = parse_node(tokens, session)?;
+            let first = parse_node(tokens, session, depth + 1)?;
+            let second = parse_node(tokens, session, depth + 1)?;
             LayoutNode::Split {
                 direction: if kind == "h" {
                     SplitDirection::Horizontal
@@ -809,6 +842,63 @@ mod tests {
         );
         // A fresh snapshot no longer emits the line.
         assert!(!restored.snapshot().contains("wname"));
+    }
+
+    #[test]
+    fn restore_rejects_absurdly_deep_snapshots() {
+        // A hostile blob can nest splits far past anything interactive
+        // splitting builds; restore must refuse it as malformed instead of
+        // recursing until the stack aborts the process.
+        let mut node = "(l 0)".to_string();
+        for id in 1..=1500u64 {
+            node = format!("(h 0.5000 {node} (l {id}))");
+        }
+        let blob = format!("v1\nwindow focused=0 {node}\nactive 0\n");
+        assert!(Session::restore(&blob).is_none());
+    }
+
+    #[test]
+    fn restore_accepts_deep_but_plausible_nesting() {
+        // Deeper than the old 128 bound on purpose: repeatedly splitting
+        // the newest pane chains one level per split, and a snapshot the
+        // writer can produce must always restore.
+        let mut node = "(l 0)".to_string();
+        for id in 1..=300u64 {
+            node = format!("(h 0.5000 {node} (l {id}))");
+        }
+        let blob = format!("v1\nwindow focused=0 {node}\nactive 0\n");
+        let restored = Session::restore(&blob).expect("300 splits restore");
+        assert_eq!(restored.panes().len(), 301);
+    }
+
+    #[test]
+    fn restore_rejects_pane_ids_without_alloc_headroom() {
+        // Ids in the top half of the space would walk `next_id` toward
+        // overflow on later allocs; adopting one must read as malformed.
+        for raw in [u64::MAX, u64::MAX - 1, MAX_ADOPTABLE_ID] {
+            let blob = format!("v1\nwindow focused={raw} (l {raw})\nactive 0\n");
+            assert!(Session::restore(&blob).is_none(), "id {raw} accepted");
+        }
+        let ok = MAX_ADOPTABLE_ID - 1;
+        let blob = format!("v1\nwindow focused={ok} (l {ok})\nactive 0\n");
+        let restored = Session::restore(&blob).expect("below the cap restores");
+        // The headroom holds: fresh allocation past the adopted id works.
+        let mut s = restored;
+        assert!(s.new_window().raw() > ok);
+    }
+
+    #[test]
+    fn snapshot_round_trips_carriage_returns_in_commands() {
+        let mut s = Session::new();
+        let id = s.focused().unwrap();
+        s.pane_mut(id).unwrap().command = Some("echo one\r\ntwo".into());
+        let blob = s.snapshot();
+        let restored = Session::restore(&blob).expect("restore");
+        assert_eq!(
+            restored.pane(id).unwrap().command.as_deref(),
+            Some("echo one  two")
+        );
+        assert_eq!(restored.snapshot(), blob, "snapshot is stable");
     }
 
     #[test]
