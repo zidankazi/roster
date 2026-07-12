@@ -59,19 +59,27 @@ pub struct SidebarEntry {
     /// name: in a Claude-only sidebar every card saying `claude-code`
     /// carries no information, but the task does.
     pub title: Option<String>,
+    /// The agent's own name for its session, from the statusline feed —
+    /// the name fallback when no title was ever broadcast (a session whose
+    /// first prompt is a slash command never gets a title summary).
+    pub session_name: Option<String>,
 }
 
 impl SidebarEntry {
     /// The name the chrome shows for this pane: the live task title when
-    /// the agent broadcast a non-blank one, else the agent's config name.
-    /// The one resolver shared by the sidebar card and the pane border, so
-    /// the two surfaces can't disagree about what a pane is called — and
-    /// the blank-title guard lives here rather than at each render site.
+    /// the agent broadcast a non-blank one, else the agent's own session
+    /// name when the statusline feed reported one, else the agent's config
+    /// name. The one resolver shared by the sidebar card and the pane
+    /// border, so the two surfaces can't disagree about what a pane is
+    /// called — and the blank-text guard lives here rather than at each
+    /// render site.
     pub fn display_name(&self) -> &str {
-        match self.title.as_deref().map(str::trim) {
-            Some(title) if !title.is_empty() => title,
-            _ => &self.agent,
-        }
+        [self.title.as_deref(), self.session_name.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .find(|name| !name.is_empty())
+            .unwrap_or(&self.agent)
     }
 }
 
@@ -99,6 +107,7 @@ pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> 
                 auto_approve: false,
                 telemetry: pane.telemetry.clone(),
                 title: pane.title.clone(),
+                session_name: pane.session_name.clone(),
             })
         })
         .collect();
@@ -1247,6 +1256,30 @@ mod tests {
             } else {
                 assert_eq!(entry.display_name(), "claude-code", "pane {:?}", entry.pane);
             }
+        }
+    }
+
+    #[test]
+    fn card_without_a_title_falls_back_to_the_session_name_then_the_agent() {
+        // A session whose first prompt is a slash command never gets a
+        // title summary from the agent, but the statusline feed still names
+        // the session — that name beats the bare agent name. A broadcast
+        // title still outranks it, and a nameless pane keeps the agent
+        // fallback (blank-name guarding is the model's, tested there).
+        let now = Instant::now();
+        let (mut session, panes) = populated_session(now);
+        session.set_session_name(panes[0], None, Some("Fix the auth flow".into()));
+        session.set_session_name(panes[1], None, Some("Ship the sidebar".into()));
+        session.set_title(panes[1], Some("fixing the auth bug".into()));
+
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        for entry in &entries {
+            let expected = match entry.pane {
+                p if p == panes[0] => "Fix the auth flow",
+                p if p == panes[1] => "fixing the auth bug",
+                _ => "claude-code",
+            };
+            assert_eq!(entry.display_name(), expected, "pane {:?}", entry.pane);
         }
     }
 

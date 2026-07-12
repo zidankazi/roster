@@ -1247,7 +1247,7 @@ fn statusline_telemetry_reaches_the_sidebar_card() {
     let dir = std::env::temp_dir().join(format!("roster-sl-smoke-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create fake agent dir");
     let script = dir.join("claude");
-    let payload = r#"{"model":{"display_name":"Opus"},"context_window":{"remaining_percentage":62.0},"cost":{"total_cost_usd":1.23}}"#;
+    let payload = r#"{"model":{"display_name":"Opus"},"session_name":"Fix the auth flow","context_window":{"remaining_percentage":62.0},"cost":{"total_cost_usd":1.23}}"#;
     std::fs::write(
         &script,
         format!(
@@ -1272,6 +1272,15 @@ fn statusline_telemetry_reaches_the_sidebar_card() {
     assert!(
         drain_while(&mut screen, "Opus · 62% context · $1.23", true, &rx),
         "statusline telemetry never reached the sidebar:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // The payload's session name labels the card: the fake agent never
+    // broadcasts a terminal title (the slash-command-first case), so the
+    // name can only be the statusline fallback — not "claude-code".
+    assert!(
+        drain_while(&mut screen, "Fix the auth flow", true, &rx),
+        "the session name never labeled the card:\n{}",
         screen.grid().lines().join("\n")
     );
 

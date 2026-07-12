@@ -1,4 +1,4 @@
-//! Claude Code statusline payload → [`Telemetry`].
+//! Claude Code statusline payload → [`Payload`] (telemetry + session name).
 //!
 //! Claude Code pipes a session JSON to the configured statusline command;
 //! that feed is the sanctioned telemetry source — never the session
@@ -15,12 +15,33 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use roster_core::{RateLimit, RateLimitWindow, Telemetry};
 use serde_json::Value;
 
-/// The telemetry carried by a statusline JSON payload, or `None` when the
-/// input is not a JSON object or none of the mapped fields are present —
-/// an all-empty reading is "no telemetry", not a report of nothing, so a
-/// card never grows a blank badge line for it. Absent fields stay `None` —
-/// never an error.
-pub fn parse(json: &str) -> Option<Telemetry> {
+/// What one statusline payload reports, split by lifetime: the badge
+/// numbers age out with the feed, while the session identity and name are
+/// display state the pane keeps (see `Session::set_session_name`). Keeping
+/// the name out of [`Telemetry`] is deliberate — one fact in one place, so
+/// a consumer can't read the aging copy by accident.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Payload {
+    /// The badge readings, when the payload carried any — `None` keeps the
+    /// no-blank-badge contract: a payload without numbers must not replace
+    /// a pane's fresh reading or grow an empty badge row.
+    pub telemetry: Option<Telemetry>,
+    /// The reporting session's id — an opaque routing/identity token only,
+    /// never a handle to read the transcript by.
+    pub session_id: Option<String>,
+    /// Claude Code's own name for the session (its auto-generated summary,
+    /// e.g. `"Acknowledge request"`); absent until the session is first
+    /// summarized.
+    pub session_name: Option<String>,
+}
+
+/// The readings carried by a statusline JSON payload, or `None` when the
+/// input is not a JSON object or nothing we map is present. Absent fields
+/// stay `None` — never an error. The telemetry sub-reading is `None`
+/// unless a badge field was reported — an all-empty reading is "no
+/// telemetry", not a report of nothing, so a card never grows a blank
+/// badge line for it.
+pub fn parse(json: &str) -> Option<Payload> {
     let root: Value = serde_json::from_str(json).ok()?;
     if !root.is_object() {
         return None;
@@ -29,8 +50,21 @@ pub fn parse(json: &str) -> Option<Telemetry> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    Some(read_telemetry(&root, now_epoch_secs))
-        .filter(|telemetry| *telemetry != Telemetry::default())
+    let payload = Payload {
+        telemetry: Some(read_telemetry(&root, now_epoch_secs))
+            .filter(|telemetry| *telemetry != Telemetry::default()),
+        session_id: string_at(&root, "session_id"),
+        session_name: string_at(&root, "session_name"),
+    };
+    let empty = payload.telemetry.is_none()
+        && payload.session_id.is_none()
+        && payload.session_name.is_none();
+    (!empty).then_some(payload)
+}
+
+/// The root-level string field `key`, if present and a string.
+fn string_at(root: &Value, key: &str) -> Option<String> {
+    root.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 /// The field-by-field mapping, with the clock injected so the epoch math is
@@ -160,13 +194,23 @@ mod tests {
     }
 
     #[test]
-    fn empty_or_unmapped_objects_parse_to_no_telemetry() {
-        // A payload with none of the mapped fields is "no telemetry" — a
-        // Some(default) here would grow a blank badge line on the card.
+    fn empty_or_unmapped_objects_parse_to_nothing() {
         assert_eq!(parse("{}"), None);
-        assert_eq!(parse(r#"{"session_id":"s","version":"2.1.0"}"#), None);
+        assert_eq!(parse(r#"{"version":"2.1.0","fast_mode":false}"#), None);
         // One mapped field is a report.
         assert!(parse(r#"{"cost":{"total_cost_usd":0.5}}"#).is_some());
+    }
+
+    #[test]
+    fn a_payload_without_numbers_carries_no_telemetry_reading() {
+        // The session fields parse, but `telemetry` stays `None`: a
+        // numbers-less payload must not replace a pane's fresh reading or
+        // grow a blank badge row — the name is not a badge.
+        let payload = parse(r#"{"session_id":"s","session_name":"Fix the auth flow"}"#)
+            .expect("session fields are a report");
+        assert_eq!(payload.telemetry, None);
+        assert_eq!(payload.session_id.as_deref(), Some("s"));
+        assert_eq!(payload.session_name.as_deref(), Some("Fix the auth flow"));
     }
 
     #[test]

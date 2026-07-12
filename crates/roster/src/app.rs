@@ -868,10 +868,22 @@ impl App {
         if json.len() as u64 > crate::hook::MAX_PAYLOAD {
             return;
         }
-        let Some(telemetry) = roster_detect::statusline::parse(json) else {
+        let Some(payload) = roster_detect::statusline::parse(json) else {
             return;
         };
-        rt.tracker.set_telemetry(telemetry, Instant::now());
+        // One payload, two lifetimes: the numbers ride the tracker and age
+        // out; the session identity and name go to the session model, which
+        // owns their stickiness (see `Session::set_session_name`). A
+        // numbers-less payload leaves the tracker untouched so it cannot
+        // clobber a fresh reading.
+        if let Some(telemetry) = payload.telemetry {
+            rt.tracker.set_telemetry(telemetry, Instant::now());
+        }
+        self.session.set_session_name(
+            PaneId::from_raw(pane),
+            payload.session_id,
+            payload.session_name,
+        );
     }
 
     /// A clear event: `tool` names the ask it answers (an approved tool's
@@ -953,9 +965,11 @@ impl App {
             }
         };
         self.remote_send(&Frame::SetAutoApprove { pane, on: now_on });
-        // The toast names the pane — its title (agent CLIs put their task
-        // there) over the generic agent name: cards re-sort as states
-        // change, so the feedback must say which agent actually toggled.
+        // The toast names the pane with the card's own fallback chain —
+        // live title, then the session's statusline name, then the generic
+        // agent name: cards re-sort as states change, so the feedback must
+        // say which agent actually toggled, and it must say it with the
+        // same name the card wears.
         let id = PaneId::from_raw(pane);
         let name = self
             .runtimes
@@ -963,6 +977,7 @@ impl App {
             .and_then(|rt| rt.screen.title())
             .map(|title| title.trim().to_string())
             .filter(|title| !title.is_empty())
+            .or_else(|| self.session.pane(id).and_then(|p| p.session_name.clone()))
             .unwrap_or_else(|| self.pane_name(id));
         self.toast(
             format!(

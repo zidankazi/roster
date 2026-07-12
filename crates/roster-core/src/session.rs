@@ -68,6 +68,16 @@ pub struct Pane {
     /// CLIs put their current task there. Best-effort and display-only,
     /// never a detection signal.
     pub title: Option<String>,
+    /// The id of the agent session that last reported on this pane — an
+    /// opaque identity token from the statusline feed, kept only so
+    /// [`Session::set_session_name`] can tell a new session from the one
+    /// the held name belongs to.
+    pub session_id: Option<String>,
+    /// The agent's own name for its session, from the statusline feed.
+    /// Display-only — the card-name fallback when the agent never
+    /// broadcast a title. Lifetime rules live in
+    /// [`Session::set_session_name`].
+    pub session_name: Option<String>,
     /// Whether the pane holds a completed result the human has not looked at
     /// yet. Set when the pane turns done while unfocused; cleared by
     /// [`Session::mark_seen`]. While set, [`Session::set_reading`] refuses
@@ -86,10 +96,18 @@ impl Pane {
             last_change: None,
             telemetry: None,
             title: None,
+            session_id: None,
+            session_name: None,
             unseen: false,
         }
     }
 }
+
+/// The longest session name [`Session::set_session_name`] will store, in
+/// characters. Names are sidebar copy arriving over an unauthenticated
+/// local socket — the cap keeps a hostile or buggy payload from parking a
+/// megabyte on the render path; the card truncates far below this anyway.
+pub const SESSION_NAME_CAP: usize = 120;
 
 struct Window {
     root: LayoutNode,
@@ -538,6 +556,49 @@ impl Session {
             return false;
         };
         pane.title = title;
+        true
+    }
+
+    /// Record one statusline payload's session identity and name for a
+    /// pane — see [`SESSION_NAME_CAP`]. The single home of the name's
+    /// lifetime rules:
+    ///
+    /// - **Sticky within a session.** The feed omits the name until the
+    ///   session is first summarized, so a blank or absent name from the
+    ///   *same* session never strips a known one — otherwise the card
+    ///   would flap back to the bare agent name between payloads.
+    /// - **Fresh across sessions.** A payload whose `session_id` differs
+    ///   from the one the held name came from replaces the name with its
+    ///   own (possibly none): after a `/clear` or restart the card must
+    ///   not keep wearing the previous task's label — a confidently wrong
+    ///   name is worse than the agent-name fallback.
+    /// - **Bounded.** The name is sidebar copy from an unauthenticated
+    ///   local socket, so it is trimmed and capped at
+    ///   [`SESSION_NAME_CAP`] characters; titles get the same bounding
+    ///   from the terminal emulator's own OSC handling.
+    ///
+    /// A payload with no `session_id` is treated as the current session —
+    /// stickiness is the safe reading of an incomplete payload. Returns
+    /// `false` if the pane does not exist.
+    pub fn set_session_name(
+        &mut self,
+        target: PaneId,
+        session_id: Option<String>,
+        name: Option<String>,
+    ) -> bool {
+        let Some(pane) = self.panes.get_mut(&target) else {
+            return false;
+        };
+        let name = name
+            .map(|n| n.trim().chars().take(SESSION_NAME_CAP).collect::<String>())
+            .filter(|n| !n.is_empty());
+        let new_session = session_id.is_some() && session_id != pane.session_id;
+        if let Some(id) = session_id {
+            pane.session_id = Some(id);
+        }
+        if new_session || name.is_some() {
+            pane.session_name = name;
+        }
         true
     }
 
@@ -1204,6 +1265,71 @@ mod tests {
         assert_eq!(s.pane(id).unwrap().title, None);
 
         assert!(!s.set_title(PaneId::from_raw(999), None));
+    }
+
+    #[test]
+    fn session_name_is_sticky_within_a_session() {
+        let mut s = Session::new();
+        let id = s.focused().unwrap();
+        let name = |s: &Session| s.pane(id).unwrap().session_name.clone();
+        assert_eq!(name(&s), None);
+
+        assert!(s.set_session_name(id, Some("sess-1".into()), Some("Fix the auth flow".into())));
+        assert_eq!(name(&s).as_deref(), Some("Fix the auth flow"));
+
+        // Same session, no name (the feed omits it between summaries):
+        // the known name survives — the card must not flap to the agent
+        // name between payloads.
+        assert!(s.set_session_name(id, Some("sess-1".into()), None));
+        assert_eq!(name(&s).as_deref(), Some("Fix the auth flow"));
+
+        // Same session, blank name: guarded like an absent one.
+        assert!(s.set_session_name(id, Some("sess-1".into()), Some("   ".into())));
+        assert_eq!(name(&s).as_deref(), Some("Fix the auth flow"));
+
+        // A payload with no session id reads as the current session.
+        assert!(s.set_session_name(id, None, Some("Fix auth properly".into())));
+        assert_eq!(name(&s).as_deref(), Some("Fix auth properly"));
+        assert!(s.set_session_name(id, None, None));
+        assert_eq!(name(&s).as_deref(), Some("Fix auth properly"));
+
+        assert!(!s.set_session_name(PaneId::from_raw(999), None, Some("x".into())));
+    }
+
+    #[test]
+    fn a_new_session_sheds_the_previous_sessions_name() {
+        // After /clear or a restart the pane hosts a different session; a
+        // confidently wrong label is worse than the agent-name fallback,
+        // so the old name goes even when the new session is unnamed.
+        let mut s = Session::new();
+        let id = s.focused().unwrap();
+        let name = |s: &Session| s.pane(id).unwrap().session_name.clone();
+
+        assert!(s.set_session_name(id, Some("sess-1".into()), Some("Fix the auth flow".into())));
+        assert!(s.set_session_name(id, Some("sess-2".into()), None));
+        assert_eq!(name(&s), None, "the new unnamed session starts fresh");
+
+        // A new session arriving already named takes its own name.
+        assert!(s.set_session_name(id, Some("sess-3".into()), Some("Ship the sidebar".into())));
+        assert_eq!(name(&s).as_deref(), Some("Ship the sidebar"));
+    }
+
+    #[test]
+    fn session_names_are_trimmed_and_capped() {
+        let mut s = Session::new();
+        let id = s.focused().unwrap();
+
+        assert!(s.set_session_name(id, None, Some("  padded name  ".into())));
+        assert_eq!(
+            s.pane(id).unwrap().session_name.as_deref(),
+            Some("padded name")
+        );
+
+        // Sidebar copy from an unauthenticated socket: a megabyte name is
+        // stored capped, not verbatim.
+        assert!(s.set_session_name(id, None, Some("x".repeat(10_000))));
+        let held = s.pane(id).unwrap().session_name.clone().unwrap();
+        assert_eq!(held.chars().count(), SESSION_NAME_CAP);
     }
 
     #[test]

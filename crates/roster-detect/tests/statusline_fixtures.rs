@@ -23,7 +23,13 @@ fn fixture(name: &str) -> String {
 
 #[test]
 fn full_payload_yields_every_telemetry_field() {
-    let t = parse(&fixture("full.json")).expect("full payload parses");
+    let payload = parse(&fixture("full.json")).expect("full payload parses");
+    assert_eq!(payload.session_name.as_deref(), Some("Acknowledge request"));
+    assert_eq!(
+        payload.session_id.as_deref(),
+        Some("719520a9-eb3f-41ce-9782-62b725c49ab7")
+    );
+    let t = payload.telemetry.expect("numbers reported");
     assert_eq!(t.model.as_deref(), Some("Fable 5"));
     // Live payloads report integer percentages.
     assert_eq!(t.context_pct, Some(96.0));
@@ -44,7 +50,12 @@ fn full_payload_yields_every_telemetry_field() {
 fn partial_payload_maps_null_and_absent_fields_to_none() {
     // A session-start payload: `current_usage` and both percentages are
     // `null`, `rate_limits` absent, and the cost a literal integer `0`.
-    let t = parse(&fixture("partial.json")).expect("partial payload parses");
+    let payload = parse(&fixture("partial.json")).expect("partial payload parses");
+    assert_eq!(
+        payload.session_name, None,
+        "unnamed session carries no name"
+    );
+    let t = payload.telemetry.expect("numbers reported");
     assert_eq!(t.model.as_deref(), Some("Fable 5"));
     assert_eq!(t.context_pct, None, "null percentage is absent, not zero");
     assert_eq!(t.cost_usd, Some(0.0));
