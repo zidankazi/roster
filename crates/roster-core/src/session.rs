@@ -371,12 +371,8 @@ impl Session {
         let window = self.windows.remove(window_idx);
         let had_focus = window.focused == target;
         match window.root.remove_leaf(target) {
-            RemoveOutcome::Removed(root) => {
-                let focused = if had_focus {
-                    root.leaves()[0]
-                } else {
-                    window.focused
-                };
+            RemoveOutcome::Removed(root, sibling) => {
+                let focused = if had_focus { sibling } else { window.focused };
                 self.windows.insert(window_idx, Window { root, focused });
             }
             RemoveOutcome::LastLeaf => {
@@ -732,6 +728,20 @@ mod tests {
         assert_eq!(s.focused(), Some(first));
         assert_eq!(s.layout(80, 24).len(), 1);
         assert!(s.pane(second).is_none());
+    }
+
+    #[test]
+    fn close_focuses_the_pane_that_absorbed_the_space() {
+        // Tree: a | (b / c) with c focused. Closing c collapses its split
+        // into b — the pane that expands into c's area — so focus must land
+        // on b, not jump across the window to a.
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        let b = s.split(a, SplitDirection::Horizontal).unwrap();
+        let c = s.split(b, SplitDirection::Vertical).unwrap();
+        assert_eq!(s.focused(), Some(c));
+        assert!(s.close(c));
+        assert_eq!(s.focused(), Some(b));
     }
 
     #[test]

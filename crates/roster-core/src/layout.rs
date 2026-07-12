@@ -88,8 +88,9 @@ impl LayoutNode {
     }
 
     /// Remove the leaf holding `target`, collapsing its parent split into the
-    /// sibling. Returns `RemoveOutcome::Removed` with the surviving subtree,
-    /// `LastLeaf` if the tree is just this leaf, or `NotFound`.
+    /// sibling. Returns `RemoveOutcome::Removed` with the surviving subtree
+    /// and the collapse sibling's first pane, `LastLeaf` if the tree is just
+    /// this leaf, or `NotFound`.
     pub(crate) fn remove_leaf(self, target: PaneId) -> RemoveOutcome {
         match self {
             LayoutNode::Leaf(id) if id == target => RemoveOutcome::LastLeaf,
@@ -100,21 +101,33 @@ impl LayoutNode {
                 first,
                 second,
             } => match first.remove_leaf(target) {
-                RemoveOutcome::LastLeaf => RemoveOutcome::Removed(*second),
-                RemoveOutcome::Removed(node) => RemoveOutcome::Removed(LayoutNode::Split {
-                    direction,
-                    ratio,
-                    first: Box::new(node),
-                    second,
-                }),
-                RemoveOutcome::NotFound(first) => match second.remove_leaf(target) {
-                    RemoveOutcome::LastLeaf => RemoveOutcome::Removed(first),
-                    RemoveOutcome::Removed(node) => RemoveOutcome::Removed(LayoutNode::Split {
+                RemoveOutcome::LastLeaf => {
+                    let sibling = second.first_leaf();
+                    RemoveOutcome::Removed(*second, sibling)
+                }
+                RemoveOutcome::Removed(node, sibling) => RemoveOutcome::Removed(
+                    LayoutNode::Split {
                         direction,
                         ratio,
-                        first: Box::new(first),
-                        second: Box::new(node),
-                    }),
+                        first: Box::new(node),
+                        second,
+                    },
+                    sibling,
+                ),
+                RemoveOutcome::NotFound(first) => match second.remove_leaf(target) {
+                    RemoveOutcome::LastLeaf => {
+                        let sibling = first.first_leaf();
+                        RemoveOutcome::Removed(first, sibling)
+                    }
+                    RemoveOutcome::Removed(node, sibling) => RemoveOutcome::Removed(
+                        LayoutNode::Split {
+                            direction,
+                            ratio,
+                            first: Box::new(first),
+                            second: Box::new(node),
+                        },
+                        sibling,
+                    ),
                     RemoveOutcome::NotFound(second) => RemoveOutcome::NotFound(LayoutNode::Split {
                         direction,
                         ratio,
@@ -123,6 +136,16 @@ impl LayoutNode {
                     }),
                 },
             },
+        }
+    }
+
+    /// The first pane in tree order — allocation- and panic-free where
+    /// `leaves()[0]` would be neither (every tree has at least one leaf,
+    /// but this makes the invariant structural instead of an index).
+    pub(crate) fn first_leaf(&self) -> PaneId {
+        match self {
+            LayoutNode::Leaf(id) => *id,
+            LayoutNode::Split { first, .. } => first.first_leaf(),
         }
     }
 
@@ -241,8 +264,10 @@ pub(crate) fn replace_leaf(node: &mut LayoutNode, old: PaneId, new: PaneId) -> b
 
 /// Outcome of [`LayoutNode::remove_leaf`].
 pub(crate) enum RemoveOutcome {
-    /// The leaf was removed; this is the surviving tree.
-    Removed(LayoutNode),
+    /// The leaf was removed: the surviving tree, plus the first pane of the
+    /// sibling subtree that absorbed the removed pane's space — where focus
+    /// lands when the removed pane had it.
+    Removed(LayoutNode, PaneId),
     /// The tree consisted solely of the target leaf; nothing survives.
     LastLeaf,
     /// The target was not in this tree; the tree is returned unchanged.
@@ -440,8 +465,9 @@ mod tests {
             second: Box::new(LayoutNode::Leaf(pid(2))),
         };
         match node.remove_leaf(pid(1)) {
-            RemoveOutcome::Removed(survivor) => {
-                assert_eq!(survivor.leaves(), vec![pid(2)])
+            RemoveOutcome::Removed(survivor, sibling) => {
+                assert_eq!(survivor.leaves(), vec![pid(2)]);
+                assert_eq!(sibling, pid(2));
             }
             _ => panic!("expected Removed"),
         }
@@ -451,6 +477,30 @@ mod tests {
     fn remove_only_leaf_reports_last() {
         let node = LayoutNode::Leaf(pid(1));
         assert!(matches!(node.remove_leaf(pid(1)), RemoveOutcome::LastLeaf));
+    }
+
+    #[test]
+    fn remove_leaf_names_the_deep_siblings_first_pane() {
+        // Tree: 1 | (2 / 3). Removing 3 collapses its parent into 2 — the
+        // sibling that takes over the space — not the window's first pane.
+        let node = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf(pid(1))),
+            second: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf(pid(2))),
+                second: Box::new(LayoutNode::Leaf(pid(3))),
+            }),
+        };
+        match node.remove_leaf(pid(3)) {
+            RemoveOutcome::Removed(survivor, sibling) => {
+                assert_eq!(survivor.leaves(), vec![pid(1), pid(2)]);
+                assert_eq!(sibling, pid(2));
+            }
+            _ => panic!("expected Removed"),
+        }
     }
 
     #[test]
