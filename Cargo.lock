@@ -1251,7 +1251,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "roster"
-version = "0.0.6"
+version = "0.0.1"
 dependencies = [
  "crossterm",
  "libc",
@@ -1267,11 +1267,11 @@ dependencies = [
 
 [[package]]
 name = "roster-core"
-version = "0.0.6"
+version = "0.0.1"
 
 [[package]]
 name = "roster-detect"
-version = "0.0.6"
+version = "0.0.1"
 dependencies = [
  "regex",
  "roster-core",
@@ -1282,11 +1282,11 @@ dependencies = [
 
 [[package]]
 name = "roster-proto"
-version = "0.0.6"
+version = "0.0.1"
 
 [[package]]
 name = "roster-pty"
-version = "0.0.6"
+version = "0.0.1"
 dependencies = [
  "libc",
  "portable-pty",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "roster-term"
-version = "0.0.6"
+version = "0.0.1"
 dependencies = [
  "alacritty_terminal",
  "roster-core",
@@ -1302,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "roster-tui"
-version = "0.0.6"
+version = "0.0.1"
 dependencies = [
  "ratatui",
  "roster-core",
