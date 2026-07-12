@@ -1961,11 +1961,16 @@ impl App {
                         let row = y.saturating_sub(c.y).min(c.height.saturating_sub(1)) + 1;
                         (col, row)
                     });
-                    let mut forwarded = false;
-                    if let Some(rt) = self.runtimes.get_mut(&id) {
+                    // A held drag would be re-keyed by whatever a forwarded
+                    // notch makes the guest repaint; swallowing it instead
+                    // keeps the drag alive (trackpad inertia routinely lands
+                    // mid-drag). Roster-side scrolls still apply — absolute
+                    // rows keep the drag glued to its text through those.
+                    let dragging_here = self.sel_drag.map(|d| d.pane) == Some(id);
+                    let forwarded = match self.runtimes.get_mut(&id) {
                         // A dead child can't receive input, so wheel_action
                         // routes exited panes to a history scroll instead.
-                        match wheel_action(
+                        Some(rt) => match wheel_action(
                             up,
                             rt.screen.mouse_reporting(),
                             rt.screen.sgr_mouse(),
@@ -1974,19 +1979,20 @@ impl App {
                             local,
                         ) {
                             Some(WheelAction::Forward(bytes)) => {
-                                let _ = rt.io.write(&bytes);
-                                forwarded = true;
+                                !dragging_here && rt.io.write(&bytes).is_ok()
                             }
-                            Some(WheelAction::Scroll(delta)) => rt.screen.scroll_display(delta),
-                            None => {}
-                        }
-                    }
-                    // A forwarded wheel hands scrolling to the guest (Claude
-                    // Code scrolls its own virtualized transcript): its
-                    // repaint re-keys every row under a highlight, so keeping
-                    // the selection would leave it covering different text.
-                    // Roster-side scrolls (`Scroll`) keep it — absolute rows
-                    // stay glued to their text through those.
+                            Some(WheelAction::Scroll(delta)) => {
+                                rt.screen.scroll_display(delta);
+                                false
+                            }
+                            None => false,
+                        },
+                        None => false,
+                    };
+                    // A wheel that reached the guest hands scrolling to it
+                    // (Claude Code scrolls its own virtualized transcript):
+                    // its repaint re-keys every row under a highlight, so a
+                    // kept selection would end up covering different text.
                     if forwarded {
                         self.drop_selection(id);
                     }
@@ -2197,6 +2203,10 @@ impl App {
         if rt.exited.is_some() {
             return;
         }
+        // A paste is guest input like typing: the echo repaints the pane, so
+        // a selection (or held drag) there would end up over different text.
+        self.selection = None;
+        self.sel_drag = None;
         rt.screen.scroll_to_bottom();
         let _ = if rt.screen.bracketed_paste() {
             // Strip any end guard the clipboard could smuggle in: text must
@@ -2217,8 +2227,11 @@ impl App {
         let Some(id) = self.session.focused() else {
             return;
         };
-        // Typing drops the selection and snaps back to live output.
+        // Typing drops the selection — and any drag feeding it, or the next
+        // pointer move would resurrect the highlight from the old anchor —
+        // and snaps back to live output.
         self.selection = None;
+        self.sel_drag = None;
         let Some(rt) = self.runtimes.get_mut(&id) else {
             return;
         };

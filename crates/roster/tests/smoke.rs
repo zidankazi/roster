@@ -530,9 +530,12 @@ fn wheel_forward_to_a_mouse_reporting_guest_drops_the_selection() {
         screen.grid().lines().join("\n")
     );
 
-    // Locate row-05's first cell, then drag-select down to row-08 and
-    // release: the copy toast paints and the highlight stays (0-based grid
-    // coords; SGR mouse coords are the same +1).
+    // Locate row-05's first cell, then drag-select down to row-08 — with a
+    // wheel notch mid-drag, which must be swallowed (trackpad inertia
+    // routinely lands during a drag; forwarding it would re-key the rows
+    // under the held selection). The release still copies: the toast
+    // paints and the highlight stays (0-based grid coords; SGR mouse
+    // coords are the same +1).
     let lines = screen.grid().lines();
     let (sx, sy) = lines
         .iter()
@@ -544,6 +547,8 @@ fn wheel_forward_to_a_mouse_reporting_guest_drops_the_selection() {
         .expect("press");
     pty.write(format!("\x1b[<32;{col};{}M", row + 3).as_bytes())
         .expect("drag");
+    pty.write(format!("\x1b[<64;{col};{}M", row + 3).as_bytes())
+        .expect("wheel mid-drag");
     pty.write(format!("\x1b[<0;{col};{}m", row + 3).as_bytes())
         .expect("release");
     assert!(
