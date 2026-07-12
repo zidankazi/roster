@@ -472,6 +472,44 @@ fn exited_pane_stays_until_closed() {
     assert!(status.success, "roster exited with failure: {status:?}");
 }
 
+#[test]
+fn drag_held_past_the_top_edge_scrolls_history_into_view() {
+    // A single pane prints 200 numbered lines — far more than the ~26
+    // content rows — so the pane starts at the bottom of real scrollback.
+    let (cols, rows) = (120u16, 30u16);
+    let script =
+        "i=1; while [ $i -le 200 ]; do printf \"line-%03d\\n\" $i; i=$((i+1)); done; sleep 60";
+    let mut pty = Pty::spawn(&format!("'{}' '{script}'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+
+    let mut screen = Screen::new(cols, rows);
+    assert!(
+        drain_while(&mut screen, "line-200", true, &rx),
+        "output never reached the pane:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Press mid-content, drag up to the pane's top border row (1-based
+    // row 2 is the panel frame; content starts below it), and hold: the
+    // edge auto-scroll must carry the view up through history until the
+    // very first line is on screen — no further mouse events needed.
+    pty.write(b"\x1b[<0;60;15M").expect("press");
+    pty.write(b"\x1b[<32;60;10M").expect("drag");
+    pty.write(b"\x1b[<32;60;2M").expect("drag to border");
+    let scrolled_to_top = drain_while(&mut screen, "line-001", true, &rx);
+    assert!(
+        scrolled_to_top,
+        "held drag never scrolled history into view:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(b"\x1b[<0;60;2m").expect("release");
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
 /// Create an executable fake agent named `claude` that shows a blocked
 /// prompt, and return the directory holding it. Each call gets its own
 /// directory: tests run concurrently in one process, and on Linux exec'ing
