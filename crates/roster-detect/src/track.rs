@@ -685,7 +685,10 @@ mod tests {
         let seen = tracker.update(&detector, kind, &grid, t0);
         assert_eq!(seen.state, AgentState::Idle);
         assert_eq!(seen.telemetry, Some(sample_telemetry(62.0)));
-        assert_eq!(tracker.committed(t0).telemetry, Some(sample_telemetry(62.0)));
+        assert_eq!(
+            tracker.committed(t0).telemetry,
+            Some(sample_telemetry(62.0))
+        );
 
         // The freshest payload wins over the one it replaces.
         tracker.set_telemetry(sample_telemetry(58.5), t0 + Duration::from_secs(1));
@@ -714,7 +717,10 @@ mod tests {
         let seen = tracker.update(&detector, kind, &grid, t0 + Duration::from_secs(1));
         assert_eq!(seen.state, AgentState::Working);
         assert_eq!(seen.telemetry, None);
-        assert_eq!(tracker.committed(t0 + Duration::from_secs(1)).telemetry, None);
+        assert_eq!(
+            tracker.committed(t0 + Duration::from_secs(1)).telemetry,
+            None
+        );
         assert_eq!(StateReading::default().telemetry, None);
     }
 

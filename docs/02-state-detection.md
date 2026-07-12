@@ -23,7 +23,7 @@ For every agent pane, detection produces a `StateReading { state, reason, teleme
 
 - **state** — one of the four above.
 - **reason** — a short human string. For `blocked`, it's the actual question ("Allow edit to src/config.ts?"). For `working`, a hint ("running tests…"). For `done`, a summary if available ("finished — 3 files changed"). The reason is the whole reason `roster` beats a bare dot; never skip it.
-- **telemetry** — bridge-fed numbers (model, context %, cost, rate limit; the `roster-core` `Telemetry` type), only when the pane has a live statusline feed (docs/05). Never scraped: `classify` always leaves it `None`; the `PaneTracker` attaches the freshest payload without debouncing and ages it out after 30 idle seconds, so a scraping-only pane behaves exactly as before the field existed.
+- **telemetry** — bridge-fed numbers (model, context %, cost, rate limit; the `roster-core` `Telemetry` type), only when the pane has a live statusline feed (docs/05). Never scraped: `classify` always leaves it `None`; the `PaneTracker` attaches the freshest payload without debouncing and ages it instead of freezing it: the fast-moving fields (model, context %, cost) drop after 30 quiet seconds, while rate-limit windows with a reported reset keep asserting — their countdown re-derived from the arrival stamp each tick — until the reset itself passes (docs/05). A scraping-only pane behaves exactly as before the field existed.
 
 ## How classification works
 
