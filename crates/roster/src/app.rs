@@ -259,6 +259,11 @@ pub struct App {
     /// field, so every path that ends the drag drops all of its state at
     /// once.
     sel_drag: Option<SelectionDrag>,
+    /// The pane holding a left-button grab whose mouse events forward to
+    /// the guest — a guest that negotiated SGR mouse tracking (Claude Code)
+    /// gets the real mouse and runs its own drag-selection; roster's
+    /// selection only serves panes that never asked.
+    mouse_fwd: Option<PaneId>,
     /// The current selection: pane and both endpoints as content-local
     /// columns and scrollback-absolute rows (see [`absolute_row`]) —
     /// anchored to the text, not the screen. Highlighted (converted to
@@ -331,6 +336,7 @@ impl App {
             pointer: Pointer::Default,
             toasts: Vec::new(),
             sel_drag: None,
+            mouse_fwd: None,
             selection: None,
             remote: None,
             quit: false,
@@ -504,6 +510,7 @@ impl App {
             pointer: Pointer::Default,
             toasts: Vec::new(),
             sel_drag: None,
+            mouse_fwd: None,
             selection: None,
             remote: Some(RemoteSession {
                 name: name.to_string(),
@@ -692,6 +699,7 @@ impl App {
             self.last_area = Rect::new(0, 0, size.width, size.height);
             self.sync_layout(self.last_area);
             self.tick_drag_selection();
+            self.relay_clipboard_writes();
             self.detect_if_due();
             self.toasts.retain(|toast| toast.born.elapsed() < TOAST_TTL);
             self.sync_remote_layout();
@@ -1428,13 +1436,64 @@ impl App {
 
     /// Drop the selection and any in-progress drag that belong to `id` —
     /// the shared invalidation for every event that re-keys or replaces
-    /// the pane's buffer (close, reattach, resize reflow).
+    /// the pane's buffer (close, reattach, resize reflow). A held mouse
+    /// grab forwarding to the pane's guest dies with it.
     fn drop_selection(&mut self, id: PaneId) {
         if self.selection.map(|s| s.0) == Some(id) {
             self.selection = None;
         }
         if self.sel_drag.map(|d| d.pane) == Some(id) {
             self.sel_drag = None;
+        }
+        if self.mouse_fwd == Some(id) {
+            self.mouse_fwd = None;
+        }
+    }
+
+    /// Whether the pane's guest gets the real mouse: alive, and it
+    /// negotiated mouse tracking in SGR encoding (Claude Code turns on
+    /// DECSET 1000/1002/1003 + 1006 and runs its own drag-selection; a
+    /// legacy-encoding guest would misread the reports).
+    fn guest_takes_mouse(&self, id: PaneId) -> bool {
+        self.runtimes.get(&id).is_some_and(|rt| {
+            rt.exited.is_none() && rt.screen.mouse_reporting() && rt.screen.sgr_mouse()
+        })
+    }
+
+    /// Pane-local, 1-based cell coordinates for a forwarded mouse report,
+    /// clamped into the pane's content rect. `None` when the pane isn't
+    /// visible in the active window.
+    fn pane_local_cell(&self, id: PaneId, x: u16, y: u16) -> Option<(u16, u16)> {
+        let c = self.pane_content_rect(id)?;
+        let col = x.saturating_sub(c.x).min(c.width.saturating_sub(1)) + 1;
+        let row = y.saturating_sub(c.y).min(c.height.saturating_sub(1)) + 1;
+        Some((col, row))
+    }
+
+    /// Forward a left-button event to `id`'s guest as an SGR report at the
+    /// pointer's pane-local cell. Best-effort: a dead pipe just drops it.
+    fn forward_mouse(&mut self, id: PaneId, x: u16, y: u16, kind: MouseEventKind) {
+        let Some((col, row)) = self.pane_local_cell(id, x, y) else {
+            return;
+        };
+        let Some(report) = sgr_left(col, row, kind) else {
+            return;
+        };
+        if let Some(rt) = self.runtimes.get_mut(&id) {
+            let _ = rt.io.write(&report);
+        }
+    }
+
+    /// Relay every OSC 52 clipboard write a guest made since the last
+    /// frame out to the hosting terminal — a mouse-native guest (Claude
+    /// Code) copies its own drag-selection this way, and without the relay
+    /// the copy would die inside the emulator. One sweep covers local and
+    /// remote panes alike; the queue is empty in the common frame.
+    fn relay_clipboard_writes(&mut self) {
+        for rt in self.runtimes.values_mut() {
+            for text in rt.screen.take_clipboard_writes() {
+                copy_to_clipboard(&text);
+            }
         }
     }
 
@@ -1871,9 +1930,19 @@ impl App {
                                     && y < content.y + content.height
                             });
                             if inside {
-                                // Inside the rect the clamp is the identity,
-                                // so this is the press cell itself.
-                                if let Some(anchor) = self.pointer_sel_point(id, x, y) {
+                                if self.guest_takes_mouse(id) {
+                                    // A guest that asked for the mouse gets
+                                    // the real thing: Claude Code runs its
+                                    // own drag-selection over its own
+                                    // scrollback and copies via OSC 52
+                                    // (relayed each frame). The grab keeps
+                                    // the rest of the drag on this pane.
+                                    self.forward_mouse(id, x, y, mouse.kind);
+                                    self.mouse_fwd = Some(id);
+                                } else if let Some(anchor) = self.pointer_sel_point(id, x, y) {
+                                    // Inside the rect the clamp is the
+                                    // identity, so this is the press cell
+                                    // itself.
                                     let alt = self
                                         .runtimes
                                         .get(&id)
@@ -1903,6 +1972,16 @@ impl App {
                     {
                         self.dragging = Some(new_pos);
                     }
+                } else if let Some(id) = self.mouse_fwd {
+                    // The grab routes the whole drag to the pressed pane,
+                    // clamped into its content — matching what a terminal
+                    // does when a drag leaves the window.
+                    if self.guest_takes_mouse(id) {
+                        self.forward_mouse(id, x, y, mouse.kind);
+                    } else {
+                        // The guest died or turned tracking off mid-drag.
+                        self.mouse_fwd = None;
+                    }
                 } else if let Some(drag) = self.sel_drag {
                     // Extend the selection to the cell under the pointer,
                     // clamped into the pane's content and converted to the
@@ -1923,6 +2002,15 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 self.dragging = None;
                 self.sel_drag = None;
+                // A release that ends a guest grab belongs to the guest —
+                // it finishes the guest's own selection (and its own copy);
+                // roster must not also re-copy a highlight elsewhere.
+                if let Some(id) = self.mouse_fwd.take() {
+                    if self.guest_takes_mouse(id) {
+                        self.forward_mouse(id, x, y, mouse.kind);
+                    }
+                    return;
+                }
                 // A completed drag-selection copies itself — click-drag,
                 // release, pasted anywhere. Extraction reads the emulator's
                 // full buffer, so a selection that auto-scrolled through
@@ -1957,8 +2045,15 @@ impl App {
                 // where we couldn't see it (outside the window, over a
                 // modal): end the drag, or the edge auto-scroll would keep
                 // running off a phantom button. The highlight stays; the
-                // copy is lost with the release.
+                // copy is lost with the release. A guest grab gets told —
+                // a synthetic release — or it keeps drag-selecting a
+                // button that is no longer down.
                 self.sel_drag = None;
+                if let Some(id) = self.mouse_fwd.take() {
+                    if self.guest_takes_mouse(id) {
+                        self.forward_mouse(id, x, y, MouseEventKind::Up(MouseButton::Left));
+                    }
+                }
                 let shape = self.pointer_shape_at(x, y);
                 set_pointer(&mut self.pointer, shape);
             }
@@ -1972,11 +2067,7 @@ impl App {
                     let up = mouse.kind == MouseEventKind::ScrollUp;
                     // Pane-local, 1-based coords for a forwarded mouse report;
                     // computed before the mutable runtime borrow.
-                    let local = self.pane_content_rect(id).map(|c| {
-                        let col = x.saturating_sub(c.x).min(c.width.saturating_sub(1)) + 1;
-                        let row = y.saturating_sub(c.y).min(c.height.saturating_sub(1)) + 1;
-                        (col, row)
-                    });
+                    let local = self.pane_local_cell(id, x, y);
                     // A held drag would be re-keyed by whatever a forwarded
                     // notch makes the guest repaint; swallowing it instead
                     // keeps the drag alive (trackpad inertia routinely lands
@@ -2463,6 +2554,21 @@ fn wheel_action(
 fn sgr_wheel(up: bool, col: u16, row: u16) -> Vec<u8> {
     let button = if up { 64 } else { 65 };
     format!("\x1b[<{button};{col};{row}M").into_bytes()
+}
+
+/// Encode a left-button event as an SGR mouse report (DECSET 1006) at
+/// 1-based `(col, row)`: button 0 on press (`M`) and release (`m`), +32
+/// while moving with the button held. `None` for events that aren't the
+/// left button — only the primary button forwards. Callers must confirm
+/// the guest negotiated SGR first.
+fn sgr_left(col: u16, row: u16, kind: MouseEventKind) -> Option<Vec<u8>> {
+    let (button, suffix) = match kind {
+        MouseEventKind::Down(MouseButton::Left) => (0, 'M'),
+        MouseEventKind::Drag(MouseButton::Left) => (32, 'M'),
+        MouseEventKind::Up(MouseButton::Left) => (0, 'm'),
+        _ => return None,
+    };
+    Some(format!("\x1b[<{button};{col};{row}{suffix}").into_bytes())
 }
 
 /// Hand the text to the hosting terminal's clipboard via OSC 52 — it works

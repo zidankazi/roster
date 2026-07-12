@@ -20,16 +20,26 @@ use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor, Processor};
 
 use roster_core::{Cell, CellStyle, Color, Grid};
 
-/// Captures the title the application sets via OSC 0/2 — agent CLIs
-/// broadcast their current task through it. Everything else is dropped.
+/// Captures the guest-visible side effects the emulator reports: the title
+/// set via OSC 0/2 (agent CLIs broadcast their current task through it) and
+/// clipboard writes via OSC 52 (mouse-native guests copy their own
+/// selections — the host must relay them or the copy silently vanishes).
+/// Everything else is dropped; clipboard *reads* stay unanswered on purpose,
+/// a guest must not see the host clipboard.
 #[derive(Clone, Default)]
-struct TitleSink(Arc<Mutex<Option<String>>>);
+struct EventSink {
+    title: Arc<Mutex<Option<String>>>,
+    clipboard: Arc<Mutex<Vec<String>>>,
+}
 
-impl EventListener for TitleSink {
+impl EventListener for EventSink {
     fn send_event(&self, event: Event) {
         match event {
-            Event::Title(title) => *self.0.lock().expect("title lock") = Some(title),
-            Event::ResetTitle => *self.0.lock().expect("title lock") = None,
+            Event::Title(title) => *self.title.lock().expect("title lock") = Some(title),
+            Event::ResetTitle => *self.title.lock().expect("title lock") = None,
+            Event::ClipboardStore(_, text) => {
+                self.clipboard.lock().expect("clipboard lock").push(text);
+            }
             _ => {}
         }
     }
@@ -59,10 +69,11 @@ impl Dimensions for Size {
 /// One pane's emulated terminal: feed it the raw byte stream, read back the
 /// current screen.
 pub struct Screen {
-    term: Term<TitleSink>,
+    term: Term<EventSink>,
     parser: Processor,
     size: Size,
     title: Arc<Mutex<Option<String>>>,
+    clipboard: Arc<Mutex<Vec<String>>>,
 }
 
 impl Screen {
@@ -76,13 +87,15 @@ impl Screen {
             scrolling_history: Screen::SCROLLBACK,
             ..Config::default()
         };
-        let sink = TitleSink::default();
-        let title = sink.0.clone();
+        let sink = EventSink::default();
+        let title = sink.title.clone();
+        let clipboard = sink.clipboard.clone();
         Screen {
             term: Term::new(config, &size, sink),
             parser: Processor::new(),
             size,
             title,
+            clipboard,
         }
     }
 
@@ -90,6 +103,14 @@ impl Screen {
     /// their current task here. `None` when unset or reset.
     pub fn title(&self) -> Option<String> {
         self.title.lock().expect("title lock").clone()
+    }
+
+    /// Drain the clipboard payloads the guest wrote via OSC 52 since the
+    /// last call, oldest first, already base64-decoded by the emulator. The
+    /// host relays them to the real clipboard — a mouse-native guest (Claude
+    /// Code drag-selects its own transcript) copies through this path.
+    pub fn take_clipboard_writes(&mut self) -> Vec<String> {
+        std::mem::take(&mut *self.clipboard.lock().expect("clipboard lock"))
     }
 
     /// Feed raw bytes from the PTY into the emulator.
@@ -289,6 +310,28 @@ mod tests {
         let mut screen = Screen::new(20, 2);
         screen.advance(b"progress 10%\rprogress 99%");
         assert_eq!(screen.grid().row_text(0).unwrap(), "progress 99%");
+    }
+
+    #[test]
+    fn osc52_clipboard_writes_surface_decoded_and_drain() {
+        let mut screen = Screen::new(20, 4);
+        assert!(screen.take_clipboard_writes().is_empty());
+        // "hello" is aGVsbG8= in base64; two writes queue in order.
+        screen.advance(b"\x1b]52;c;aGVsbG8=\x07");
+        screen.advance(b"\x1b]52;c;d29ybGQ=\x07");
+        assert_eq!(screen.take_clipboard_writes(), ["hello", "world"]);
+        // Draining empties the queue.
+        assert!(screen.take_clipboard_writes().is_empty());
+    }
+
+    #[test]
+    fn corrupt_osc52_payloads_never_panic_or_surface() {
+        let mut screen = Screen::new(20, 4);
+        // Invalid base64 and a query ('?', a clipboard READ) must both be
+        // dropped: the guest never learns the host clipboard.
+        screen.advance(b"\x1b]52;c;!!!not-base64!!!\x07");
+        screen.advance(b"\x1b]52;c;?\x07");
+        assert!(screen.take_clipboard_writes().is_empty());
     }
 
     #[test]

@@ -512,12 +512,14 @@ fn drag_held_past_the_top_edge_scrolls_history_into_view() {
 
 #[test]
 fn edge_drag_on_a_self_scrolling_pane_explains_itself() {
-    // Same guest profile as below: alternate screen + SGR mouse (Claude
-    // Code's). Holding a drag past the pane's top edge can't scroll — the
-    // guest owns its scrollback — so roster must say so instead of
-    // failing silently.
+    // An alternate-screen guest that never asked for the mouse (a pager,
+    // vim without mouse) — roster still owns drag-selection there, but
+    // holding past the pane's top edge can't scroll: the guest owns its
+    // content, so roster must say so instead of failing silently. (A
+    // mouse-native guest like Claude Code gets the whole mouse forwarded
+    // instead — covered by the passthrough tests.)
     let (cols, rows) = (120u16, 30u16);
-    let script = "printf \"\\033[?1049h\\033[?1000h\\033[?1002h\\033[?1006h\"; \
+    let script = "printf \"\\033[?1049h\"; \
                   i=1; while [ $i -le 20 ]; do printf \"row-%02d\\n\" $i; i=$((i+1)); done; \
                   sleep 60";
     let mut pty = Pty::spawn(&format!("'{}' '{script}'", bin()), cols, rows).expect("spawn");
@@ -555,13 +557,13 @@ fn edge_drag_on_a_self_scrolling_pane_explains_itself() {
 }
 
 #[test]
-fn wheel_forward_to_a_mouse_reporting_guest_drops_the_selection() {
-    // A guest with Claude Code's terminal profile: alternate screen plus
-    // SGR mouse tracking. It scrolls its own content on a forwarded wheel,
-    // re-keying every row — a roster-side highlight must not survive to
-    // cover different text.
+fn wheel_forward_to_an_alt_screen_guest_drops_the_selection() {
+    // An alternate-screen guest without mouse tracking: roster owns
+    // drag-selection, but a wheel notch forwards as arrow keys — whatever
+    // the guest repaints in response re-keys the rows under a highlight,
+    // so a roster-side selection must not survive to cover different text.
     let (cols, rows) = (120u16, 30u16);
-    let script = "printf \"\\033[?1049h\\033[?1000h\\033[?1002h\\033[?1006h\"; \
+    let script = "printf \"\\033[?1049h\"; \
                   i=1; while [ $i -le 20 ]; do printf \"row-%02d\\n\" $i; i=$((i+1)); done; \
                   sleep 60";
     let mut pty = Pty::spawn(&format!("'{}' '{script}'", bin()), cols, rows).expect("spawn");
@@ -608,9 +610,9 @@ fn wheel_forward_to_a_mouse_reporting_guest_drops_the_selection() {
     };
     assert!(reversed(&mut screen), "highlight never painted over row-05");
 
-    // A wheel notch over the pane forwards to the mouse-reporting guest;
-    // the stale highlight must clear even though the fake guest ignores
-    // the report and repaints nothing.
+    // A wheel notch over the pane forwards as arrow keys to the alt-screen
+    // guest; the stale highlight must clear even though the fake guest
+    // ignores them and repaints nothing.
     pty.write(format!("\x1b[<64;{col};{row}M").as_bytes())
         .expect("wheel up");
     let start = Instant::now();
@@ -631,6 +633,119 @@ fn wheel_forward_to_a_mouse_reporting_guest_drops_the_selection() {
         "forwarded wheel left the selection highlighted:\n{}",
         screen.grid().lines().join("\n")
     );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
+#[test]
+fn mouse_native_guest_gets_press_drag_and_release() {
+    // A guest with Claude Code's terminal profile (alternate screen + SGR
+    // mouse tracking) gets the real mouse: press, drag, and release land
+    // in its stdin as SGR reports at pane-local coords, and roster runs no
+    // selection of its own — no highlight, no copy toast.
+    let (cols, rows) = (120u16, 30u16);
+    let log = std::env::temp_dir().join(format!("roster-mouse-{}.log", std::process::id()));
+    let _ = std::fs::remove_file(&log);
+    // `stty raw` matters twice over: without it the pty stays canonical
+    // and the kernel holds the newline-less reports back from `cat`
+    // forever — and the mode flip discards input already pending, so the
+    // clicks must wait for the post-stty marker, not the first paint. The
+    // marker is assembled via %s so the needle can never match the pane
+    // command echoed in roster's own chrome — only the guest prints it.
+    let script = format!(
+        "printf \"\\033[?1049h\\033[?1002h\\033[?1006h\"; \
+         stty raw -echo; printf \"guest-%s\\r\\n\" ready; exec cat > {}",
+        log.display()
+    );
+    let mut pty = Pty::spawn(&format!("'{}' '{script}'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+
+    let mut screen = Screen::new(cols, rows);
+    assert!(
+        drain_while(&mut screen, "guest-ready", true, &rx),
+        "guest never started:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Press mid-content, drag down, release. The pane content starts at
+    // the panel inset, so absolute (60, 10) sits well inside it.
+    pty.write(b"\x1b[<0;60;10M\x1b[<32;60;13M\x1b[<0;60;13m")
+        .expect("press-drag-release");
+
+    // The guest's stdin log must receive all three reports (pane-local
+    // coords — smaller than the absolute ones, exact values are layout's
+    // business; the kinds and order are the contract).
+    let start = Instant::now();
+    let mut got = Vec::new();
+    while start.elapsed() < DEADLINE {
+        got = std::fs::read(&log).unwrap_or_default();
+        let s = String::from_utf8_lossy(&got);
+        if s.contains("\x1b[<0;") && s.contains("\x1b[<32;") && s.ends_with('m') {
+            break;
+        }
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let s = String::from_utf8_lossy(&got);
+    assert!(
+        s.contains("\x1b[<0;") && s.contains("\x1b[<32;") && s.ends_with('m'),
+        "guest never received the button reports; log was {s:?}, screen:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Roster ran no selection of its own: no copy toast anywhere.
+    let lines = screen.grid().lines();
+    assert!(
+        !lines.iter().any(|l| l.contains("copied")),
+        "roster copied despite the guest owning the mouse:\n{}",
+        lines.join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+    let _ = std::fs::remove_file(&log);
+}
+
+#[test]
+fn guest_osc52_copy_is_relayed_to_the_host_terminal() {
+    // A guest that copies via OSC 52 (Claude Code does, when it finishes
+    // its own drag-selection) must reach the real clipboard: roster
+    // re-emits the write on its own stdout instead of letting it die
+    // inside the emulator.
+    let (cols, rows) = (100u16, 24u16);
+    // "aGVsbG8=" is "hello"; the relay re-encodes the decoded text, so the
+    // same base64 comes out the other side.
+    let script = "printf \"marker\\n\"; sleep 1; printf \"\\033]52;c;aGVsbG8=\\007\"; sleep 60";
+    let mut pty = Pty::spawn(&format!("'{}' '{script}'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+
+    let mut screen = Screen::new(cols, rows);
+    let start = Instant::now();
+    let mut raw: Vec<u8> = Vec::new();
+    let mut relayed = false;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => {
+                raw.extend_from_slice(&chunk);
+                screen.advance(&chunk);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if raw.windows(15).any(|w| w == b"\x1b]52;c;aGVsbG8=") {
+            relayed = true;
+            break;
+        }
+    }
+    assert!(relayed, "guest OSC 52 write never re-emitted by roster");
 
     pty.write(&[0x02]).expect("prefix");
     pty.write(b"q").expect("quit");
