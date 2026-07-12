@@ -319,9 +319,9 @@ pub fn auto_all_cols(width: u16) -> Option<std::ops::Range<u16>> {
 /// Cells of a footer window's usage bar. Fixed rather than width-scaled:
 /// the bar is a gauge read at a glance, and a length that changes with the
 /// sidebar would make the same percentage look different across layouts.
-/// Six, not more — the bar only ranks the percentage beside it, and every
-/// cell it takes comes out of the reset tail's budget on the default
-/// sidebar width.
+/// Six cells rank the percentage beside them while leaving the reset tail
+/// slack on the default sidebar width — the worst realistic line runs 27
+/// of the 29 budgeted cells; the old 10-cell bar left the tail none.
 const LIMIT_BAR_WIDTH: usize = 6;
 
 /// The rows the sidebar's fleet rate-limit footer occupies at the bottom
@@ -358,6 +358,18 @@ fn limit_line(label: &str, window: &RateLimitWindow) -> Line<'static> {
     let filled = (window.used_pct / 100.0 * LIMIT_BAR_WIDTH as f32)
         .round()
         .clamp(0.0, LIMIT_BAR_WIDTH as f32) as usize;
+    // Gauge honesty at the edges: rounding alone saturates from 91.67% —
+    // most of the critical band would read exhausted — and shows nothing
+    // below 8.34%. A full bar means the window truly is spent; any nonzero
+    // share lights at least one cell. (NaN fails both comparisons and
+    // keeps its empty bar.)
+    let filled = if window.used_pct >= 100.0 {
+        LIMIT_BAR_WIDTH
+    } else if window.used_pct > 0.0 {
+        filled.clamp(1, LIMIT_BAR_WIDTH - 1)
+    } else {
+        filled
+    };
     // Percent right-aligned to three cells so the two rows column-align
     // and the reset tails start together; the worst line ("100%", a "23h"
     // reset) is 27 cells against the default sidebar's 29-cell budget.
@@ -777,8 +789,10 @@ impl Widget for Sidebar<'_> {
 }
 
 /// Compact age for the sidebar: seconds under a minute, then minutes,
-/// hours, days. The day unit exists for the weekly rate-limit reset — a
-/// multi-day span rendered "134h" outruns the footer's width budget.
+/// hours, days. The day unit exists for the weekly rate-limit reset —
+/// "5d" reads at a glance where "134h" is arithmetic homework. Every tier
+/// floors, so a value renders its unit's count-so-far ("1d" spans 24-47h),
+/// the same contract at every scale.
 pub fn format_age(age: Duration) -> String {
     let secs = age.as_secs();
     if secs < 60 {
@@ -1993,8 +2007,10 @@ mod tests {
         }
     }
 
-    /// A fleet reading with both windows: five-hour healthy with a reset,
-    /// seven-day healthy without one.
+    /// A fleet reading with both windows: five-hour healthy with an
+    /// hour-scale reset, seven-day healthy with a day-scale one — the
+    /// weekly tail exercises the `format_age` day unit through the footer,
+    /// the path the original truncation bug lived on.
     fn both_limits() -> roster_core::RateLimit {
         roster_core::RateLimit {
             five_hour: Some(roster_core::RateLimitWindow {
@@ -2003,7 +2019,7 @@ mod tests {
             }),
             seven_day: Some(roster_core::RateLimitWindow {
                 used_pct: 41.0,
-                resets_in: None,
+                resets_in: Some(Duration::from_secs(86_400 * 5)),
             }),
         }
     }
@@ -2031,11 +2047,12 @@ mod tests {
             .rate_limits(Some(&limits))
             .render(Rect::new(0, 0, 32, 14), &mut buf);
 
-        // The two windows hold the panel's last rows — five-hour first,
-        // with its reset time; seven-day percent-only — under a blank
-        // spacer, with the cards untouched above.
+        // The two windows hold the panel's last rows — five-hour first —
+        // under a blank spacer, with the cards untouched above. The weekly
+        // day-scale reset renders whole: no ellipsis, percent columns
+        // aligned across the rows.
         assert_eq!(buffer_row(&buf, 12), " 5h ▓▓▓▓░░  62% · resets 2h");
-        assert_eq!(buffer_row(&buf, 13), " wk ▓▓░░░░  41%");
+        assert_eq!(buffer_row(&buf, 13), " wk ▓▓░░░░  41% · resets 5d");
         assert_eq!(buffer_row(&buf, 11), "");
         assert!(buffer_row(&buf, 2).starts_with("  ◉ claude-code"));
 
@@ -2110,6 +2127,28 @@ mod tests {
             buf.cell((x, 13)).unwrap().style().fg,
             Some(state_color(AgentState::Working))
         );
+    }
+
+    #[test]
+    fn gauge_reads_full_and_empty_only_at_the_true_edges() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let row_at = |used: f32| -> String {
+            let limits = five_hour_limits(used);
+            let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+            Sidebar::new(&entries, None, None, session.window_count(), 0)
+                .rate_limits(Some(&limits))
+                .render(Rect::new(0, 0, 32, 14), &mut buf);
+            buffer_row(&buf, 13)
+        };
+        // Rounding alone would fill 0 cells at 3% and all 6 at 92% — the
+        // clamps keep a nonzero share visible and reserve the full bar for
+        // a truly spent window.
+        assert_eq!(row_at(3.0), " 5h ▓░░░░░   3%");
+        assert_eq!(row_at(92.0), " 5h ▓▓▓▓▓░  92%");
+        assert_eq!(row_at(100.0), " 5h ▓▓▓▓▓▓ 100%");
+        assert_eq!(row_at(0.0), " 5h ░░░░░░   0%");
     }
 
     #[test]
