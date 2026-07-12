@@ -46,8 +46,47 @@ pub struct RateLimit {
 pub struct RateLimitWindow {
     /// Percentage of the rate limit already used (0–100).
     pub used_pct: f32,
-    /// Time until the limit resets, when the agent reports one.
+    /// Time until the limit resets as of the reading's arrival, when the
+    /// agent reports one. Holders re-derive the current countdown via
+    /// [`RateLimitWindow::aged`] rather than displaying this verbatim.
     pub resets_in: Option<std::time::Duration>,
+}
+
+impl RateLimitWindow {
+    /// The reading as it stands `elapsed` after its arrival: the countdown
+    /// counts down, and a window whose reset has passed is no reading at
+    /// all — the reset zeroes the account's used share, so the held
+    /// percentage died with the window. A reading without a reported reset
+    /// has no horizon to age against and survives unchanged; its staleness
+    /// stays the holder's contract.
+    pub fn aged(&self, elapsed: Duration) -> Option<RateLimitWindow> {
+        match self.resets_in {
+            Some(resets) if resets <= elapsed => None,
+            Some(resets) => Some(RateLimitWindow {
+                used_pct: self.used_pct,
+                resets_in: Some(resets - elapsed),
+            }),
+            None => Some(self.clone()),
+        }
+    }
+}
+
+impl RateLimit {
+    /// The report as it stands `elapsed` after its arrival: each window
+    /// aged independently ([`RateLimitWindow::aged`]), collapsing to `None`
+    /// once no window survives — preserving the at-least-one-window
+    /// invariant rather than leaving an all-`None` husk.
+    pub fn aged(&self, elapsed: Duration) -> Option<RateLimit> {
+        let five_hour = self.five_hour.as_ref().and_then(|w| w.aged(elapsed));
+        let seven_day = self.seven_day.as_ref().and_then(|w| w.aged(elapsed));
+        if five_hour.is_none() && seven_day.is_none() {
+            return None;
+        }
+        Some(RateLimit {
+            five_hour,
+            seven_day,
+        })
+    }
 }
 
 /// Used percentage at or above which a rate-limit window is
@@ -261,6 +300,70 @@ mod tests {
             }),
             seven_day: None,
         }
+    }
+
+    #[test]
+    fn aging_counts_a_windows_reset_down() {
+        let window = RateLimitWindow {
+            used_pct: 40.0,
+            resets_in: Some(Duration::from_secs(7200)),
+        };
+        let aged = window
+            .aged(Duration::from_secs(300))
+            .expect("reset still ahead");
+        assert_eq!(aged.used_pct, 40.0);
+        assert_eq!(aged.resets_in, Some(Duration::from_secs(6900)));
+    }
+
+    #[test]
+    fn a_window_dies_the_moment_its_reset_passes() {
+        let window = RateLimitWindow {
+            used_pct: 90.0,
+            resets_in: Some(Duration::from_secs(60)),
+        };
+        // At the reset instant the used share is already obsolete — the
+        // reset zeroed it — so the boundary itself drops the reading.
+        assert_eq!(window.aged(Duration::from_secs(60)), None);
+        assert_eq!(window.aged(Duration::from_secs(61)), None);
+        // A reading that arrived with its reset already past (the parse
+        // saturates those to zero) is dead on arrival.
+        let past = RateLimitWindow {
+            used_pct: 90.0,
+            resets_in: Some(Duration::ZERO),
+        };
+        assert_eq!(past.aged(Duration::ZERO), None);
+    }
+
+    #[test]
+    fn a_window_without_a_reset_survives_aging_unchanged() {
+        let window = RateLimitWindow {
+            used_pct: 55.0,
+            resets_in: None,
+        };
+        assert_eq!(window.aged(Duration::from_secs(86_400)), Some(window));
+    }
+
+    #[test]
+    fn a_report_collapses_when_its_last_window_dies() {
+        let report = RateLimit {
+            five_hour: Some(RateLimitWindow {
+                used_pct: 80.0,
+                resets_in: Some(Duration::from_secs(60)),
+            }),
+            seven_day: Some(RateLimitWindow {
+                used_pct: 30.0,
+                resets_in: Some(Duration::from_secs(86_400)),
+            }),
+        };
+        // The five-hour window resets; the seven-day one keeps counting.
+        let aged = report
+            .aged(Duration::from_secs(120))
+            .expect("seven-day survives");
+        assert_eq!(aged.five_hour, None);
+        let seven = aged.seven_day.expect("seven-day aged");
+        assert_eq!(seven.resets_in, Some(Duration::from_secs(86_280)));
+        // Past both horizons nothing survives — `None`, not an empty husk.
+        assert_eq!(report.aged(Duration::from_secs(100_000)), None);
     }
 
     #[test]

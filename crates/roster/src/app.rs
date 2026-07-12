@@ -1330,18 +1330,17 @@ impl App {
         // Rate limits are account-scoped, so the sidebar footer wants one
         // fleet reading, not a per-card one: merge the panes' stamped
         // telemetry, freshest window first. The gate matches the loop
-        // above (`kind` cleared on exit takes a pane out), and the stamps
-        // come from the trackers that just purged stale payloads — the
+        // above (`kind` cleared on exit takes a pane out), and the readings
+        // are the trackers' post-aging assertions at this same tick — the
         // footer can never assert what the cards no longer do.
-        self.rate_limits = fleet_rate_limit(
-            self.runtimes
-                .values()
-                .filter(|rt| rt.kind.is_some())
-                .filter_map(|rt| rt.tracker.telemetry_stamped())
-                .filter_map(|(telemetry, at)| {
-                    telemetry.rate_limit.as_ref().map(|limit| (limit, at))
-                }),
-        );
+        let limit_readings: Vec<(RateLimit, Instant)> = self
+            .runtimes
+            .values()
+            .filter(|rt| rt.kind.is_some())
+            .filter_map(|rt| rt.tracker.telemetry_stamped(now))
+            .filter_map(|(telemetry, at)| telemetry.rate_limit.map(|limit| (limit, at)))
+            .collect();
+        self.rate_limits = fleet_rate_limit(limit_readings.iter().map(|(limit, at)| (limit, *at)));
         // The notifier owns the edge state: one toast per threshold per
         // window, re-armed when usage falls back or the window resets. The
         // wording is the TUI's (`limit_notice_text`); only the loudness is

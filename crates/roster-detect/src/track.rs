@@ -15,7 +15,7 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::{Duration, Instant};
 
-use roster_core::{AgentState, Grid, Telemetry};
+use roster_core::{AgentState, Grid, RateLimit, Telemetry};
 
 use crate::config::AgentConfig;
 use crate::detector::StateReading;
@@ -26,14 +26,17 @@ const DEFAULT_COMMIT_AFTER: u32 = 2;
 /// surface quickly, and a brief false-blocked is less costly than a missed
 /// one.
 const DEFAULT_BLOCKED_COMMIT_AFTER: u32 = 1;
-/// How long a statusline payload keeps riding committed readings. A live
-/// feed refreshes far more often than this whenever the agent is doing
-/// anything, so a gap this long means the feed is gone (session exited,
-/// bridge unhooked) — and stale numbers presented as current are worse than
-/// none. A blocked or idle pane can legitimately outlast the window; the
-/// next payload restores telemetry instantly, so absence reads as "not
-/// currently confirmed", never as an error. Retune against live cadence
-/// once the feed is wired (docs/05).
+/// How long the fast-moving badge readings (model, context %, cost) keep
+/// riding committed readings. A live feed refreshes far more often than
+/// this whenever the agent is doing anything, so a gap this long means the
+/// numbers stopped moving with reality — and stale numbers presented as
+/// current are worse than none. Rate limits deliberately outlive this
+/// window (see [`PaneTracker::asserted_telemetry`]): a blocked or idle pane
+/// legitimately goes quiet for far longer, and account usage cannot move
+/// while every feed is quiet, so limits vanishing whenever the fleet idles
+/// for half a minute was a bug, not honesty. The next payload restores the
+/// full reading instantly, so absence reads as "not currently confirmed",
+/// never as an error.
 const TELEMETRY_STALE_AFTER: Duration = Duration::from_secs(30);
 
 /// Hash of the grid rows that count as agent output. Rows matching any
@@ -235,9 +238,11 @@ impl Default for Debouncer {
 pub struct PaneTracker {
     history: History,
     debouncer: Debouncer,
-    /// The freshest statusline payload and when it arrived. Bridge data,
-    /// not a scraped signal: it rides committed readings without debouncing
-    /// and ages out after [`TELEMETRY_STALE_AFTER`].
+    /// The freshest statusline payload as it arrived, and when. Bridge
+    /// data, not a scraped signal: it rides committed readings without
+    /// debouncing, filtered through [`PaneTracker::asserted_telemetry`] —
+    /// the held value stays the original so aging always derives from the
+    /// arrival stamp, never compounds.
     telemetry: Option<(Telemetry, Instant)>,
 }
 
@@ -251,8 +256,8 @@ impl PaneTracker {
     /// — one stamped older than the held payload is ignored, so out-of-order
     /// delivery cannot regress the data. Telemetry is authoritative bridge
     /// data: it attaches to the reading on the very next
-    /// [`PaneTracker::update`] with no debounce delay, and drops back to
-    /// `None` once [`TELEMETRY_STALE_AFTER`] passes without a newer payload.
+    /// [`PaneTracker::update`] with no debounce delay, and thins out as it
+    /// ages ([`PaneTracker::asserted_telemetry`]) instead of freezing.
     pub fn set_telemetry(&mut self, telemetry: Telemetry, at: Instant) {
         if self.telemetry.as_ref().is_some_and(|(_, seen)| *seen > at) {
             return;
@@ -280,41 +285,78 @@ impl PaneTracker {
         // from then on.
         self.history
             .record(reading.state, grid, detector.agent(kind), at);
-        // A payload past the staleness window stops being asserted instead
-        // of freezing its last numbers; a held one supersedes the scrape's
-        // `None`. The reading's telemetry always equals the post-purge slot.
-        self.telemetry = self
-            .telemetry
-            .take()
-            .filter(|(_, seen)| at.saturating_duration_since(*seen) <= TELEMETRY_STALE_AFTER);
-        reading.telemetry = self
-            .telemetry
-            .as_ref()
-            .map(|(telemetry, _)| telemetry.clone());
+        // A payload with nothing left to assert stops being held instead of
+        // freezing its last numbers; a held one supersedes the scrape's
+        // `None`. The reading's telemetry always equals the post-purge
+        // assertion.
+        reading.telemetry = self.asserted_telemetry(at);
+        if reading.telemetry.is_none() {
+            self.telemetry = None;
+        }
         reading
     }
 
-    /// The held telemetry with its arrival stamp — the freshness key
-    /// fleet-level aggregation orders by (rate limits are account-scoped,
-    /// so `roster_core::fleet_rate_limit` merges panes by recency). Aging
-    /// is [`PaneTracker::update`]'s, exactly as for
-    /// [`PaneTracker::committed`]: a quiet feed's last payload lingers here
-    /// until the next update purges it.
-    pub fn telemetry_stamped(&self) -> Option<(&Telemetry, Instant)> {
-        self.telemetry
+    /// What the held payload still asserts at `now`, or `None` when nothing
+    /// does. Within [`TELEMETRY_STALE_AFTER`] the full payload rides, its
+    /// rate-limit countdowns aged to `now`; past it only the rate-limit
+    /// windows with a reported reset survive — account usage cannot move
+    /// while every feed is quiet, and the countdown re-derives from the
+    /// arrival stamp — each dying the moment its reset passes
+    /// ([`RateLimit::aged`]), since the reset zeroes the used share the
+    /// reading holds. A window without a reported reset has no horizon to
+    /// age against and keeps the fast-field rule. The clock is monotonic:
+    /// a countdown pauses across a system sleep and can overstate the
+    /// remaining wait until the next payload corrects it — accepted over a
+    /// wall clock's misfires on clock adjustments.
+    fn asserted_telemetry(&self, now: Instant) -> Option<Telemetry> {
+        let (held, seen) = self.telemetry.as_ref()?;
+        let elapsed = now.saturating_duration_since(*seen);
+        let rate_limit = held
+            .rate_limit
             .as_ref()
-            .map(|(telemetry, at)| (telemetry, *at))
+            .and_then(|limit| limit.aged(elapsed));
+        if elapsed <= TELEMETRY_STALE_AFTER {
+            // A payload whose only reading just died (a window that arrived
+            // already reset) asserts nothing — never an all-empty reading.
+            return Some(Telemetry {
+                rate_limit,
+                ..held.clone()
+            })
+            .filter(|telemetry| *telemetry != Telemetry::default());
+        }
+        let rate_limit = rate_limit.and_then(|limit| {
+            let five_hour = limit.five_hour.filter(|w| w.resets_in.is_some());
+            let seven_day = limit.seven_day.filter(|w| w.resets_in.is_some());
+            (five_hour.is_some() || seven_day.is_some()).then_some(RateLimit {
+                five_hour,
+                seven_day,
+            })
+        });
+        rate_limit.map(|rate_limit| Telemetry {
+            rate_limit: Some(rate_limit),
+            ..Telemetry::default()
+        })
     }
 
-    /// The scrape-committed reading with the pane's held telemetry attached.
-    /// Aging is evaluated by [`PaneTracker::update`], so a quiet feed's last
-    /// payload lingers here until the next update purges it.
-    pub fn committed(&self) -> StateReading {
+    /// The telemetry the tracker asserts at `now`
+    /// ([`PaneTracker::asserted_telemetry`]) with the payload's arrival
+    /// stamp — the freshness key fleet-level aggregation orders by (rate
+    /// limits are account-scoped, so `roster_core::fleet_rate_limit` merges
+    /// panes by recency). The values are current — countdowns aged to
+    /// `now`, dead readings dropped — while the stamp stays the arrival, so
+    /// an aged copy can never outrank a genuinely newer payload.
+    pub fn telemetry_stamped(&self, now: Instant) -> Option<(Telemetry, Instant)> {
+        let (_, seen) = self.telemetry.as_ref()?;
+        let seen = *seen;
+        self.asserted_telemetry(now)
+            .map(|telemetry| (telemetry, seen))
+    }
+
+    /// The scrape-committed reading with what the pane's held payload still
+    /// asserts at `now` attached ([`PaneTracker::asserted_telemetry`]).
+    pub fn committed(&self, now: Instant) -> StateReading {
         let mut reading = self.debouncer.committed().clone();
-        reading.telemetry = self
-            .telemetry
-            .as_ref()
-            .map(|(telemetry, _)| telemetry.clone());
+        reading.telemetry = self.asserted_telemetry(now);
         reading
     }
 }
@@ -643,7 +685,7 @@ mod tests {
         let seen = tracker.update(&detector, kind, &grid, t0);
         assert_eq!(seen.state, AgentState::Idle);
         assert_eq!(seen.telemetry, Some(sample_telemetry(62.0)));
-        assert_eq!(tracker.committed().telemetry, Some(sample_telemetry(62.0)));
+        assert_eq!(tracker.committed(t0).telemetry, Some(sample_telemetry(62.0)));
 
         // The freshest payload wins over the one it replaces.
         tracker.set_telemetry(sample_telemetry(58.5), t0 + Duration::from_secs(1));
@@ -672,7 +714,7 @@ mod tests {
         let seen = tracker.update(&detector, kind, &grid, t0 + Duration::from_secs(1));
         assert_eq!(seen.state, AgentState::Working);
         assert_eq!(seen.telemetry, None);
-        assert_eq!(tracker.committed().telemetry, None);
+        assert_eq!(tracker.committed(t0 + Duration::from_secs(1)).telemetry, None);
         assert_eq!(StateReading::default().telemetry, None);
     }
 
@@ -692,7 +734,7 @@ mod tests {
         let t_stale = t0 + TELEMETRY_STALE_AFTER + Duration::from_secs(1);
         let seen = tracker.update(&detector, kind, &grid, t_stale);
         assert_eq!(seen.telemetry, None);
-        assert_eq!(tracker.committed().telemetry, None);
+        assert_eq!(tracker.committed(t_stale).telemetry, None);
 
         // A fresh payload restores it instantly.
         let t_fresh = t_stale + Duration::from_secs(1);
@@ -706,11 +748,11 @@ mod tests {
         let (detector, kind) = tracker_detector();
         let mut tracker = PaneTracker::new();
         let t0 = Instant::now();
-        assert_eq!(tracker.telemetry_stamped(), None);
+        assert_eq!(tracker.telemetry_stamped(t0), None);
 
         tracker.set_telemetry(sample_telemetry(41.0), t0);
-        let (telemetry, at) = tracker.telemetry_stamped().expect("payload held");
-        assert_eq!(*telemetry, sample_telemetry(41.0));
+        let (telemetry, at) = tracker.telemetry_stamped(t0).expect("payload held");
+        assert_eq!(telemetry, sample_telemetry(41.0));
         assert_eq!(at, t0);
 
         // The stamp follows update's purge, so a fleet aggregation reading
@@ -718,6 +760,107 @@ mod tests {
         let grid = Grid::from_text("SPINNING away");
         let t_stale = t0 + TELEMETRY_STALE_AFTER + Duration::from_secs(1);
         tracker.update(&detector, kind, &grid, t_stale);
-        assert_eq!(tracker.telemetry_stamped(), None);
+        assert_eq!(tracker.telemetry_stamped(t_stale), None);
+    }
+
+    /// A telemetry payload carrying one five-hour rate-limit window.
+    fn limited_telemetry(used_pct: f32, resets_in: Option<Duration>) -> Telemetry {
+        Telemetry {
+            model: Some("Opus".to_string()),
+            context_pct: Some(62.0),
+            rate_limit: Some(RateLimit {
+                five_hour: Some(roster_core::RateLimitWindow {
+                    used_pct,
+                    resets_in,
+                }),
+                seven_day: None,
+            }),
+            ..Telemetry::default()
+        }
+    }
+
+    #[test]
+    fn rate_limits_outlive_the_stale_window_with_a_live_countdown() {
+        let (detector, kind) = tracker_detector();
+        let mut tracker = PaneTracker::new();
+        let t0 = Instant::now();
+        let grid = Grid::from_text("SPINNING away");
+        tracker.set_telemetry(limited_telemetry(75.0, Some(Duration::from_secs(7200))), t0);
+
+        // Past the stale window the fast fields drop, but the rate limit —
+        // usage can't move while the feed is quiet — keeps asserting, its
+        // countdown re-derived from the arrival stamp.
+        let t_quiet = t0 + Duration::from_secs(600);
+        let seen = tracker.update(&detector, kind, &grid, t_quiet);
+        let telemetry = seen.telemetry.expect("rate limit still asserted");
+        assert_eq!(telemetry.model, None);
+        assert_eq!(telemetry.context_pct, None);
+        let window = telemetry
+            .rate_limit
+            .clone()
+            .expect("rate limit held")
+            .five_hour
+            .expect("five-hour window held");
+        assert_eq!(window.used_pct, 75.0);
+        assert_eq!(window.resets_in, Some(Duration::from_secs(6600)));
+
+        // The fleet view sees the same aged reading under the arrival stamp.
+        let (stamped, at) = tracker.telemetry_stamped(t_quiet).expect("still stamped");
+        assert_eq!(at, t0);
+        assert_eq!(stamped.rate_limit, telemetry.rate_limit);
+    }
+
+    #[test]
+    fn countdowns_age_within_the_fresh_window_too() {
+        let (detector, kind) = tracker_detector();
+        let mut tracker = PaneTracker::new();
+        let t0 = Instant::now();
+        let grid = Grid::from_text("SPINNING away");
+        tracker.set_telemetry(limited_telemetry(40.0, Some(Duration::from_secs(7200))), t0);
+
+        let seen = tracker.update(&detector, kind, &grid, t0 + Duration::from_secs(10));
+        let telemetry = seen.telemetry.expect("fresh payload rides");
+        // Fresh: the fast fields still ride...
+        assert_eq!(telemetry.model.as_deref(), Some("Opus"));
+        // ...and the countdown is already current, not the arrival value.
+        let window = telemetry
+            .rate_limit
+            .expect("rate limit held")
+            .five_hour
+            .expect("five-hour window held");
+        assert_eq!(window.resets_in, Some(Duration::from_secs(7190)));
+    }
+
+    #[test]
+    fn a_rate_limit_dies_when_its_reset_passes() {
+        let (detector, kind) = tracker_detector();
+        let mut tracker = PaneTracker::new();
+        let t0 = Instant::now();
+        let grid = Grid::from_text("SPINNING away");
+        tracker.set_telemetry(limited_telemetry(90.0, Some(Duration::from_secs(60))), t0);
+
+        // The window reset while the feed was quiet: its used share is
+        // obsolete, so nothing is asserted and the slot purges.
+        let t_reset = t0 + Duration::from_secs(61);
+        let seen = tracker.update(&detector, kind, &grid, t_reset);
+        assert_eq!(seen.telemetry, None);
+        assert_eq!(tracker.telemetry_stamped(t_reset), None);
+    }
+
+    #[test]
+    fn a_rate_limit_without_a_reset_keeps_the_stale_rule() {
+        let (detector, kind) = tracker_detector();
+        let mut tracker = PaneTracker::new();
+        let t0 = Instant::now();
+        let grid = Grid::from_text("SPINNING away");
+        tracker.set_telemetry(limited_telemetry(75.0, None), t0);
+
+        // No reported reset means no horizon to age against: the window
+        // rides while fresh and drops with the fast fields.
+        let seen = tracker.update(&detector, kind, &grid, t0 + Duration::from_secs(5));
+        assert!(seen.telemetry.expect("fresh rides").rate_limit.is_some());
+        let t_stale = t0 + TELEMETRY_STALE_AFTER + Duration::from_secs(1);
+        let seen = tracker.update(&detector, kind, &grid, t_stale);
+        assert_eq!(seen.telemetry, None);
     }
 }
