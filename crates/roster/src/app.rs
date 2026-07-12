@@ -12,7 +12,7 @@ use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use roster_proto::{read_frame, write_frame, Frame};
 
@@ -23,8 +23,8 @@ use ratatui::crossterm::event::{
 use ratatui::layout::Rect;
 use ratatui::DefaultTerminal;
 use roster_core::{
-    fleet_rate_limit, AgentState, ContextAlert, LimitNotifier, PaneId, RateLimit, Session,
-    SplitDirection,
+    carry_rate_limit, fleet_rate_limit, AgentState, ContextAlert, LimitNotifier, PaneId, RateLimit,
+    Session, SplitDirection,
 };
 use roster_detect::{AgentKind, Detector, PaneTracker};
 use roster_pty::Pty;
@@ -287,10 +287,19 @@ pub struct App {
     auto_approve: Arc<Mutex<HashSet<u64>>>,
     /// The account's fleet-aggregated rate-limit reading, recomputed each
     /// detection tick from the panes' stamped telemetry (rate limits are
-    /// account-scoped; the freshest live reading wins). Drives the sidebar
-    /// footer and the hit-test mirror; `None` — no live feed — leaves both
-    /// exactly as they were before the field existed.
+    /// account-scoped; the freshest live reading wins) and carried across
+    /// quiet feeds (`roster_core::carry_rate_limit`) so idle fleets keep
+    /// their footer. Drives the sidebar footer and the hit-test mirror;
+    /// `None` — no reading live or carried — leaves both exactly as they
+    /// were before the field existed.
     rate_limits: Option<RateLimit>,
+    /// When `rate_limits` was last computed, on both clocks: the monotonic
+    /// stamp is immune to clock adjustments, the wall stamp keeps ticking
+    /// through a system sleep (which pauses `Instant` on macOS and Linux),
+    /// and the carry ages by whichever elapsed more — so a countdown
+    /// neither jumps on an NTP step nor survives a reset slept through.
+    /// `None` exactly while `rate_limits` is `None`.
+    rate_limits_at: Option<(Instant, SystemTime)>,
     /// Edge state behind the limit toasts: one notice per threshold per
     /// window, re-armed when usage falls back (see
     /// `roster_core::LimitNotifier`).
@@ -345,6 +354,7 @@ impl App {
             hook_sock,
             auto_approve,
             rate_limits: None,
+            rate_limits_at: None,
             limit_notifier: LimitNotifier::new(),
         };
 
@@ -540,6 +550,7 @@ impl App {
                     .collect(),
             )),
             rate_limits: None,
+            rate_limits_at: None,
             limit_notifier: LimitNotifier::new(),
         };
         for pane in &panes {
@@ -1331,16 +1342,36 @@ impl App {
         // fleet reading, not a per-card one: merge the panes' stamped
         // telemetry, freshest window first. The gate matches the loop
         // above (`kind` cleared on exit takes a pane out), and the readings
-        // are the trackers' post-aging assertions at this same tick — the
-        // footer can never assert what the cards no longer do.
-        let limit_readings: Vec<(RateLimit, Instant)> = self
-            .runtimes
-            .values()
-            .filter(|rt| rt.kind.is_some())
-            .filter_map(|rt| rt.tracker.telemetry_stamped(now))
-            .filter_map(|(telemetry, at)| telemetry.rate_limit.map(|limit| (limit, at)))
-            .collect();
-        self.rate_limits = fleet_rate_limit(limit_readings.iter().map(|(limit, at)| (limit, *at)));
+        // come from the trackers that just purged stale payloads — the
+        // footer's *live* input can never assert what the cards no longer
+        // do.
+        let live = fleet_rate_limit(
+            self.runtimes
+                .values()
+                .filter(|rt| rt.kind.is_some())
+                .filter_map(|rt| rt.tracker.telemetry_stamped())
+                .filter_map(|(telemetry, at)| {
+                    telemetry.rate_limit.as_ref().map(|limit| (limit, at))
+                }),
+        );
+        // Claude Code re-runs the statusline only while the conversation
+        // moves, so an idle fleet's feeds go quiet for far longer than the
+        // trackers' 30s ageout — carry the previous fleet reading across
+        // the gap instead of blanking the footer. Elapsed takes the larger
+        // of the two clocks (see `rate_limits_at`); the carried value is
+        // re-stamped `now`, so aging accumulates tick over tick.
+        let elapsed = self
+            .rate_limits_at
+            .map(|(mono, wall)| {
+                now.saturating_duration_since(mono).max(
+                    SystemTime::now()
+                        .duration_since(wall)
+                        .unwrap_or(Duration::ZERO),
+                )
+            })
+            .unwrap_or(Duration::ZERO);
+        self.rate_limits = carry_rate_limit(live, self.rate_limits.as_ref(), elapsed);
+        self.rate_limits_at = self.rate_limits.is_some().then(|| (now, SystemTime::now()));
         // The notifier owns the edge state: one toast per threshold per
         // window, re-armed when usage falls back or the window resets. The
         // wording is the TUI's (`limit_notice_text`); only the loudness is

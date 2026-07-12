@@ -5,10 +5,11 @@
 //! fields are optional: a pane without the statusline feed simply carries
 //! `Telemetry::default()`. Rate limits are account-scoped rather than
 //! per-pane, so this module also owns the fleet view over them: the
-//! freshest-wins aggregation ([`fleet_rate_limit`]), the used-share
-//! thresholds ([`rate_limit_alert`]), and the edge-triggered crossing
-//! detector behind the limit toasts ([`LimitNotifier`]) — all pure, so the
-//! binary only wires effects. See `docs/05-claude-native-attention.md`.
+//! freshest-wins aggregation ([`fleet_rate_limit`]), the quiet-feed carry
+//! ([`carry_rate_limit`]), the used-share thresholds
+//! ([`rate_limit_alert`]), and the edge-triggered crossing detector behind
+//! the limit toasts ([`LimitNotifier`]) — all pure, so the binary only
+//! wires effects. See `docs/05-claude-native-attention.md`.
 
 use std::time::{Duration, Instant};
 
@@ -47,8 +48,10 @@ pub struct RateLimitWindow {
     /// Percentage of the rate limit already used (0–100).
     pub used_pct: f32,
     /// Time until the limit resets as of the reading's arrival, when the
-    /// agent reports one. Holders re-derive the current countdown via
-    /// [`RateLimitWindow::aged`] rather than displaying this verbatim.
+    /// agent reports one. Zero means the reported reset was already past on
+    /// arrival. Displaying it verbatim is honest only while the reading is
+    /// fresh (the tracker's 30s ageout); anything holding a reading longer
+    /// re-derives the countdown via [`RateLimitWindow::aged`].
     pub resets_in: Option<std::time::Duration>,
 }
 
@@ -72,13 +75,13 @@ impl RateLimitWindow {
 }
 
 impl RateLimit {
-    /// The report as it stands `elapsed` after its arrival: each window
-    /// aged independently ([`RateLimitWindow::aged`]), collapsing to `None`
-    /// once no window survives — preserving the at-least-one-window
-    /// invariant rather than leaving an all-`None` husk.
-    pub fn aged(&self, elapsed: Duration) -> Option<RateLimit> {
-        let five_hour = self.five_hour.as_ref().and_then(|w| w.aged(elapsed));
-        let seven_day = self.seven_day.as_ref().and_then(|w| w.aged(elapsed));
+    /// A report from per-window readings, or `None` when both are absent —
+    /// the at-least-one-window invariant enforced in one place, so no
+    /// producer can leave an all-`None` husk.
+    fn from_windows(
+        five_hour: Option<RateLimitWindow>,
+        seven_day: Option<RateLimitWindow>,
+    ) -> Option<RateLimit> {
         if five_hour.is_none() && seven_day.is_none() {
             return None;
         }
@@ -87,6 +90,64 @@ impl RateLimit {
             seven_day,
         })
     }
+
+    /// The report as it stands `elapsed` after its arrival: each window
+    /// aged independently ([`RateLimitWindow::aged`]), collapsing to `None`
+    /// once no window survives.
+    pub fn aged(&self, elapsed: Duration) -> Option<RateLimit> {
+        RateLimit::from_windows(
+            self.five_hour.as_ref().and_then(|w| w.aged(elapsed)),
+            self.seven_day.as_ref().and_then(|w| w.aged(elapsed)),
+        )
+    }
+}
+
+/// One window's carry step: the live reading always wins — a feed's own
+/// assertion is never second-guessed, even one whose reported reset is
+/// already past (the parse saturates those to a zero countdown, which the
+/// footer shows rather than suppressing a still-asserted used share). Only
+/// when no feed covers the window does the held reading stand in, aged to
+/// now and only while its reset horizon says the window is still the same
+/// window — a held reading without a reported reset has no horizon to age
+/// against and cannot honestly outlive the feeds that stopped asserting it.
+fn carry_window(
+    live: Option<RateLimitWindow>,
+    held: Option<&RateLimitWindow>,
+    elapsed: Duration,
+) -> Option<RateLimitWindow> {
+    live.or_else(|| {
+        held.filter(|window| window.resets_in.is_some())
+            .and_then(|window| window.aged(elapsed))
+    })
+}
+
+/// The account rate-limit reading to display, given the freshest live
+/// aggregation ([`fleet_rate_limit`]) and the previously displayed reading
+/// aged by `elapsed` — the carry that keeps limits on screen while every
+/// feed is quiet. Claude Code only re-runs the statusline while the
+/// conversation moves, so a fleet of idle or blocked panes goes quiet
+/// indefinitely; usage made *from those panes* cannot move meanwhile, and
+/// each held window dies the moment its reset passes (the reset zeroes the
+/// used share it holds). The carried used share is a floor, not a live
+/// measurement: consumption from outside this roster instance (another
+/// machine, another session) can raise the real share without moving the
+/// display until a feed wakes — accepted, since within a window the share
+/// only grows and the pre-carry alternative was showing nothing at all.
+/// Callers feed the result back as the next tick's `held`, re-stamping it
+/// `now`, so aging accumulates across ticks.
+pub fn carry_rate_limit(
+    live: Option<RateLimit>,
+    held: Option<&RateLimit>,
+    elapsed: Duration,
+) -> Option<RateLimit> {
+    let (live_five, live_seven) = match live {
+        Some(live) => (live.five_hour, live.seven_day),
+        None => (None, None),
+    };
+    RateLimit::from_windows(
+        carry_window(live_five, held.and_then(|h| h.five_hour.as_ref()), elapsed),
+        carry_window(live_seven, held.and_then(|h| h.seven_day.as_ref()), elapsed),
+    )
 }
 
 /// Used percentage at or above which a rate-limit window is
@@ -364,6 +425,86 @@ mod tests {
         assert_eq!(seven.resets_in, Some(Duration::from_secs(86_280)));
         // Past both horizons nothing survives — `None`, not an empty husk.
         assert_eq!(report.aged(Duration::from_secs(100_000)), None);
+    }
+
+    /// A one-window report with the given five-hour reading.
+    fn five_report(used_pct: f32, resets_in: Option<Duration>) -> RateLimit {
+        RateLimit {
+            five_hour: Some(RateLimitWindow {
+                used_pct,
+                resets_in,
+            }),
+            seven_day: None,
+        }
+    }
+
+    #[test]
+    fn a_live_reading_always_outranks_the_carried_one() {
+        let live = five_report(91.0, Some(Duration::ZERO));
+        let held = five_report(40.0, Some(Duration::from_secs(7200)));
+        // Even a live window whose reported reset is already past (the
+        // parse's zero saturation) wins: the feed still asserts its used
+        // share, and suppressing it would hide the loudest reading.
+        let carried = carry_rate_limit(Some(live), Some(&held), Duration::from_secs(60))
+            .expect("live reading carries");
+        let five = carried.five_hour.expect("five-hour present");
+        assert_eq!(five.used_pct, 91.0);
+        assert_eq!(five.resets_in, Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_quiet_feeds_reading_carries_with_a_counting_down_reset() {
+        let held = five_report(75.0, Some(Duration::from_secs(7200)));
+        let carried = carry_rate_limit(None, Some(&held), Duration::from_secs(600))
+            .expect("held reading carries");
+        let five = carried.five_hour.expect("five-hour carried");
+        assert_eq!(five.used_pct, 75.0);
+        assert_eq!(five.resets_in, Some(Duration::from_secs(6600)));
+    }
+
+    #[test]
+    fn a_carried_window_dies_at_its_reset() {
+        let held = five_report(90.0, Some(Duration::from_secs(60)));
+        assert_eq!(
+            carry_rate_limit(None, Some(&held), Duration::from_secs(60)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_reading_without_a_reset_does_not_carry() {
+        // No reported reset means no horizon to age against: the reading
+        // lives only as long as some feed asserts it.
+        let held = five_report(88.0, None);
+        assert_eq!(carry_rate_limit(None, Some(&held), Duration::ZERO), None);
+    }
+
+    #[test]
+    fn windows_carry_independently() {
+        // The live payload covers only the five-hour window; the held
+        // seven-day reading stands in rather than being erased.
+        let live = five_report(62.0, Some(Duration::from_secs(3000)));
+        let held = RateLimit {
+            five_hour: Some(RateLimitWindow {
+                used_pct: 40.0,
+                resets_in: Some(Duration::from_secs(600)),
+            }),
+            seven_day: Some(RateLimitWindow {
+                used_pct: 30.0,
+                resets_in: Some(Duration::from_secs(86_400)),
+            }),
+        };
+        let carried = carry_rate_limit(Some(live), Some(&held), Duration::from_secs(300))
+            .expect("both windows present");
+        assert_eq!(carried.five_hour.expect("live five-hour").used_pct, 62.0);
+        let seven = carried.seven_day.expect("held seven-day");
+        assert_eq!(seven.used_pct, 30.0);
+        assert_eq!(seven.resets_in, Some(Duration::from_secs(86_100)));
+    }
+
+    #[test]
+    fn nothing_live_and_nothing_held_carries_nothing() {
+        assert_eq!(carry_rate_limit(None, None, Duration::ZERO), None);
     }
 
     #[test]

@@ -1678,9 +1678,10 @@ fn statusline_rate_limits_reach_the_sidebar_footer_and_toast() {
     let script = dir.join("claude");
     // The needles below stop before the minute digit ("· resets 2h"
     // prefix-matches "2h5m", "2h4m", … "2h0m"), so the assertion doesn't
-    // depend on how long the stamp-to-parse leg takes — resets_in is
-    // frozen once at statusline parse. Minute rendering itself is pinned
-    // deterministically by the unit and render tests.
+    // depend on how long the stamp-to-parse leg takes, nor on the fleet
+    // carry re-aging the footer's countdown while the test drains. Minute
+    // rendering itself is pinned deterministically by the unit and render
+    // tests.
     let resets_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock after the epoch")
