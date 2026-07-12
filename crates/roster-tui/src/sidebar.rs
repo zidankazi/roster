@@ -319,7 +319,10 @@ pub fn auto_all_cols(width: u16) -> Option<std::ops::Range<u16>> {
 /// Cells of a footer window's usage bar. Fixed rather than width-scaled:
 /// the bar is a gauge read at a glance, and a length that changes with the
 /// sidebar would make the same percentage look different across layouts.
-const LIMIT_BAR_WIDTH: usize = 10;
+/// Six, not more — the bar only ranks the percentage beside it, and every
+/// cell it takes comes out of the reset tail's budget on the default
+/// sidebar width.
+const LIMIT_BAR_WIDTH: usize = 6;
 
 /// The rows the sidebar's fleet rate-limit footer occupies at the bottom
 /// of a card region `height` rows tall: one row per reported window plus a
@@ -355,9 +358,9 @@ fn limit_line(label: &str, window: &RateLimitWindow) -> Line<'static> {
     let filled = (window.used_pct / 100.0 * LIMIT_BAR_WIDTH as f32)
         .round()
         .clamp(0.0, LIMIT_BAR_WIDTH as f32) as usize;
-    // One space after the label: with the reset tail the line is exactly
-    // the default sidebar's 29-cell budget — a second space would cost the
-    // tail its "2h" on every frame.
+    // Percent right-aligned to three cells so the two rows column-align
+    // and the reset tails start together; the worst line ("100%", a "23h"
+    // reset) is 27 cells against the default sidebar's 29-cell budget.
     let mut spans = vec![
         Span::styled(format!("{label} "), muted()),
         Span::styled("▓".repeat(filled), severity),
@@ -365,7 +368,7 @@ fn limit_line(label: &str, window: &RateLimitWindow) -> Line<'static> {
         // Floored, not rounded: the color comes from the raw share, so a
         // rounded 89.6 would read "90%" in the warn yellow — the number
         // must never name a tier its color doesn't wear.
-        Span::styled(format!(" {:.0}%", window.used_pct.floor()), severity),
+        Span::styled(format!(" {:>3.0}%", window.used_pct.floor()), severity),
     ];
     if let Some(resets) = window.resets_in {
         spans.push(Span::styled(
@@ -773,16 +776,19 @@ impl Widget for Sidebar<'_> {
     }
 }
 
-/// Compact age for the sidebar: seconds under a minute, then minutes, then
-/// hours.
+/// Compact age for the sidebar: seconds under a minute, then minutes,
+/// hours, days. The day unit exists for the weekly rate-limit reset — a
+/// multi-day span rendered "134h" outruns the footer's width budget.
 pub fn format_age(age: Duration) -> String {
     let secs = age.as_secs();
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {
         format!("{}m", secs / 60)
-    } else {
+    } else if secs < 86_400 {
         format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86_400)
     }
 }
 
@@ -1046,6 +1052,9 @@ mod tests {
         assert_eq!(format_age(Duration::from_secs(12)), "12s");
         assert_eq!(format_age(Duration::from_secs(90)), "1m");
         assert_eq!(format_age(Duration::from_secs(3700)), "1h");
+        assert_eq!(format_age(Duration::from_secs(86_399)), "23h");
+        assert_eq!(format_age(Duration::from_secs(86_400)), "1d");
+        assert_eq!(format_age(Duration::from_secs(86_400 * 6 + 3600)), "6d");
         assert_eq!(format_age(Duration::ZERO), "0s");
     }
 
@@ -2025,8 +2034,8 @@ mod tests {
         // The two windows hold the panel's last rows — five-hour first,
         // with its reset time; seven-day percent-only — under a blank
         // spacer, with the cards untouched above.
-        assert_eq!(buffer_row(&buf, 12), " 5h ▓▓▓▓▓▓░░░░ 62% · resets 2h");
-        assert_eq!(buffer_row(&buf, 13), " wk ▓▓▓▓░░░░░░ 41%");
+        assert_eq!(buffer_row(&buf, 12), " 5h ▓▓▓▓░░  62% · resets 2h");
+        assert_eq!(buffer_row(&buf, 13), " wk ▓▓░░░░  41%");
         assert_eq!(buffer_row(&buf, 11), "");
         assert!(buffer_row(&buf, 2).starts_with("  ◉ claude-code"));
 
@@ -2035,9 +2044,9 @@ mod tests {
         // nothing in the footer leans on DIM (the style.rs regression).
         assert_eq!(buf.cell((1, 12)).unwrap().style().fg, muted().fg);
         assert_eq!(buf.cell((5, 12)).unwrap().style().fg, normal().fg);
-        assert_eq!(buf.cell((12, 12)).unwrap().style().fg, muted().fg);
-        assert_eq!(buf.cell((17, 12)).unwrap().style().fg, normal().fg);
-        assert_eq!(buf.cell((21, 12)).unwrap().style().fg, muted().fg);
+        assert_eq!(buf.cell((8, 12)).unwrap().style().fg, muted().fg);
+        assert_eq!(buf.cell((13, 12)).unwrap().style().fg, normal().fg);
+        assert_eq!(buf.cell((18, 12)).unwrap().style().fg, muted().fg);
         for y in [12, 13] {
             for x in 0..32 {
                 let style = buf.cell((x, y)).unwrap().style();
@@ -2115,7 +2124,7 @@ mod tests {
             .render(Rect::new(0, 0, 32, 14), &mut buf);
         // One reported window is one footer line on the last row — no
         // blank "wk" placeholder, no stray reset text.
-        assert_eq!(buffer_row(&buf, 13), " 5h ▓▓▓▓░░░░░░ 41%");
+        assert_eq!(buffer_row(&buf, 13), " 5h ▓▓░░░░  41%");
         assert_eq!(buffer_row(&buf, 12), "");
         let all: String = (0..14).map(|y| buffer_row(&buf, y) + "\n").collect();
         assert!(!all.contains("wk"), "unreported window drawn:\n{all}");
