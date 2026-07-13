@@ -81,6 +81,8 @@ fn panes_get_title_bars_and_content_shifts_down() {
         mode_badge: None,
         status: "hints with ctrl-b",
         tick: 0,
+        workspace: None,
+        clock: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
@@ -217,6 +219,8 @@ fn pane_title_prefers_the_panes_terminal_title_over_the_agent_name() {
         mode_badge: None,
         status: "",
         tick: 0,
+        workspace: None,
+        clock: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
@@ -276,6 +280,8 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
         mode_badge: None,
         status: "click a pane to focus · ctrl-b for keys",
         tick: 0,
+        workspace: None,
+        clock: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
@@ -348,6 +354,8 @@ fn hover_lights_up_interactive_chrome() {
             mode_badge: None,
             status: "",
             tick: 0,
+            workspace: None,
+            clock: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         terminal.draw(|frame| render(frame, &view)).unwrap();
@@ -429,6 +437,8 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
         mode_badge: Some("SOLO"),
         status: "click agents on the left to switch",
         tick: 0,
+        workspace: None,
+        clock: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
@@ -518,6 +528,8 @@ fn degenerate_frames_render_without_panicking() {
                 mode_badge: Some("PREFIX"),
                 status: "c: new agent · q: quit",
                 tick: 0,
+                workspace: None,
+                clock: None,
             };
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             terminal
@@ -560,6 +572,8 @@ fn launcher_modal_overlays_the_frame() {
         mode_badge: None,
         status: "type to filter",
         tick: 0,
+        workspace: None,
+        clock: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -605,6 +619,8 @@ fn welcome_screen_shows_wordmark_picker_and_command_hint() {
         status: "type to filter",
         // Past the reveal: the wordmark is fully on screen.
         tick: 99,
+        workspace: None,
+        clock: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
@@ -663,6 +679,8 @@ fn welcome_wordmark_reveals_with_the_tick() {
             mode_badge: None,
             status: "",
             tick,
+            workspace: None,
+            clock: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| render(frame, &view)).unwrap();
@@ -732,6 +750,8 @@ fn exited_pane_overlay_card_and_title_marker() {
         mode_badge: Some("PREFIX"),
         status: "hints",
         tick: 0,
+        workspace: None,
+        clock: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
@@ -794,6 +814,8 @@ fn exited_marker_survives_a_long_task_title() {
         mode_badge: None,
         status: "",
         tick: 0,
+        workspace: None,
+        clock: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
@@ -853,6 +875,8 @@ fn exited_marker_survives_a_wide_char_task_title() {
         mode_badge: None,
         status: "",
         tick: 0,
+        workspace: None,
+        clock: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
@@ -898,6 +922,8 @@ fn exited_pane_too_small_for_the_card_keeps_the_strip() {
         mode_badge: None,
         status: "hints",
         tick: 0,
+        workspace: None,
+        clock: None,
     };
 
     // 50 wide → chrome 46, sidebar 23, panel interior 21 — too narrow for
@@ -963,6 +989,8 @@ fn sidebar_ranks_globally_across_workspaces_and_tags_cards() {
         mode_badge: None,
         status: "hints",
         tick: 0,
+        workspace: None,
+        clock: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -1036,6 +1064,8 @@ fn done_pulse_keeps_sidebar_and_title_glyphs_in_step() {
             mode_badge: None,
             status: "",
             tick,
+            workspace: None,
+            clock: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         terminal.draw(|frame| render(frame, &view)).unwrap();
@@ -1119,6 +1149,8 @@ fn fleet_rate_limit_footer_shows_through_the_full_frame() {
             mode_badge: None,
             status: "hints",
             tick: 0,
+            workspace: None,
+            clock: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(frame, &view)).unwrap();

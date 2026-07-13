@@ -316,6 +316,20 @@ pub fn auto_all_cols(width: u16) -> Option<std::ops::Range<u16>> {
     (width > taken + button).then(|| width - 1 - button..width - 1)
 }
 
+/// The columns of the workspace row's clock, in sidebar-inner columns:
+/// fixed-width `HH:MM`, right-aligned one column in from the edge, mirroring
+/// `auto_all_cols` below it. `None` on sidebars too narrow to keep it clear
+/// of the workspace path on the left.
+pub fn clock_cols(width: u16) -> Option<std::ops::Range<u16>> {
+    let clock = CLOCK_WIDTH;
+    // A one-column workspace label plus a gutter before the clock.
+    let taken = 1 + 1;
+    (width > taken + clock).then(|| width - 1 - clock..width - 1)
+}
+
+/// The fixed column width of the `HH:MM` clock in the workspace row.
+const CLOCK_WIDTH: u16 = 5;
+
 /// Cells of a footer window's usage bar. Fixed rather than width-scaled:
 /// the bar is a gauge read at a glance, and a length that changes with the
 /// sidebar would make the same percentage look different across layouts.
@@ -403,6 +417,8 @@ pub struct Sidebar<'a> {
     workspaces: usize,
     tick: u64,
     rate_limits: Option<&'a RateLimit>,
+    workspace: Option<&'a str>,
+    clock: Option<&'a str>,
 }
 
 impl<'a> Sidebar<'a> {
@@ -428,6 +444,8 @@ impl<'a> Sidebar<'a> {
             workspaces,
             tick,
             rate_limits: None,
+            workspace: None,
+            clock: None,
         }
     }
 
@@ -437,6 +455,25 @@ impl<'a> Sidebar<'a> {
     /// field existed.
     pub fn rate_limits(mut self, limits: Option<&'a RateLimit>) -> Self {
         self.rate_limits = limits;
+        self
+    }
+
+    /// The current workspace's folder name (tilde-collapsed against
+    /// `$HOME` by the caller), shown as the sidebar's second header row
+    /// under the centered `roster` title. `None` — the caller couldn't
+    /// resolve a workspace — renders exactly the two-row-shorter header
+    /// from before the field existed.
+    pub fn workspace(mut self, workspace: Option<&'a str>) -> Self {
+        self.workspace = workspace;
+        self
+    }
+
+    /// The wall clock, pre-formatted by the caller (roster-tui does no
+    /// wall-clock reads of its own), shown right-aligned on the workspace
+    /// row. `None` shows the workspace with no clock; the row itself only
+    /// appears when [`Sidebar::workspace`] is set.
+    pub fn clock(mut self, clock: Option<&'a str>) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -511,6 +548,46 @@ impl Widget for Sidebar<'_> {
             }
         }
         let mut y = area.y;
+
+        // The title/workspace banner: `roster` centered, then the
+        // workspace folder and the clock below it. Only drawn when the
+        // caller resolved a workspace — a sidebar with none renders
+        // exactly the header from before these rows existed.
+        if let Some(workspace) = self.workspace {
+            let title = "roster";
+            let title_x = area.x + area.width.saturating_sub(title.chars().count() as u16) / 2;
+            buf.set_stringn(
+                title_x,
+                y,
+                title,
+                usize::from(area.right().saturating_sub(title_x)),
+                bright(),
+            );
+            y += 1;
+
+            let cols = clock_cols(area.width);
+            let workspace_budget = cols
+                .as_ref()
+                .map(|cols| cols.start.saturating_sub(area.x + 2))
+                .unwrap_or_else(|| area.width.saturating_sub(1));
+            buf.set_stringn(
+                area.x + 1,
+                y,
+                workspace,
+                usize::from(workspace_budget),
+                muted(),
+            );
+            if let (Some(clock), Some(cols)) = (self.clock, cols) {
+                buf.set_stringn(
+                    area.x + cols.start,
+                    y,
+                    clock,
+                    usize::from(cols.end - cols.start),
+                    muted(),
+                );
+            }
+            y += 1;
+        }
 
         // Quiet header: lowercase, dim; the blocked count follows it inline
         // (only when someone actually needs you), and the `auto-yes`
@@ -2283,5 +2360,89 @@ mod tests {
             buf.cell((4, 5)).unwrap().style().fg,
             Some(crate::style::ACCENT)
         );
+    }
+
+    #[test]
+    fn workspace_header_is_absent_without_a_workspace() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let area = Rect::new(0, 0, 32, 14);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .clock(Some("14:05"))
+            .render(area, &mut buf);
+        // No workspace means no banner at all — the clock alone can't draw
+        // it — so row 0 is exactly the `agents` header, as before the
+        // field existed.
+        assert!(buffer_row(&buf, 0).trim_start().starts_with("agents"));
+    }
+
+    #[test]
+    fn workspace_and_clock_render_above_the_agents_header() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let area = Rect::new(0, 0, 32, 14);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .workspace(Some("~/Desktop/roster"))
+            .clock(Some("14:05"))
+            .render(area, &mut buf);
+        // Row 0: `roster` centered in the panel width.
+        let title_row = buffer_row(&buf, 0);
+        let expected_start = (area.width - "roster".len() as u16) / 2;
+        assert_eq!(title_row.trim(), "roster", "title row: {title_row:?}");
+        assert_eq!(buf.cell((expected_start, 0)).unwrap().symbol(), "r");
+        // Row 1: workspace on the left, clock right-aligned.
+        let workspace_row = buffer_row(&buf, 1);
+        assert!(
+            workspace_row.trim_start().starts_with("~/Desktop/roster"),
+            "workspace row: {workspace_row:?}"
+        );
+        assert!(
+            workspace_row.trim_end().ends_with("14:05"),
+            "workspace row: {workspace_row:?}"
+        );
+        // Everything below shifts down two rows: the `agents` header now
+        // sits on row 2, and the first card starts on row 4.
+        assert!(buffer_row(&buf, 2).trim_start().starts_with("agents"));
+        assert_eq!(auto_all_cols(area.width).map(|c| c.start), Some(21));
+        assert!(!buffer_row(&buf, 4).is_empty());
+    }
+
+    #[test]
+    fn workspace_row_truncates_on_a_narrow_sidebar() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let area = Rect::new(0, 0, 8, 14);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .workspace(Some("~/Desktop/some-very-long-workspace-name"))
+            .clock(Some("14:05"))
+            .render(area, &mut buf);
+        // Neither row overruns the panel width — no panic, no wraparound.
+        for y in 0..2 {
+            assert!(buffer_row(&buf, y).chars().count() <= usize::from(area.width));
+        }
+    }
+
+    #[test]
+    fn workspace_without_a_clock_still_shows_its_row() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let area = Rect::new(0, 0, 32, 14);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .workspace(Some("~/Desktop/roster"))
+            .render(area, &mut buf);
+        let workspace_row = buffer_row(&buf, 1);
+        assert!(
+            workspace_row.trim_start().starts_with("~/Desktop/roster"),
+            "workspace row: {workspace_row:?}"
+        );
+        assert!(buffer_row(&buf, 2).trim_start().starts_with("agents"));
     }
 }

@@ -10,14 +10,18 @@
 
 **Is not (yet):** no git worktrees and no diff/review/ship UI today — but those are now committed direction, not scope cuts: the instance model in [`05-claude-native-attention.md`](05-claude-native-attention.md) (Pillar 2) plans them. **Is not, permanently:** an agent-orchestration socket API for agents to drive the multiplexer — that is a different product, agents watching agents; keeping the human in the cockpit is ours (see docs/05). Not a security boundary: it spawns your already-logged-in agents as child processes, exactly as tmux would.
 
-Agents launched from **+ new agent** open in their own workspace window
-rather than splitting the current pane; the sidebar is one flat list ranked
-globally by attention across all workspaces (each card tagged `⧉N` with its
-home), and clicking a card jumps to its pane wherever it lives — its header
-also carries the **`auto-yes`** fleet toggle to arm auto-approve for every
-agent at once. Each workspace renders as either a tiled grid (every pane
-visible) or solo (one pane full-size, the sidebar left as the way to flip
-between agents).
+The sidebar opens with a two-row banner: the `roster` wordmark centered on
+top, then the launch directory (tilde-collapsed against `$HOME`) and the
+wall clock below it — both resolved by the `roster` binary and handed to
+`roster-tui` as plain strings, since the rendering crate does no filesystem
+or wall-clock reads of its own. Agents launched from **+ new agent** open in
+their own workspace window rather than splitting the current pane; below the
+banner, the sidebar is one flat list ranked globally by attention across all
+workspaces (each card tagged `⧉N` with its home), and clicking a card jumps
+to its pane wherever it lives — its `agents` header row also carries the
+**`auto-yes`** fleet toggle to arm auto-approve for every agent at once. Each
+workspace renders as either a tiled grid (every pane visible) or solo (one
+pane full-size, the sidebar left as the way to flip between agents).
 This is UI surface, not architecture — see README.md for the click targets
 and keybindings.
 

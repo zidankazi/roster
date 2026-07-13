@@ -314,7 +314,9 @@ fn mouse_clicks_focus_launch_and_jump() {
     // sidebar lists agents only — the shell-only workspace has no rows —
     // so the status row's `⧉ 2/2` indicator (chrome right edge, 1-based
     // row 29) cycles back to the shells, and the agent's card (top of the
-    // sidebar, 1-based rows 4-5) jumps to the agent again.
+    // sidebar, 1-based rows 6-7 — the title/workspace banner pushes the
+    // `agents` header, and everything under it, down by two rows) jumps to
+    // the agent again.
     pty.write(&click(116, 29))
         .expect("click status windows indicator");
     assert!(
@@ -322,7 +324,7 @@ fn mouse_clicks_focus_launch_and_jump() {
         "status indicator click did not switch windows:\n{}",
         screen.grid().lines().join("\n")
     );
-    pty.write(&click(5, 4)).expect("click sidebar card");
+    pty.write(&click(5, 6)).expect("click sidebar card");
     assert!(
         drain_while(&mut screen, "focused ▸ claude  ·  ctrl-b", true, &rx),
         "sidebar click did not jump to the agent:\n{}",

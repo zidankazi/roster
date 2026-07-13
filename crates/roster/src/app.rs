@@ -31,9 +31,9 @@ use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
     confirm_button_at, confirm_contains, content_rect, exited_buttons, hit_test, launch_items,
-    panes_area, pointer_for, render, sidebar_entries, toast_rects, ConfirmButton, Hit, LaunchItem,
-    Launcher, LauncherState, Message, Pointer, SidebarEntry, SidebarSide, SidebarState, ToastLevel,
-    View,
+    panes_area, pointer_for, render, sidebar_entries, toast_rects, ConfirmButton, Hit, HitContext,
+    LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry, SidebarSide, SidebarState,
+    ToastLevel, View,
 };
 
 use crate::keys::encode_key;
@@ -58,6 +58,40 @@ const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 /// is the single point where the pin and the scrape reconcile.
 fn hook_pin_wins(pin_age: Duration, scraped: AgentState) -> bool {
     pin_age < HOOK_PIN_GRACE || scraped == AgentState::Blocked
+}
+
+/// The launch directory for the sidebar's workspace row, tilde-collapsed
+/// against `$HOME` when it sits underneath it (`~/Desktop/roster`, or `~`
+/// exactly at home). `None` when the process's cwd can't be read — the
+/// sidebar simply drops its title rows rather than showing a stale guess.
+fn current_workspace() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return Some(cwd.display().to_string());
+    };
+    if cwd == home {
+        return Some("~".to_string());
+    }
+    match cwd.strip_prefix(&home) {
+        Ok(rest) => Some(format!("~/{}", rest.display())),
+        Err(_) => Some(cwd.display().to_string()),
+    }
+}
+
+/// The wall clock, local time, formatted `HH:MM` for the sidebar's
+/// workspace row. Hand-rolled via `libc::localtime_r` — already an unsafe
+/// dependency of this binary (see `server.rs`) — rather than pulling in a
+/// timezone crate for one conversion.
+fn local_clock(now: SystemTime) -> String {
+    let secs = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0) as libc::time_t;
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::localtime_r(&secs, &mut tm);
+    }
+    format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
 }
 /// One detection tick of the account rate-limit carry: the new displayed
 /// reading and its stamps, from the freshest live aggregation and the
@@ -356,6 +390,11 @@ pub struct App {
     /// window, re-armed when usage falls back (see
     /// `roster_core::LimitNotifier`).
     limit_notifier: LimitNotifier,
+    /// The launch directory, tilde-collapsed against `$HOME`, shown at the
+    /// top of the sidebar. Resolved once at construction — roster's
+    /// working directory does not change over a session — and `None` when
+    /// it can't be read, which simply omits the sidebar's title rows.
+    workspace: Option<String>,
 }
 
 impl App {
@@ -408,6 +447,7 @@ impl App {
             rate_limits: None,
             rate_limits_at: None,
             limit_notifier: LimitNotifier::new(),
+            workspace: current_workspace(),
         };
 
         let first = app.session.focused().expect("new session has a pane");
@@ -604,6 +644,7 @@ impl App {
             rate_limits: None,
             rate_limits_at: None,
             limit_notifier: LimitNotifier::new(),
+            workspace: current_workspace(),
         };
         for pane in &panes {
             app.attach_remote_pane(PaneId::from_raw(pane.pane), pane.pane, &pane.command);
@@ -841,6 +882,7 @@ impl App {
                     (offset > 0).then_some((*id, offset))
                 })
                 .collect();
+            let clock = local_clock(SystemTime::now());
             let view = View {
                 session: &self.session,
                 grids: &grids,
@@ -862,6 +904,8 @@ impl App {
                 // ~8 spinner frames per second, derived from wall time so
                 // the cadence is stable regardless of input polling.
                 tick: started.elapsed().as_millis() as u64 / 125,
+                workspace: self.workspace.as_deref(),
+                clock: Some(&clock),
             };
             terminal.draw(|frame| render(frame, &view))?;
 
@@ -1744,8 +1788,11 @@ impl App {
             &self.session,
             self.side,
             &self.last_entries,
-            self.rate_limits.as_ref(),
-            self.zoomed_pane(),
+            &HitContext {
+                limits: self.rate_limits.as_ref(),
+                zoomed: self.zoomed_pane(),
+                workspace_header: self.workspace.is_some(),
+            },
             (x, y),
         );
         let Hit::Pane(id) = hit else {

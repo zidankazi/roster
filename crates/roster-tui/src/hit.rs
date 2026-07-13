@@ -101,21 +101,40 @@ pub fn pointer_for(hit: Hit) -> Pointer {
     }
 }
 
-/// Resolve what sits under (`x`, `y`) for a frame of `area`. With `zoomed`,
-/// the solo pane owns the whole pane region and the tiled layout is
-/// ignored — mirroring what `render` draws in solo view. `limits` is the
-/// fleet rate-limit reading render was given: its footer shortens the card
-/// region, and the two sides disagreeing would land footer clicks on cards
-/// the shrunken region no longer shows.
+/// The parts of what `render` drew that hit-testing must mirror but that
+/// don't fit the layout math alone: everything here is a `render` input
+/// that shifts or shortens the card region, grouped so `hit_test` stays
+/// under clippy's argument-count gate as the sidebar chrome grows.
+#[derive(Clone, Copy)]
+pub struct HitContext<'a> {
+    /// The fleet rate-limit reading render was given: its footer shortens
+    /// the card region, and the two sides disagreeing would land footer
+    /// clicks on cards the shrunken region no longer shows.
+    pub limits: Option<&'a roster_core::RateLimit>,
+    /// The solo-view pane, if any: it owns the whole pane region and the
+    /// tiled layout is ignored, mirroring what `render` draws in solo view.
+    pub zoomed: Option<PaneId>,
+    /// Whether render drew the two-row title/workspace banner above the
+    /// `agents` row — present, it pushes every row below it (the
+    /// `auto-yes` toggle, the first card) down by two.
+    pub workspace_header: bool,
+}
+
+/// Resolve what sits under (`x`, `y`) for a frame of `area`. `context`
+/// carries the render inputs hit-testing must mirror (see [`HitContext`]).
 pub fn hit_test(
     area: Rect,
     session: &Session,
     side: SidebarSide,
     entries: &[SidebarEntry],
-    limits: Option<&roster_core::RateLimit>,
-    zoomed: Option<PaneId>,
+    context: &HitContext,
     pos: (u16, u16),
 ) -> Hit {
+    let HitContext {
+        limits,
+        zoomed,
+        workspace_header,
+    } = *context;
     let (x, y) = pos;
     // Positions in the inset margin are outside the chrome — nothing
     // interactive lives on the bare canvas.
@@ -165,10 +184,14 @@ pub fn hit_test(
         if y >= cards.y + cards.height {
             return Hit::Sidebar;
         }
+        // The title/workspace banner, when render drew it, sits above the
+        // `agents` row and is inert — everything below shifts down by its
+        // two rows.
+        let header = bar.y + u16::from(workspace_header) * 2;
         // Mirror the sidebar's row plan: cards start two rows below the
         // sidebar's own header, and the header row hosts the `auto-yes`
         // fleet toggle.
-        if y == bar.y {
+        if y == header {
             let on_button =
                 auto_all_cols(bar.width).is_some_and(|cols| cols.contains(&(x - bar.x)));
             if on_button {
@@ -177,7 +200,7 @@ pub fn hit_test(
         }
         // Mirrors sidebar.rs's render: the sidebar's own header row plus one
         // blank spacer (`y += 2`) before the first card row.
-        let first = cards.y + 2;
+        let first = header + 2;
         if y < first {
             return Hit::Sidebar;
         }
@@ -264,8 +287,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 0)
             ),
             Hit::Outside
@@ -276,8 +302,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (0, 5)
             ),
             Hit::Outside
@@ -289,8 +318,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 1)
             ),
             Hit::Sidebar
@@ -302,8 +334,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 3)
             ),
             Hit::SidebarEntry(0)
@@ -314,8 +349,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 4)
             ),
             Hit::SidebarEntry(0)
@@ -327,8 +365,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 5)
             ),
             Hit::Sidebar
@@ -339,8 +380,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 6)
             ),
             Hit::SidebarEntry(1)
@@ -351,8 +395,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 28)
             ),
             Hit::Status
@@ -364,8 +411,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 29)
             ),
             Hit::Outside
@@ -379,8 +429,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 27)
             ),
             Hit::SidebarNewAgent
@@ -391,8 +444,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (4, 26)
             ),
             Hit::Sidebar
@@ -403,8 +459,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (11, 26)
             ),
             Hit::Sidebar
@@ -415,8 +474,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 25)
             ),
             Hit::Sidebar
@@ -444,8 +506,11 @@ mod tests {
             &session,
             SidebarSide::Left,
             &entries,
-            None,
-            None,
+            &HitContext {
+                limits: None,
+                zoomed: None,
+                workspace_header: false,
+            },
             (5, 3),
         );
         assert_eq!(first, Hit::SidebarEntry(0));
@@ -455,8 +520,11 @@ mod tests {
             &session,
             SidebarSide::Left,
             &entries,
-            None,
-            None,
+            &HitContext {
+                limits: None,
+                zoomed: None,
+                workspace_header: false,
+            },
             (5, 6),
         );
         assert_eq!(second, Hit::SidebarEntry(1));
@@ -476,8 +544,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (22, 1)
             ),
             Hit::SidebarAutoAll
@@ -488,8 +559,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (31, 1)
             ),
             Hit::SidebarAutoAll
@@ -500,8 +574,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (32, 1)
             ),
             Hit::Sidebar
@@ -512,8 +589,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (21, 1)
             ),
             Hit::Sidebar
@@ -527,8 +607,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (26, 4)
             ),
             Hit::SidebarAuto(0)
@@ -539,8 +622,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (31, 4)
             ),
             Hit::SidebarAuto(0)
@@ -551,8 +637,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (29, 7)
             ),
             Hit::SidebarAuto(1)
@@ -565,8 +654,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (25, 4)
             ),
             Hit::SidebarEntry(0)
@@ -577,8 +669,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (32, 4)
             ),
             Hit::SidebarEntry(0)
@@ -589,8 +684,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (28, 3)
             ),
             Hit::SidebarEntry(0)
@@ -623,8 +721,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 5)
             ),
             Hit::SidebarEntry(0)
@@ -635,8 +736,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (29, 5)
             ),
             Hit::SidebarEntry(0),
@@ -650,8 +754,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 7)
             ),
             Hit::SidebarEntry(1)
@@ -662,8 +769,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (29, 8)
             ),
             Hit::SidebarAuto(1)
@@ -688,8 +798,11 @@ mod tests {
                     &session,
                     SidebarSide::Left,
                     &entries,
-                    None,
-                    None,
+                    &HitContext {
+                        limits: None,
+                        zoomed: None,
+                        workspace_header: false
+                    },
                     (x, 28)
                 ),
                 Hit::Status
@@ -715,8 +828,11 @@ mod tests {
                     &session,
                     SidebarSide::Left,
                     &entries,
-                    None,
-                    None,
+                    &HitContext {
+                        limits: None,
+                        zoomed: None,
+                        workspace_header: false
+                    },
                     (x, 28)
                 ),
                 hit,
@@ -747,8 +863,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 3)
             ),
             Hit::SidebarEntry(0)
@@ -763,8 +882,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (3, 26)
             ),
             Hit::Sidebar
@@ -786,8 +908,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (40, 1)
             ),
             Hit::PaneTitle(left_id)
@@ -798,8 +923,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (40, 10)
             ),
             Hit::Pane(left_id)
@@ -811,8 +939,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (80, 1)
             ),
             Hit::PaneTitle(right_id)
@@ -823,8 +954,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (80, 20)
             ),
             Hit::Pane(right_id)
@@ -837,8 +971,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (34, 10)
             ),
             Hit::Pane(left_id)
@@ -849,8 +986,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (40, 27)
             ),
             Hit::Pane(left_id)
@@ -872,8 +1012,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (72, 1)
             ),
             Hit::PaneClose(left_id)
@@ -884,8 +1027,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (74, 1)
             ),
             Hit::PaneClose(left_id)
@@ -896,8 +1042,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (71, 1)
             ),
             Hit::PaneTitle(left_id)
@@ -909,8 +1058,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (75, 1)
             ),
             Hit::PaneTitle(left_id)
@@ -922,8 +1074,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (74, 5)
             ),
             Hit::Pane(left_id)
@@ -936,8 +1091,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (115, 1)
             ),
             Hit::PaneClose(right_id)
@@ -960,8 +1118,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                zoomed,
+                &HitContext {
+                    limits: None,
+                    zoomed,
+                    workspace_header: false
+                },
                 (80, 10)
             ),
             Hit::Pane(left_id)
@@ -972,8 +1133,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                zoomed,
+                &HitContext {
+                    limits: None,
+                    zoomed,
+                    workspace_header: false
+                },
                 (80, 1)
             ),
             Hit::PaneTitle(left_id)
@@ -986,8 +1150,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                zoomed,
+                &HitContext {
+                    limits: None,
+                    zoomed,
+                    workspace_header: false
+                },
                 (115, 1)
             ),
             Hit::PaneClose(left_id)
@@ -999,8 +1166,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                zoomed,
+                &HitContext {
+                    limits: None,
+                    zoomed,
+                    workspace_header: false
+                },
                 (5, 3)
             ),
             Hit::SidebarEntry(0)
@@ -1030,8 +1200,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 3)
             ),
             Hit::SidebarEntry(0)
@@ -1042,8 +1215,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 4)
             ),
             Hit::SidebarEntry(0)
@@ -1054,8 +1230,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 5)
             ),
             Hit::Sidebar
@@ -1074,8 +1253,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (115, 28)
             ),
             Hit::StatusViewSolo
@@ -1086,8 +1268,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (117, 28)
             ),
             Hit::Status
@@ -1103,8 +1288,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (115, 28)
             ),
             Hit::StatusWindows
@@ -1115,8 +1303,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (108, 28)
             ),
             Hit::Status
@@ -1127,8 +1318,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (60, 28)
             ),
             Hit::Status
@@ -1171,8 +1365,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 24)
             ),
             Hit::SidebarEntry(7)
@@ -1185,8 +1382,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                Some(&limits),
-                None,
+                &HitContext {
+                    limits: Some(&limits),
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 24)
             ),
             Hit::Sidebar
@@ -1198,8 +1398,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                Some(&limits),
-                None,
+                &HitContext {
+                    limits: Some(&limits),
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 21)
             ),
             Hit::SidebarEntry(6)
@@ -1216,8 +1419,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (121, 5)
             ),
             Hit::Outside
@@ -1228,8 +1434,11 @@ mod tests {
                 &session,
                 SidebarSide::Left,
                 &entries,
-                None,
-                None,
+                &HitContext {
+                    limits: None,
+                    zoomed: None,
+                    workspace_header: false
+                },
                 (5, 30)
             ),
             Hit::Outside

@@ -25,7 +25,7 @@ mod toast;
 
 pub use confirm::{confirm_button_at, confirm_contains, Confirm, ConfirmButton};
 pub use exited::{draw_exited, exited_buttons, exited_card_rect};
-pub use hit::{hit_test, pointer_for, Hit, Pointer};
+pub use hit::{hit_test, pointer_for, Hit, HitContext, Pointer};
 pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
 pub use pane::PaneView;
 pub use sidebar::{
@@ -108,6 +108,14 @@ pub struct View<'a> {
     pub status: &'a str,
     /// Frame counter; animates the working spinner.
     pub tick: u64,
+    /// The workspace folder shown at the top of the sidebar, under the
+    /// centered `roster` title — the caller's tilde-collapsed launch
+    /// directory. `None` renders the header exactly as it was before
+    /// these rows existed (roster-tui reads no filesystem state itself).
+    pub workspace: Option<&'a str>,
+    /// The wall clock shown beside the workspace, pre-formatted by the
+    /// caller — roster-tui does no time-of-day reads of its own.
+    pub clock: Option<&'a str>,
 }
 
 /// The sidebar width for a frame of `total_width`: the fixed width, or half
@@ -489,7 +497,9 @@ pub fn render(frame: &mut Frame, view: &View) {
         .focused(focused_entry)
         .hovered_auto(hovered_auto)
         .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
-        .rate_limits(view.rate_limits),
+        .rate_limits(view.rate_limits)
+        .workspace(view.workspace)
+        .clock(view.clock),
         cards,
     );
 
