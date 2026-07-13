@@ -480,9 +480,10 @@ impl<'a> Sidebar<'a> {
     }
 
     /// Whether the mouse sits over the workspace row's path, revealing the
-    /// full untruncated path on the divider row below it — the tooltip for
-    /// a path [`truncate`] cut to fit. No effect when the path already fits
-    /// whole.
+    /// full untruncated path as a floating tooltip over the divider row
+    /// below it — drawn past the sidebar's own width when the path needs
+    /// more room than the column has, the tooltip for a path [`truncate`]
+    /// cut to fit. No effect when the path already fits whole.
     pub fn hovered_workspace(mut self, hovered: bool) -> Self {
         self.hovered_workspace = hovered;
         self
@@ -603,18 +604,37 @@ impl Widget for Sidebar<'_> {
             y += 1;
 
             // The divider: a quiet rule most of the time, or — while the
-            // pointer sits on the truncated path above — the full path in
-            // its place, the tooltip [`truncate`]'s cut promised. A path
-            // that already fit whole has nothing to reveal, so hover has
-            // no effect on it.
+            // pointer sits on the truncated path above — a floating tooltip
+            // carrying the full path, the reveal [`truncate`]'s cut
+            // promised. A path that already fit whole has nothing to
+            // reveal, so hover has no effect on it. The sidebar column is
+            // rarely wide enough for a deep path (a worktree path easily
+            // runs 60+ cells), so the tooltip is drawn past `area`'s own
+            // width straight into the buffer — panes render before the
+            // sidebar (see `lib.rs`), so this deliberately paints over
+            // whatever sits alongside the sidebar for the one row it
+            // occupies, exactly like `toast.rs`'s cards float over panes.
             if self.hovered_workspace && path_cut {
-                buf.set_stringn(
-                    area.x + 1,
-                    y,
-                    workspace,
-                    usize::from(area.width.saturating_sub(2)),
-                    normal(),
+                let buf_area = *buf.area();
+                let text_width = Span::raw(workspace).width() as u16;
+                let start_x = area.x + 1;
+                let room_right = buf_area.right().saturating_sub(start_x);
+                let (draw_x, overlay_width) = if room_right >= text_width {
+                    (start_x, text_width)
+                } else {
+                    // Not enough room growing rightward — the sidebar sits
+                    // on the right edge of the frame — so grow leftward
+                    // instead, anchored to the sidebar's own right margin.
+                    let end_x = area.x + area.width.saturating_sub(1);
+                    let room_left = end_x.saturating_sub(buf_area.x);
+                    let width = text_width.min(room_left.max(1));
+                    (end_x.saturating_sub(width), width)
+                };
+                buf.set_style(
+                    Rect::new(draw_x, y, overlay_width, 1),
+                    Style::default().bg(SURFACE_RAISED),
                 );
+                buf.set_stringn(draw_x, y, workspace, usize::from(overlay_width), normal());
             } else {
                 let rule_width = area.width.saturating_sub(2);
                 let rule = "─".repeat(usize::from(rule_width));
@@ -2537,6 +2557,63 @@ mod tests {
             Some('─'),
             "hover should replace the rule, not sit beside it"
         );
+    }
+
+    #[test]
+    fn hovering_reveals_the_full_path_past_the_sidebar_column() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // The full frame is much wider than the sidebar column — mirrors a
+        // real layout where panes sit alongside the sidebar and the
+        // tooltip floats over them, unlike a buffer scoped to the
+        // sidebar's own width alone.
+        let frame = Rect::new(0, 0, 80, 14);
+        let mut buf = Buffer::empty(frame);
+        let sidebar_area = Rect::new(0, 0, 22, 14);
+        let long_path = "~/Desktop/roster/.claude/worktrees/agent-aeb0c25be99bdee2e";
+        assert!(
+            long_path.chars().count() as u16 > sidebar_area.width,
+            "path must be wider than the sidebar column for this test to prove anything"
+        );
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .workspace(Some(long_path))
+            .clock(Some("14:05"))
+            .hovered_workspace(true)
+            .render(sidebar_area, &mut buf);
+        let divider_row = buffer_row(&buf, 2);
+        // The full, untruncated path — no ellipsis — even though it is
+        // wider than the sidebar's own 22-column area.
+        assert!(
+            divider_row.trim_start().starts_with(long_path),
+            "divider row: {divider_row:?}"
+        );
+        assert!(!divider_row.contains('…'), "divider row: {divider_row:?}");
+    }
+
+    #[test]
+    fn hovering_grows_the_tooltip_leftward_off_a_right_edge_sidebar() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // A sidebar pinned to the frame's right edge has no room to grow
+        // rightward — the tooltip must grow left over the panes instead
+        // and still land the whole path on screen.
+        let frame = Rect::new(0, 0, 80, 14);
+        let mut buf = Buffer::empty(frame);
+        let sidebar_area = Rect::new(58, 0, 22, 14);
+        let long_path = "~/Desktop/roster/.claude/worktrees/agent-aeb0c25be99bdee2e";
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .workspace(Some(long_path))
+            .clock(Some("14:05"))
+            .hovered_workspace(true)
+            .render(sidebar_area, &mut buf);
+        let divider_row = buffer_row(&buf, 2);
+        assert!(
+            divider_row.contains(long_path),
+            "divider row: {divider_row:?}"
+        );
+        assert!(!divider_row.contains('…'), "divider row: {divider_row:?}");
     }
 
     #[test]
