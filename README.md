@@ -47,7 +47,8 @@ without reading every screen.
   scrolling, and copy work exactly as in a bare terminal, relayed to
   your clipboard.
 - **mouse and keyboard, both first-class.** click a pane, drag a divider, hit
-  the `+ new agent` button, or drive all of it with tmux-style `ctrl-b` keys.
+  the `+ new agent` button, right-click an agent card for a pin-to-top / close
+  menu, or drive all of it with tmux-style `ctrl-b` keys.
 - **detach, agents keep running.** every pane lives in a background server.
   close the lid, reattach later, even over ssh. sessions survive the UI.
 - **reads Claude Code's own hooks.** exact permission asks and state straight

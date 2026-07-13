@@ -69,6 +69,10 @@ pub struct SidebarEntry {
     /// the name fallback when no title was ever broadcast (a session whose
     /// first prompt is a slash command never gets a title summary).
     pub session_name: Option<String>,
+    /// Whether the user pinned this card to the top of the list, overriding
+    /// the triage order. Set by the binary (which owns the pinned set); the
+    /// sidebar only renders the marker and [`pin_to_top`] only reorders.
+    pub pinned: bool,
 }
 
 impl SidebarEntry {
@@ -114,6 +118,10 @@ pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> 
                 telemetry: pane.telemetry.clone(),
                 title: pane.title.clone(),
                 session_name: pane.session_name.clone(),
+                // The binary lights this from its pinned set, same as the
+                // auto-approve flag above; the session model has no notion
+                // of it.
+                pinned: false,
             })
         })
         .collect();
@@ -132,6 +140,16 @@ pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> 
         (item.priority(), e.pane)
     });
     entries
+}
+
+/// Float every pinned entry above the unpinned ones, keeping each group's
+/// existing order. Applied by the binary after it lights the `pinned` flags,
+/// so a pinned card sits at the top *regardless of its state* — a deliberate
+/// override of the triage ranking [`sidebar_entries`] just imposed, for the
+/// one agent the user chose to babysit. The sort is stable, so within the
+/// pinned group and within the rest the attention order still holds.
+pub fn pin_to_top(entries: &mut [SidebarEntry]) {
+    entries.sort_by_key(|entry| !entry.pinned);
 }
 
 /// The entries index of the pane holding focus, when it has a card. The
@@ -405,6 +423,12 @@ fn limit_line(label: &str, window: &RateLimitWindow) -> Line<'static> {
     }
     Line::from(spans)
 }
+
+/// The glyph marking a pinned card, drawn in the accent color at the left
+/// of the name row's right block. A filled star reads as a user-applied
+/// priority mark, distinct from every state glyph (`◉ ○ ✓` and the
+/// spinner); single-cell like the rest of the sidebar's vocabulary.
+const PIN_MARKER: &str = "★";
 
 /// The agent-state sidebar widget.
 pub struct Sidebar<'a> {
@@ -804,6 +828,27 @@ impl Widget for Sidebar<'_> {
                         if start >= name_start {
                             block_left = start;
                             buf.set_string(block_left, y, &tag, sub);
+                        }
+                    }
+                    // A pinned card carries a marker at the left of the right
+                    // block: this card sits at the top because the user put
+                    // it there, not because triage did. The raw accent, kept
+                    // even on the light inverted fill (the brand red clears
+                    // it, like the jump marker) so a pinned card reads the
+                    // same wherever it lands. Yields its column to the name
+                    // on a too-narrow sidebar, same as the tag above.
+                    if entry.pinned {
+                        let gap = u16::from(block_left < area.x + area.width - 1);
+                        let start =
+                            block_left.saturating_sub(gap + PIN_MARKER.chars().count() as u16);
+                        if start >= name_start {
+                            block_left = start;
+                            buf.set_string(
+                                block_left,
+                                y,
+                                PIN_MARKER,
+                                Style::default().fg(crate::style::ACCENT),
+                            );
                         }
                     }
                     // The name fills from its indent up to the right block:
@@ -2535,6 +2580,34 @@ mod tests {
     }
 
     #[test]
+    fn pin_to_top_floats_pinned_above_triage_and_holds_order_within_groups() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // Out of triage: blocked, then done, then working at the bottom.
+        assert_eq!(
+            entries.iter().map(|e| e.state).collect::<Vec<_>>(),
+            vec![AgentState::Blocked, AgentState::Done, AgentState::Working]
+        );
+        // Pin the working agent — exactly the card triage ranks last.
+        let working = entries
+            .iter()
+            .position(|e| e.state == AgentState::Working)
+            .unwrap();
+        let working_pane = entries[working].pane;
+        entries[working].pinned = true;
+        pin_to_top(&mut entries);
+        // It now leads, overriding triage; the unpinned two keep their
+        // blocked-before-done order behind it (stable within each group).
+        assert_eq!(entries[0].pane, working_pane);
+        assert!(entries[0].pinned);
+        assert_eq!(
+            entries[1..].iter().map(|e| e.state).collect::<Vec<_>>(),
+            vec![AgentState::Blocked, AgentState::Done]
+        );
+    }
+
+    #[test]
     fn hovering_the_workspace_row_reveals_the_full_path_on_the_divider() {
         let now = Instant::now();
         let (session, _) = populated_session(now);
@@ -2634,6 +2707,43 @@ mod tests {
         assert!(
             divider_row.trim_start().chars().all(|c| c == '─'),
             "divider row: {divider_row:?}"
+        );
+    }
+
+    #[test]
+    fn pinned_card_shows_the_pin_marker_in_the_accent() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        let a = session.focused().unwrap();
+        session.pane_mut(a).unwrap().command = Some("claude".into());
+        session.set_reading(a, AgentState::Idle, Some("waiting".into()), now);
+        let mut entries = sidebar_entries(&session, &Detector::builtin(), now);
+
+        // Unpinned: no marker on the name row.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        assert!(
+            !buffer_row(&buf, 2).contains(PIN_MARKER),
+            "unpinned card drew a marker"
+        );
+
+        // Pinned: the marker sits on the name row in the accent color.
+        entries[0].pinned = true;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
+        let name_row = buffer_row(&buf, 2);
+        assert!(
+            name_row.contains(PIN_MARKER),
+            "pinned card missing marker: {name_row}"
+        );
+        let marker_col = (0..32u16)
+            .find(|x| buf.cell((*x, 2)).unwrap().symbol() == PIN_MARKER)
+            .expect("marker cell");
+        assert_eq!(
+            buf.cell((marker_col, 2)).unwrap().style().fg,
+            Some(crate::style::ACCENT)
         );
     }
 }

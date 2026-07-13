@@ -17,6 +17,7 @@ mod confirm;
 mod exited;
 mod hit;
 mod launcher;
+mod menu;
 mod pane;
 mod sidebar;
 mod style;
@@ -27,10 +28,13 @@ pub use confirm::{confirm_button_at, confirm_contains, Confirm, ConfirmButton};
 pub use exited::{draw_exited, exited_buttons, exited_card_rect};
 pub use hit::{hit_test, pointer_for, Hit, HitContext, Pointer};
 pub use launcher::{launch_items, LaunchItem, Launcher, LauncherState};
+pub use menu::{
+    menu_contains, menu_fits, menu_item_at, ContextMenu, ContextMenuItem, ContextMenuView,
+};
 pub use pane::PaneView;
 pub use sidebar::{
-    auto_all_cols, auto_chip_cols, format_age, limits_footer_height, sidebar_entries, sidebar_rows,
-    Message, Sidebar, SidebarEntry, SidebarRow, SidebarState,
+    auto_all_cols, auto_chip_cols, format_age, limits_footer_height, pin_to_top, sidebar_entries,
+    sidebar_rows, Message, Sidebar, SidebarEntry, SidebarRow, SidebarState,
 };
 pub use style::{
     cell_style, muted, selected, selected_muted, state_color, state_glyph, state_glyph_style,
@@ -87,6 +91,8 @@ pub struct View<'a> {
     /// The close-confirmation dialog, when open: the button under the
     /// pointer, if any.
     pub confirm: Option<Option<ConfirmButton>>,
+    /// The sidebar card context menu, when open (see [`ContextMenuView`]).
+    pub context_menu: Option<ContextMenuView<'a>>,
     /// Live toasts, newest first.
     pub toasts: &'a [(&'a str, ToastLevel)],
     /// The account's fleet-aggregated rate-limit reading, when any pane's
@@ -447,6 +453,7 @@ pub fn render(frame: &mut Frame, view: &View) {
             }
         } else if view.launcher.is_none()
             && view.confirm.is_none()
+            && view.context_menu.is_none()
             && focused == Some(id)
             && grid.cursor.visible
         {
@@ -518,6 +525,16 @@ pub fn render(frame: &mut Frame, view: &View) {
 
     if let Some(hover) = view.confirm {
         frame.render_widget(Confirm::new().hover(hover), area);
+    }
+
+    // The context menu sits above everything, including the other modals —
+    // nothing else opens while it owns the mouse, so ordering only guards a
+    // stale frame mid-transition.
+    if let Some(menu) = &view.context_menu {
+        frame.render_widget(
+            ContextMenu::new(menu.items, menu.anchor).hover(menu.hover),
+            area,
+        );
     }
 }
 

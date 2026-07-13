@@ -31,7 +31,8 @@ use roster_pty::Pty;
 use roster_term::Screen;
 use roster_tui::{
     confirm_button_at, confirm_contains, content_rect, exited_buttons, hit_test, launch_items,
-    panes_area, pointer_for, render, sidebar_entries, toast_rects, ConfirmButton, Hit, HitContext,
+    menu_contains, menu_fits, menu_item_at, panes_area, pin_to_top, pointer_for, render,
+    sidebar_entries, toast_rects, ConfirmButton, ContextMenuItem, ContextMenuView, Hit, HitContext,
     LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry, SidebarSide, SidebarState,
     ToastLevel, View,
 };
@@ -166,6 +167,10 @@ enum Mode {
     Launch(LauncherState),
     /// Closing this pane would kill a live agent; waiting for a yes/no.
     ConfirmClose(PaneId),
+    /// A sidebar card's right-click menu is open for `pane`, drawn at
+    /// `anchor` (the clicked cell); it owns the mouse until an item or an
+    /// outside click closes it.
+    ContextMenu { pane: PaneId, anchor: (u16, u16) },
 }
 
 /// How long a toast stays up before it fades on its own.
@@ -395,6 +400,11 @@ pub struct App {
     /// working directory does not change over a session — and `None` when
     /// it can't be read, which simply omits the sidebar's title rows.
     workspace: Option<String>,
+    /// Panes the user pinned to the top of the sidebar, overriding triage
+    /// (raw pane ids). Session-only, main-thread-owned — unlike
+    /// `auto_approve`, no hook thread touches it, so a plain set suffices.
+    /// Lights the card's pin marker and drives [`pin_to_top`]'s reorder.
+    pinned: HashSet<u64>,
 }
 
 impl App {
@@ -448,6 +458,7 @@ impl App {
             rate_limits_at: None,
             limit_notifier: LimitNotifier::new(),
             workspace: current_workspace(),
+            pinned: HashSet::new(),
         };
 
         let first = app.session.focused().expect("new session has a pane");
@@ -645,6 +656,7 @@ impl App {
             rate_limits_at: None,
             limit_notifier: LimitNotifier::new(),
             workspace: current_workspace(),
+            pinned: HashSet::new(),
         };
         for pane in &panes {
             app.attach_remote_pane(PaneId::from_raw(pane.pane), pane.pane, &pane.command);
@@ -819,6 +831,14 @@ impl App {
                     entry.auto_approve = set.contains(&entry.pane.raw());
                 }
             }
+            // Pinned cards float above the triage order the entries arrived
+            // in — the flag lights the marker, the stable reorder does the
+            // override. Render and hit-testing both read this reordered
+            // list, so their row plans stay in lockstep.
+            for entry in &mut self.last_entries {
+                entry.pinned = self.pinned.contains(&entry.pane.raw());
+            }
+            pin_to_top(&mut self.last_entries);
             let grids: HashMap<_, _> = self
                 .runtimes
                 .iter()
@@ -833,13 +853,26 @@ impl App {
                 Mode::Jump => self.sidebar.selected(&self.last_entries),
                 _ => None,
             };
-            // Hover follows the last known pointer position; the launcher
-            // and confirm modals own hover themselves while open.
+            // Hover follows the last known pointer position; the modal
+            // overlays (launcher, confirm, context menu) own hover themselves
+            // while open.
             let hover = match self.mode {
-                Mode::Launch(_) | Mode::ConfirmClose(_) => None,
+                Mode::Launch(_) | Mode::ConfirmClose(_) | Mode::ContextMenu { .. } => None,
                 _ => self.last_mouse.map(|(x, y)| self.hit_at(x, y)),
             };
-            let (mode_badge, status) = self.status_line();
+            let (mode_badge, mut status) = self.status_line();
+            // Right-click has no drawn target, so surface it where it's
+            // relevant: while the pointer rests on a card, the otherwise-
+            // silent Normal footer names the gesture. Contextual, so the
+            // at-rest footer stays quiet; absent on click-only terminals
+            // that never report motion (hover is never set there), where
+            // right-click still works — the same graceful degradation as
+            // the hover-revealed `auto` chip.
+            if matches!(self.mode, Mode::Normal)
+                && matches!(hover, Some(Hit::SidebarEntry(_) | Hit::SidebarAuto(_)))
+            {
+                status.push_str(" · right-click: actions");
+            }
             let launcher = match &self.mode {
                 Mode::Launch(state) => Some((self.launchables.as_slice(), state)),
                 _ => None,
@@ -850,6 +883,25 @@ impl App {
                         .last_mouse
                         .and_then(|(x, y)| confirm_button_at(self.last_area, x, y));
                     Some(hover)
+                }
+                _ => None,
+            };
+            // The menu's items outlive this borrow: bound here so the View
+            // can hold a slice into them for the draw below.
+            let context_menu_items = match &self.mode {
+                Mode::ContextMenu { pane, .. } => self.context_menu_items(*pane),
+                _ => Vec::new(),
+            };
+            let context_menu = match &self.mode {
+                Mode::ContextMenu { anchor, .. } => {
+                    let hover = self.last_mouse.and_then(|(x, y)| {
+                        menu_item_at(self.last_area, *anchor, &context_menu_items, x, y)
+                    });
+                    Some(ContextMenuView {
+                        items: context_menu_items.as_slice(),
+                        anchor: *anchor,
+                        hover,
+                    })
                 }
                 _ => None,
             };
@@ -894,6 +946,7 @@ impl App {
                 side: self.side,
                 launcher,
                 confirm,
+                context_menu,
                 toasts: &toast_view,
                 rate_limits: self.rate_limits.as_ref(),
                 selection,
@@ -1945,6 +1998,11 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
                 _ => {}
             },
+            Mode::ContextMenu { .. } => {
+                // A mouse-first popup: any keystroke dismisses it rather
+                // than being swallowed into a menu with no keyboard nav.
+                self.mode = Mode::Normal;
+            }
             Mode::Launch(_) => unreachable!("handled above"),
         }
     }
@@ -2044,6 +2102,56 @@ impl App {
                 }
                 MouseEventKind::ScrollDown => state.select_next(&self.launchables),
                 MouseEventKind::ScrollUp => state.select_prev(&self.launchables),
+                _ => {}
+            }
+            return;
+        }
+
+        // The context menu owns the mouse while open: an item acts, a click
+        // anywhere else dismisses it, and the pointer reads as a hand over
+        // its rows. Rebuilt from live pinned state each event so pin/unpin
+        // can't go stale between the open and the click.
+        if let Mode::ContextMenu { pane, anchor } = self.mode {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let items = self.context_menu_items(pane);
+                    match menu_item_at(self.last_area, anchor, &items, x, y) {
+                        Some(index) => {
+                            self.mode = Mode::Normal;
+                            match items[index] {
+                                ContextMenuItem::Pin | ContextMenuItem::Unpin => {
+                                    self.toggle_pin(pane);
+                                }
+                                // Same guarded path as the title's ✕: a live
+                                // agent raises the confirm dialog first.
+                                ContextMenuItem::Close => self.request_close(pane),
+                            }
+                        }
+                        None => {
+                            if !menu_contains(self.last_area, anchor, &items, x, y) {
+                                self.mode = Mode::Normal;
+                            }
+                        }
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Right) => {
+                    // Right-clicking another card moves the menu to it; a
+                    // right-click off any card dismisses — so the button
+                    // that opens the menu also re-targets and closes it,
+                    // rather than being a dead no-op while it is up.
+                    self.open_context_menu(x, y);
+                }
+                MouseEventKind::Moved => {
+                    let items = self.context_menu_items(pane);
+                    set_pointer(
+                        &mut self.pointer,
+                        if menu_item_at(self.last_area, anchor, &items, x, y).is_some() {
+                            Pointer::Hand
+                        } else {
+                            Pointer::Default
+                        },
+                    );
+                }
                 _ => {}
             }
             return;
@@ -2179,6 +2287,15 @@ impl App {
                     Hit::SidebarWorkspace | Hit::Sidebar | Hit::Status | Hit::Outside => {}
                 }
                 self.last_click = Some((Instant::now(), (x, y)));
+            }
+            MouseEventKind::Down(MouseButton::Right) => {
+                // Right-click a sidebar card to open its action menu,
+                // anchored at the click. The auto chip's columns are still
+                // the card here: the menu — not the chip — is what the
+                // right button does. Any other target opens nothing. Drop any
+                // selection first, like the left-button press does.
+                self.selection = None;
+                self.open_context_menu(x, y);
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some(from) = self.dragging {
@@ -2501,10 +2618,51 @@ impl App {
         }
     }
 
+    /// Open (or move) the card context menu for whatever sidebar card sits
+    /// at (`x`, `y`); a non-card target, or a frame too small to draw the
+    /// menu, closes any open menu instead of entering a mode with nothing on
+    /// screen. Shared by the right-click open and the re-anchor while open,
+    /// so both resolve the target the same way.
+    fn open_context_menu(&mut self, x: u16, y: u16) {
+        self.mode = Mode::Normal;
+        let (Hit::SidebarEntry(index) | Hit::SidebarAuto(index)) = self.hit_at(x, y) else {
+            return;
+        };
+        let Some(entry) = self.last_entries.get(index) else {
+            return;
+        };
+        let pane = entry.pane;
+        let anchor = (x, y);
+        if menu_fits(self.last_area, anchor, &self.context_menu_items(pane)) {
+            self.mode = Mode::ContextMenu { pane, anchor };
+        }
+    }
+
+    /// The context-menu actions for `pane`: pin or unpin depending on its
+    /// current state, then the close action.
+    fn context_menu_items(&self, pane: PaneId) -> Vec<ContextMenuItem> {
+        let pin = if self.pinned.contains(&pane.raw()) {
+            ContextMenuItem::Unpin
+        } else {
+            ContextMenuItem::Pin
+        };
+        vec![pin, ContextMenuItem::Close]
+    }
+
+    /// Toggle whether `pane` is pinned to the top of the sidebar. Local and
+    /// session-only; the next frame's [`pin_to_top`] reorder picks it up.
+    fn toggle_pin(&mut self, pane: PaneId) {
+        if !self.pinned.remove(&pane.raw()) {
+            self.pinned.insert(pane.raw());
+        }
+    }
+
     fn close_pane(&mut self, id: PaneId) {
         if self.placeholder == Some(id) {
             self.placeholder = None;
         }
+        // Drop any pin so a later pane reusing this id can't inherit it.
+        self.pinned.remove(&id.raw());
         self.drop_selection(id);
         // A session-owned pane dies on the server, not by drop.
         if let Some(PaneIo::Remote { pane, .. }) = self.runtimes.get(&id).map(|rt| &rt.io) {
@@ -2622,6 +2780,9 @@ impl App {
                     .to_string(),
             ),
             Mode::ConfirmClose(_) => (None, "y/enter: close · esc: cancel".to_string()),
+            Mode::ContextMenu { .. } => {
+                (None, "click an action · esc: cancel".to_string())
+            }
         }
     }
 }
