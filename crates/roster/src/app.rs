@@ -238,6 +238,19 @@ struct HookPin {
     at: Instant,
 }
 
+/// A hook-reported tool call supplying a working pane's reason — the current
+/// activity (`Bash: cargo test`) in place of the scraped spinner. Unlike a
+/// [`HookPin`] it never changes the *state*: it is shown only while the
+/// screen already reads working, so the screen owns reality and the hook
+/// owns the richer wording.
+struct ActivityPin {
+    /// The verbatim activity, shown as the working card's reason.
+    reason: String,
+    /// When it landed: refreshed on each `PreToolUse`, and its age guards
+    /// the clear against a screen frame that hasn't painted the tool yet.
+    at: Instant,
+}
+
 /// Everything one live pane owns besides its model entry.
 struct PaneRuntime {
     io: PaneIo,
@@ -254,6 +267,11 @@ struct PaneRuntime {
     /// shows any prompt (see [`HOOK_PIN_GRACE`]): the hook wins on
     /// freshness and richness, the screen wins on reality.
     hook_blocked: Option<HookPin>,
+    /// A hook-reported current tool call. While set and the screen reads
+    /// working, it replaces the scraped spinner as the card's reason.
+    /// Refreshed on each `PreToolUse`, cleared on `Stop` and when a settled
+    /// screen leaves working (see [`ActivityPin`]).
+    hook_activity: Option<ActivityPin>,
 }
 
 /// The running multiplexer.
@@ -682,6 +700,7 @@ impl App {
                 generation,
                 exited: None,
                 hook_blocked: None,
+                hook_activity: None,
             },
         );
         if let Some(pane) = self.session.pane_mut(id) {
@@ -712,6 +731,7 @@ impl App {
                 tracker: PaneTracker::new(),
                 kind: self.detector.identify(command),
                 hook_blocked: None,
+                hook_activity: None,
                 generation: 0,
                 exited: None,
             },
@@ -893,6 +913,9 @@ impl App {
                 Output::Hook(Frame::HookClear { pane, tool }) => {
                     self.apply_hook_clear(pane, &tool);
                 }
+                Output::Hook(Frame::HookActivity { pane, tool, reason }) => {
+                    self.apply_hook_activity(pane, tool, reason);
+                }
                 Output::Hook(Frame::Statusline { pane, json }) => {
                     self.apply_statusline(pane, &json);
                 }
@@ -933,6 +956,46 @@ impl App {
         });
         self.session
             .set_reading(id, AgentState::Blocked, Some(reason), Instant::now());
+    }
+
+    /// A tool started (`PreToolUse`): it both answers a matching ask and
+    /// announces the pane's current activity. Clears a blocked pin for the
+    /// same tool (like [`apply_hook_clear`] — a mismatched parallel tool must
+    /// not erase a pending ask), then records the activity as the working
+    /// reason. The state is left to the scrape: the reading-apply path shows
+    /// this reason only while the screen reads working, so a started tool
+    /// whose ask is still genuinely pending (different tool) never masquerades
+    /// as working. Same gates as a blocked pin: identified, live panes only.
+    fn apply_hook_activity(&mut self, pane: u64, tool: String, reason: String) {
+        let id = PaneId::from_raw(pane);
+        let Some(rt) = self.runtimes.get_mut(&id) else {
+            return;
+        };
+        if rt.kind.is_none() || rt.exited.is_some() {
+            return;
+        }
+        // Tool-matched clear of a pending ask, identical to a hook clear.
+        if rt
+            .hook_blocked
+            .as_ref()
+            .is_some_and(|pin| tool.is_empty() || pin.tool == tool)
+        {
+            rt.hook_blocked = None;
+        }
+        // A still-pending ask for another tool outranks the activity: don't
+        // let a parallel auto-approved tool paint the card working while the
+        // human still owes an answer.
+        if rt.hook_blocked.is_some() {
+            return;
+        }
+        let mut reason = reason;
+        if reason.chars().count() > HOOK_REASON_CAP {
+            reason = reason.chars().take(HOOK_REASON_CAP).collect();
+        }
+        rt.hook_activity = Some(ActivityPin {
+            reason,
+            at: Instant::now(),
+        });
     }
 
     /// A statusline payload arrived for a pane: parse it with the pinned
@@ -986,6 +1049,12 @@ impl App {
                 .is_some_and(|pin| tool.is_empty() || pin.tool == tool);
             if matches {
                 rt.hook_blocked = None;
+            }
+            // End of turn (empty tool) also retires the working activity, so
+            // the last tool call can't linger as a stale reason once the
+            // agent stops. A tool-specific clear leaves it — the turn goes on.
+            if tool.is_empty() {
+                rt.hook_activity = None;
             }
         }
     }
@@ -1139,6 +1208,9 @@ impl App {
                     self.apply_hook_blocked(pane, tool, reason)
                 }
                 Frame::HookClear { pane, tool } => self.apply_hook_clear(pane, &tool),
+                Frame::HookActivity { pane, tool, reason } => {
+                    self.apply_hook_activity(pane, tool, reason)
+                }
                 Frame::Statusline { pane, json } => self.apply_statusline(pane, &json),
                 Frame::SpawnFailed { error } => {
                     if let Some(remote) = &mut self.remote {
@@ -1369,8 +1441,26 @@ impl App {
                 }
                 rt.hook_blocked = None;
             }
-            self.session
-                .set_reading(*id, reading.state, reading.reason, now);
+            // A working card's reason: the hook's current tool call is richer
+            // than the scraped spinner ("Bash: cargo test" over "✱
+            // Deliberating…"), but only while the screen agrees the pane is
+            // working — the screen owns the state. Once a settled reading
+            // leaves working, the activity is stale: drop it (past the paint
+            // grace, so a frame racing a just-started tool can't clear it),
+            // and let the scrape's own reason stand.
+            let reason = match &rt.hook_activity {
+                Some(act) if reading.state == AgentState::Working => Some(act.reason.clone()),
+                _ => reading.reason,
+            };
+            if reading.state != AgentState::Working
+                && rt
+                    .hook_activity
+                    .as_ref()
+                    .is_some_and(|act| now.duration_since(act.at) > HOOK_PIN_GRACE)
+            {
+                rt.hook_activity = None;
+            }
+            self.session.set_reading(*id, reading.state, reason, now);
         }
         // Rate limits are account-scoped, so the sidebar footer wants one
         // fleet reading, not a per-card one: merge the panes' stamped
@@ -2776,7 +2866,11 @@ fn start_hook_listener(
                                 return;
                             }
                         }
-                        Ok(Some(frame @ (Frame::HookClear { .. } | Frame::Statusline { .. }))) => {
+                        Ok(Some(
+                            frame @ (Frame::HookClear { .. }
+                            | Frame::HookActivity { .. }
+                            | Frame::Statusline { .. }),
+                        )) => {
                             if tx.send(Output::Hook(frame)).is_err() {
                                 return;
                             }

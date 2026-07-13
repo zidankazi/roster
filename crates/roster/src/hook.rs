@@ -8,11 +8,14 @@
 //! pane is blocked and on what — no screen-scraping, no debounce.
 //!
 //! `PermissionRequest` maps to [`Frame::HookBlocked`] with the verbatim ask;
-//! `PreToolUse` (fires when an approved tool starts) clears the ask for
-//! that tool only — a parallel auto-approved tool must not clear someone
-//! else's pending ask — and `Stop` (end of turn: denials, interrupts that
-//! still stop cleanly) clears unconditionally. Subagent tool events carry
-//! an `agent_id` and never clear: the parent may still be waiting. Any
+//! `PreToolUse` (fires when an approved tool starts) maps to
+//! [`Frame::HookActivity`] with the same verbatim reason — it announces the
+//! working card's activity *and* clears the ask for that tool only, since a
+//! started tool answers its own request (a parallel auto-approved tool must
+//! not clear someone else's pending ask) — and `Stop` (end of turn: denials,
+//! interrupts that still stop cleanly) clears unconditionally. Subagent tool
+//! events carry an `agent_id` and never clear: the parent may still be
+//! waiting. Any
 //! other event is a no-op. The command must never disturb the Claude
 //! session it runs inside: it always exits 0, silently, whether or not
 //! roster is listening — a claude launched outside roster simply has no
@@ -269,7 +272,17 @@ fn frame_from_payload(pane: u64, payload: &str) -> Option<Frame> {
             );
             Some(Frame::HookBlocked { pane, tool, reason })
         }
-        "PreToolUse" if !subagent => Some(Frame::HookClear { pane, tool }),
+        // A tool starting both answers a matching ask and announces the
+        // activity: one frame does both. The reason is built exactly like a
+        // blocked ask, so a working card reads `Bash: cargo test` in place
+        // of the scraped spinner.
+        "PreToolUse" if !subagent => {
+            let reason = render_reason(
+                json.get("tool_name").and_then(|t| t.as_str()),
+                json.get("tool_input"),
+            );
+            Some(Frame::HookActivity { pane, tool, reason })
+        }
         "Stop" if !subagent => Some(Frame::HookClear {
             pane,
             tool: String::new(),
@@ -406,13 +419,16 @@ mod tests {
     }
 
     #[test]
-    fn pre_tool_use_clears_only_its_own_tool() {
+    fn pre_tool_use_reports_the_activity_and_names_its_tool() {
+        // A tool starting yields the rich activity (like a blocked ask) plus
+        // the tool name, so applying it can also clear a matching pin.
         let frame = frame_from_payload(7, &payload("PreToolUse", "Read", r#"{"file_path":"x"}"#));
         assert_eq!(
             frame,
-            Some(Frame::HookClear {
+            Some(Frame::HookActivity {
                 pane: 7,
-                tool: "Read".into()
+                tool: "Read".into(),
+                reason: "Read x".into(),
             })
         );
     }

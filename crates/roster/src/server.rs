@@ -398,7 +398,7 @@ fn event_loop(
                     }
                     send_to_client(&mut client, &frame);
                 }
-                Frame::HookClear { .. } | Frame::Statusline { .. } => {
+                Frame::HookClear { .. } | Frame::HookActivity { .. } | Frame::Statusline { .. } => {
                     // Externally-injected frames relay verbatim to the
                     // attached client, where detection applies them. No
                     // client, no harm: the scrape re-detects a prompt on

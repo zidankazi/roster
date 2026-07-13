@@ -1602,6 +1602,67 @@ fn hook_bridge_pins_blocked_and_clears_end_to_end() {
 }
 
 #[test]
+fn hook_activity_replaces_the_working_spinner_reason_and_clears_on_stop() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A fake claude that stays on a working spinner screen and, via the hook
+    // bridge, reports the tool it just started (`PreToolUse`), then ends the
+    // turn (`Stop`). The screen only ever shows "✻ Deliberating…" — the
+    // scraped working reason — so seeing the tool call in the sidebar proves
+    // the hook activity overrode the spinner, and its disappearance after
+    // Stop proves the activity retires at end of turn.
+    let dir = std::env::temp_dir().join(format!("roster-act-smoke-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create fake agent dir");
+    let script = dir.join("claude");
+    let start = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test"}}"#;
+    let stop = r#"{"hook_event_name":"Stop"}"#;
+    // The spinner line is the working signal AND the scraped reason; printed
+    // once, it stays on screen so the pane reads working throughout.
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nprintf '\\342\\234\\273 Deliberating\\342\\200\\246\\n'\n\
+             printf '%s' '{start}' | '{roster}' _hook\n\
+             sleep 3\n\
+             printf '%s' '{stop}' | '{roster}' _hook\n\
+             sleep 30\n",
+            roster = bin(),
+        ),
+    )
+    .expect("write fake agent");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod fake agent");
+
+    let (cols, rows) = (120u16, 30u16);
+    let pty = Pty::spawn(&format!("'{}' '{}'", bin(), script.display()), cols, rows)
+        .expect("spawn roster");
+    let rx = pump(&pty);
+
+    let mut screen = Screen::new(cols, rows);
+
+    // The hook-reported tool call, verbatim, as the working card's reason —
+    // in place of the "Deliberating…" the screen actually shows.
+    assert!(
+        drain_while(&mut screen, "Bash: cargo test", true, &rx),
+        "hook activity never reached the sidebar:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Stop retires the activity: the tool call leaves and the card falls
+    // back to the scraped spinner reason (the pane is still working).
+    assert!(
+        drain_while(&mut screen, "Bash: cargo test", false, &rx),
+        "hook activity never cleared at end of turn:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert!(
+        drain_while(&mut screen, "Deliberating", true, &rx),
+        "card never fell back to the scraped reason:\n{}",
+        screen.grid().lines().join("\n")
+    );
+}
+
+#[test]
 fn statusline_telemetry_reaches_the_sidebar_card() {
     use std::os::unix::fs::PermissionsExt;
 

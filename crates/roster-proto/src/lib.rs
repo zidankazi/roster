@@ -38,7 +38,7 @@ pub struct HelloPane {
 }
 
 /// Every message either side can send. Tags 1–63 flow client → server,
-/// 64+ server → client — except the hook frames (tags 10/11) and the
+/// 64+ server → client — except the hook frames (tags 10/11/15) and the
 /// statusline frame (tag 14), which enter from `roster _hook` /
 /// `roster _statusline` and are also relayed server → client verbatim, and
 /// the hook reply (tag 12, [`Frame::HookDecision`]), written back to
@@ -140,6 +140,26 @@ pub enum Frame {
         json: String,
     },
 
+    /// A pane's agent started running a tool: `reason` is the verbatim
+    /// activity (tool + input), extracted from the `PreToolUse` payload by
+    /// the same `render_reason` that builds a blocked ask — `Bash: cargo
+    /// test`, `Edit detector.rs`. It replaces the scraped spinner as the
+    /// working card's reason. Like the hook clear it enters from outside the
+    /// client/server pair (`roster _hook`) and a session server relays it
+    /// verbatim to the attached client, where arbitration applies it; unlike
+    /// `HookBlocked` it is fire-and-forget — it never gets a reply. Starting
+    /// the tool also answers a matching permission ask, so applying this
+    /// clears a pending blocked pin for the same tool.
+    HookActivity {
+        /// The pane whose agent started a tool (`ROSTER_PANE` in its env).
+        pane: u64,
+        /// The tool that started (e.g. `Bash`), so it can clear a matching
+        /// blocked pin. Empty when the payload named none.
+        tool: String,
+        /// What the agent is doing, e.g. `Bash: cargo test`.
+        reason: String,
+    },
+
     // Hook reply (owner → `roster _hook`). Written back on the hook
     // connection after a `HookBlocked`, never relayed to a client.
     /// The socket owner's answer to a pane's permission ask: auto-approve it
@@ -223,6 +243,7 @@ impl Frame {
             Frame::HookDecision { .. } => 12,
             Frame::SetAutoApprove { .. } => 13,
             Frame::Statusline { .. } => 14,
+            Frame::HookActivity { .. } => 15,
             Frame::Hello { .. } => 64,
             Frame::Replay { .. } => 65,
             Frame::Output { .. } => 66,
@@ -265,6 +286,11 @@ pub fn write_frame(w: &mut impl Write, frame: &Frame) -> io::Result<()> {
         Frame::Statusline { pane, json } => {
             put_u64(&mut payload, *pane);
             put_bytes(&mut payload, json.as_bytes());
+        }
+        Frame::HookActivity { pane, tool, reason } => {
+            put_u64(&mut payload, *pane);
+            put_bytes(&mut payload, tool.as_bytes());
+            put_bytes(&mut payload, reason.as_bytes());
         }
         Frame::HookDecision { allow } => payload.push(*allow as u8),
         Frame::SetAutoApprove { pane, on } => {
@@ -376,6 +402,11 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Frame>> {
         14 => Frame::Statusline {
             pane: p.u64()?,
             json: p.string()?,
+        },
+        15 => Frame::HookActivity {
+            pane: p.u64()?,
+            tool: p.string()?,
+            reason: p.string()?,
         },
         64 => {
             let count = p.u64()?;
@@ -560,6 +591,16 @@ mod tests {
             pane: u64::MAX,
             json: "non-json 🦀 payloads still round-trip".into(),
         });
+        round_trip(Frame::HookActivity {
+            pane: 3,
+            tool: "Bash".into(),
+            reason: "Bash: cargo test".into(),
+        });
+        round_trip(Frame::HookActivity {
+            pane: u64::MAX,
+            tool: String::new(),
+            reason: String::new(),
+        });
         round_trip(Frame::HookDecision { allow: true });
         round_trip(Frame::HookDecision { allow: false });
         round_trip(Frame::SetAutoApprove { pane: 5, on: true });
@@ -715,6 +756,20 @@ mod tests {
         let mut buf = Vec::new();
         buf.extend_from_slice(&(payload.len() as u32 + 1).to_le_bytes());
         buf.push(14);
+        buf.extend_from_slice(&payload);
+        let mut r = buf.as_slice();
+        assert!(read_frame(&mut r).is_err());
+
+        // A HookActivity frame truncated inside its reason length: the tool
+        // string reads clean, then the reason claims more than remains.
+        let mut payload = Vec::new();
+        put_u64(&mut payload, 3);
+        put_bytes(&mut payload, b"Bash");
+        payload.extend_from_slice(&16u32.to_le_bytes()); // reason claims 16
+        payload.extend_from_slice(b"cargo"); // has 5
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(payload.len() as u32 + 1).to_le_bytes());
+        buf.push(15); // HookActivity
         buf.extend_from_slice(&payload);
         let mut r = buf.as_slice();
         assert!(read_frame(&mut r).is_err());
