@@ -2175,7 +2175,8 @@ impl App {
                             }
                         }
                     }
-                    Hit::Sidebar | Hit::Status | Hit::Outside => {}
+                    // Hover-only — the click has nothing to do.
+                    Hit::SidebarWorkspace | Hit::Sidebar | Hit::Status | Hit::Outside => {}
                 }
                 self.last_click = Some((Instant::now(), (x, y)));
             }

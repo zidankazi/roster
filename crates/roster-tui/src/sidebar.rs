@@ -419,6 +419,7 @@ pub struct Sidebar<'a> {
     rate_limits: Option<&'a RateLimit>,
     workspace: Option<&'a str>,
     clock: Option<&'a str>,
+    hovered_workspace: bool,
 }
 
 impl<'a> Sidebar<'a> {
@@ -446,6 +447,7 @@ impl<'a> Sidebar<'a> {
             rate_limits: None,
             workspace: None,
             clock: None,
+            hovered_workspace: false,
         }
     }
 
@@ -474,6 +476,15 @@ impl<'a> Sidebar<'a> {
     /// appears when [`Sidebar::workspace`] is set.
     pub fn clock(mut self, clock: Option<&'a str>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    /// Whether the mouse sits over the workspace row's path, revealing the
+    /// full untruncated path on the divider row below it — the tooltip for
+    /// a path [`truncate`] cut to fit. No effect when the path already fits
+    /// whole.
+    pub fn hovered_workspace(mut self, hovered: bool) -> Self {
+        self.hovered_workspace = hovered;
         self
     }
 
@@ -549,10 +560,12 @@ impl Widget for Sidebar<'_> {
         }
         let mut y = area.y;
 
-        // The title/workspace banner: `roster` centered, then the
-        // workspace folder and the clock below it. Only drawn when the
-        // caller resolved a workspace — a sidebar with none renders
-        // exactly the header from before these rows existed.
+        // The title/workspace banner: `roster` centered, the workspace
+        // folder and the clock below it, then a divider row that sets the
+        // banner off from the `agents` header — without it the two blocks
+        // read as one convoluted cluster. Only drawn when the caller
+        // resolved a workspace — a sidebar with none renders exactly the
+        // header from before these rows existed.
         if let Some(workspace) = self.workspace {
             let title = "roster";
             let title_x = area.x + area.width.saturating_sub(title.chars().count() as u16) / 2;
@@ -566,17 +579,18 @@ impl Widget for Sidebar<'_> {
             y += 1;
 
             let cols = clock_cols(area.width);
-            let workspace_budget = cols
-                .as_ref()
-                .map(|cols| cols.start.saturating_sub(area.x + 2))
-                .unwrap_or_else(|| area.width.saturating_sub(1));
-            buf.set_stringn(
-                area.x + 1,
-                y,
-                workspace,
-                usize::from(workspace_budget),
-                muted(),
+            let workspace_budget = usize::from(
+                cols.as_ref()
+                    .map(|cols| cols.start.saturating_sub(area.x + 2))
+                    .unwrap_or_else(|| area.width.saturating_sub(1)),
             );
+            // Ellipsis, not a mid-word hard clip: a path cut at the byte
+            // budget used to land inside a component name (`.cla` for
+            // `.claude`), which reads as broken chrome rather than "there's
+            // more". The full path is still one hover away below.
+            let truncated = truncate(workspace, workspace_budget);
+            let path_cut = truncated != workspace;
+            buf.set_stringn(area.x + 1, y, &truncated, workspace_budget, muted());
             if let (Some(clock), Some(cols)) = (self.clock, cols) {
                 buf.set_stringn(
                     area.x + cols.start,
@@ -585,6 +599,26 @@ impl Widget for Sidebar<'_> {
                     usize::from(cols.end - cols.start),
                     muted(),
                 );
+            }
+            y += 1;
+
+            // The divider: a quiet rule most of the time, or — while the
+            // pointer sits on the truncated path above — the full path in
+            // its place, the tooltip [`truncate`]'s cut promised. A path
+            // that already fit whole has nothing to reveal, so hover has
+            // no effect on it.
+            if self.hovered_workspace && path_cut {
+                buf.set_stringn(
+                    area.x + 1,
+                    y,
+                    workspace,
+                    usize::from(area.width.saturating_sub(2)),
+                    normal(),
+                );
+            } else {
+                let rule_width = area.width.saturating_sub(2);
+                let rule = "─".repeat(usize::from(rule_width));
+                buf.set_stringn(area.x + 1, y, &rule, usize::from(rule_width), muted());
             }
             y += 1;
         }
@@ -2404,11 +2438,19 @@ mod tests {
             workspace_row.trim_end().ends_with("14:05"),
             "workspace row: {workspace_row:?}"
         );
-        // Everything below shifts down two rows: the `agents` header now
-        // sits on row 2, and the first card starts on row 4.
-        assert!(buffer_row(&buf, 2).trim_start().starts_with("agents"));
+        // Row 2 is the divider that sets the banner off from the header
+        // below — a quiet rule, not blank, so the two blocks read as
+        // separate chrome rather than one convoluted cluster.
+        let divider_row = buffer_row(&buf, 2);
+        assert!(
+            divider_row.trim_start().chars().all(|c| c == '─'),
+            "divider row: {divider_row:?}"
+        );
+        // Everything below shifts down three rows: the `agents` header now
+        // sits on row 3, and the first card starts on row 5.
+        assert!(buffer_row(&buf, 3).trim_start().starts_with("agents"));
         assert_eq!(auto_all_cols(area.width).map(|c| c.start), Some(21));
-        assert!(!buffer_row(&buf, 4).is_empty());
+        assert!(!buffer_row(&buf, 5).is_empty());
     }
 
     #[test]
@@ -2422,8 +2464,8 @@ mod tests {
             .workspace(Some("~/Desktop/some-very-long-workspace-name"))
             .clock(Some("14:05"))
             .render(area, &mut buf);
-        // Neither row overruns the panel width — no panic, no wraparound.
-        for y in 0..2 {
+        // No row overruns the panel width — no panic, no wraparound.
+        for y in 0..3 {
             assert!(buffer_row(&buf, y).chars().count() <= usize::from(area.width));
         }
     }
@@ -2443,6 +2485,78 @@ mod tests {
             workspace_row.trim_start().starts_with("~/Desktop/roster"),
             "workspace row: {workspace_row:?}"
         );
-        assert!(buffer_row(&buf, 2).trim_start().starts_with("agents"));
+        assert!(buffer_row(&buf, 3).trim_start().starts_with("agents"));
+    }
+
+    #[test]
+    fn workspace_path_ellipsizes_instead_of_cutting_mid_word() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // Narrow enough that the full path can't fit beside the clock, but
+        // wide enough to hold several whole path segments plus an ellipsis.
+        let area = Rect::new(0, 0, 22, 14);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .workspace(Some("~/Desktop/roster/.claude/worktrees/agent-x"))
+            .clock(Some("14:05"))
+            .render(area, &mut buf);
+        let workspace_row = buffer_row(&buf, 1);
+        // The cut lands on a `…`, never mid-word (the old bug cut
+        // `.claude` to `.cla`).
+        assert!(
+            workspace_row.contains('…'),
+            "workspace row: {workspace_row:?}"
+        );
+        assert!(
+            !workspace_row.contains(".cla "),
+            "cut mid-word: {workspace_row:?}"
+        );
+    }
+
+    #[test]
+    fn hovering_the_workspace_row_reveals_the_full_path_on_the_divider() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let area = Rect::new(0, 0, 22, 14);
+        let long_path = "~/Desktop/roster/.claude/worktrees/agent-x";
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .workspace(Some(long_path))
+            .clock(Some("14:05"))
+            .hovered_workspace(true)
+            .render(area, &mut buf);
+        let divider_row = buffer_row(&buf, 2);
+        assert!(
+            divider_row.trim_start().starts_with("~/Desktop/roster"),
+            "divider row: {divider_row:?}"
+        );
+        assert_ne!(
+            divider_row.chars().next(),
+            Some('─'),
+            "hover should replace the rule, not sit beside it"
+        );
+    }
+
+    #[test]
+    fn hovering_a_path_that_already_fits_leaves_the_divider_a_rule() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let area = Rect::new(0, 0, 32, 14);
+        let mut buf = Buffer::empty(area);
+        // A short path that fits whole has nothing for hover to reveal —
+        // the divider stays a rule rather than repeating the row above.
+        Sidebar::new(&entries, None, None, session.window_count(), 0)
+            .workspace(Some("~/roster"))
+            .clock(Some("14:05"))
+            .hovered_workspace(true)
+            .render(area, &mut buf);
+        let divider_row = buffer_row(&buf, 2);
+        assert!(
+            divider_row.trim_start().chars().all(|c| c == '─'),
+            "divider row: {divider_row:?}"
+        );
     }
 }

@@ -30,6 +30,10 @@ pub enum Hit {
     SidebarAutoAll,
     /// The sidebar's pinned `+ new agent` button.
     SidebarNewAgent,
+    /// The workspace row of the title banner — hovering it reveals the
+    /// full path on the divider row below when the shown path was cut to
+    /// fit.
+    SidebarWorkspace,
     /// The `grid` pill of the status row's layout switcher.
     StatusViewGrid,
     /// The `solo` pill of the status row's layout switcher.
@@ -96,8 +100,12 @@ pub fn pointer_for(hit: Hit) -> Pointer {
         | Hit::PaneRestart(_)
         | Hit::StatusWindows => Pointer::Hand,
         // Pane content keeps the plain arrow: an I-beam over most of the
-        // screen reads as noise, and selection works regardless.
-        Hit::Pane(_) | Hit::Sidebar | Hit::Status | Hit::Outside => Pointer::Default,
+        // screen reads as noise, and selection works regardless. The
+        // workspace row isn't clickable either — its hover is a tooltip
+        // reveal, not an affordance that wants a hand.
+        Hit::Pane(_) | Hit::Sidebar | Hit::Status | Hit::Outside | Hit::SidebarWorkspace => {
+            Pointer::Default
+        }
     }
 }
 
@@ -114,9 +122,10 @@ pub struct HitContext<'a> {
     /// The solo-view pane, if any: it owns the whole pane region and the
     /// tiled layout is ignored, mirroring what `render` draws in solo view.
     pub zoomed: Option<PaneId>,
-    /// Whether render drew the two-row title/workspace banner above the
-    /// `agents` row — present, it pushes every row below it (the
-    /// `auto-yes` toggle, the first card) down by two.
+    /// Whether render drew the three-row title/workspace banner (title,
+    /// workspace + clock, divider) above the `agents` row — present, it
+    /// pushes every row below it (the `auto-yes` toggle, the first card)
+    /// down by three.
     pub workspace_header: bool,
 }
 
@@ -185,9 +194,13 @@ pub fn hit_test(
             return Hit::Sidebar;
         }
         // The title/workspace banner, when render drew it, sits above the
-        // `agents` row and is inert — everything below shifts down by its
-        // two rows.
-        let header = bar.y + u16::from(workspace_header) * 2;
+        // `agents` row — everything below shifts down by its three rows.
+        // Its second row (the path) is the one hoverable target inside it;
+        // the title and divider rows are inert.
+        if workspace_header && y == bar.y + 1 {
+            return Hit::SidebarWorkspace;
+        }
+        let header = bar.y + u16::from(workspace_header) * 3;
         // Mirror the sidebar's row plan: cards start two rows below the
         // sidebar's own header, and the header row hosts the `auto-yes`
         // fleet toggle.
@@ -1406,6 +1419,41 @@ mod tests {
                 (5, 21)
             ),
             Hit::SidebarEntry(6)
+        );
+    }
+
+    #[test]
+    fn workspace_banner_rows_resolve_and_shift_everything_below_by_three() {
+        let (session, entries) = setup();
+        let area = Rect::new(0, 0, 120, 30);
+        let ctx = HitContext {
+            limits: None,
+            zoomed: None,
+            workspace_header: true,
+        };
+        // Title row (y=1, inset) is inert; the path row (y=2) is the
+        // hoverable target; the divider (y=3) is inert too.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 1)),
+            Hit::Sidebar
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 2)),
+            Hit::SidebarWorkspace
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 3)),
+            Hit::Sidebar
+        );
+        // The `agents` header and the first card each land three rows
+        // later than the no-banner layout (rows 1 and 3 there).
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (22, 4)),
+            Hit::SidebarAutoAll
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 6)),
+            Hit::SidebarEntry(0)
         );
     }
 

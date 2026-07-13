@@ -499,7 +499,8 @@ pub fn render(frame: &mut Frame, view: &View) {
         .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
         .rate_limits(view.rate_limits)
         .workspace(view.workspace)
-        .clock(view.clock),
+        .clock(view.clock)
+        .hovered_workspace(view.hover == Some(Hit::SidebarWorkspace)),
         cards,
     );
 
