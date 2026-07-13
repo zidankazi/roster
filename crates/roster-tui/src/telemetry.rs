@@ -38,15 +38,19 @@ pub(crate) fn context_badge(telemetry: &Telemetry, on_selected: bool) -> Option<
     ))
 }
 
-/// The full telemetry badge line for the focused card: model, `N% context`,
-/// `$X.XX`, and `limit N%` in that order, joined by muted `·` separators.
+/// The full telemetry badge line for the focused card: `N% context`,
+/// `limit N%`, and `$X.XX` in that order, joined by muted `·` separators.
 /// Absent readings render nothing — an unreported [`Telemetry`] yields an
 /// empty line. The context badge carries the severity color (see
 /// [`context_style`]); every other badge is quiet chrome.
 ///
-/// The model's parenthetical variant suffix is dropped — Claude Code reports
-/// display names like `Opus 4.8 (1M context)`, and on a ~30-column card the
-/// suffix starves the numbers the badge exists to show.
+/// Order is survival priority, not reading habit: the sidebar truncates this
+/// line from the right, so cost trails the two attention-bearing badges and
+/// is the first to fall off a narrow card. The model badge is dropped
+/// entirely — in a Claude-only fleet every card reports the same `Opus 4.8`,
+/// the same dead-weight the sidebar already dropped from the card name, and
+/// its ~24 cells alone would starve context and the limit off a 32-column
+/// card behind a `…`.
 ///
 /// `on_selected` builds the line for the light selected surface — the
 /// focused card is the only place the full line renders, and it is always
@@ -58,19 +62,15 @@ pub fn telemetry_line(telemetry: &Telemetry, on_selected: bool) -> Line<'static>
     } else {
         muted()
     };
+    // Badges render in survival priority, highest first: the sidebar
+    // truncates this line from the right (see `truncate_line`), so the least
+    // valuable badge must sit last. Context leads (its alert color is the one
+    // reading that interrupts a glance), then the rate limit, then cost — so
+    // at the default 32-column width both attention-bearing badges outlive a
+    // dropped cost rather than the limit falling off the edge.
     let mut badges: Vec<Span<'static>> = Vec::new();
-    if let Some(model) = &telemetry.model {
-        let name = match model.find(" (") {
-            Some(paren) => &model[..paren],
-            None => model.as_str(),
-        };
-        badges.push(Span::styled(name.to_string(), quiet));
-    }
     if let Some(badge) = context_badge(telemetry, on_selected) {
         badges.push(badge);
-    }
-    if let Some(cost) = telemetry.cost_usd {
-        badges.push(Span::styled(format!("${cost:.2}"), quiet));
     }
     // Of the reported windows, badge the most-used one — a nearly spent
     // seven-day limit must not hide behind a fresh five-hour window.
@@ -90,6 +90,9 @@ pub fn telemetry_line(telemetry: &Telemetry, on_selected: bool) -> Line<'static>
             None => format!("limit {used:.0}%"),
         };
         badges.push(Span::styled(text, quiet));
+    }
+    if let Some(cost) = telemetry.cost_usd {
+        badges.push(Span::styled(format!("${cost:.2}"), quiet));
     }
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(badges.len() * 2);
@@ -236,29 +239,41 @@ mod tests {
     #[test]
     fn all_badges_render_in_order_with_muted_separators() {
         let terminal = draw(&full_telemetry(), 70);
+        // Order is survival priority: context, then the limit, then cost —
+        // cost trails so it is the first to truncate on a narrow card.
         assert_eq!(
             row_text(&terminal),
-            "claude-opus-4-8 · 62% context · $1.23 · limit 40% resets 2h5m"
+            "62% context · limit 40% resets 2h5m · $1.23"
         );
-        // Model, cost, rate-limit, and the separators are quiet chrome.
-        for needle in ["claude-opus-4-8", "·", "$1.23", "limit 40%"] {
+        // Cost, rate-limit, and the separators are quiet chrome.
+        for needle in ["·", "$1.23", "limit 40%"] {
             let style = style_at(&terminal, col_of(&terminal, needle));
             assert_eq!(style.fg, muted().fg, "badge {needle:?} is not muted");
         }
     }
 
     #[test]
-    fn model_parenthetical_suffix_is_dropped_from_the_badge() {
-        // Live Claude Code reports "Opus 4.8 (1M context)" — on a ~30-column
-        // card the suffix would starve the numbers.
+    fn model_badge_is_dropped_and_cost_trails_the_limit() {
+        // Live Claude Code reports "Opus 4.8 (1M context)". Even trimmed to
+        // "Opus 4.8" it is dead weight in a Claude-only fleet, so the line
+        // drops it entirely — and orders cost last so context and the limit
+        // survive when the sidebar truncates a narrow card from the right.
         let telemetry = Telemetry {
             model: Some("Opus 4.8 (1M context)".to_string()),
-            context_pct: Some(96.0),
+            context_pct: Some(93.0),
             cost_usd: Some(0.02),
-            ..Telemetry::default()
+            rate_limit: Some(RateLimit {
+                five_hour: Some(RateLimitWindow {
+                    used_pct: 40.0,
+                    resets_in: None,
+                }),
+                seven_day: None,
+            }),
         };
-        let terminal = draw(&telemetry, 40);
-        assert_eq!(row_text(&terminal), "Opus 4.8 · 96% context · $0.02");
+        // On a wide card every badge renders, model absent, cost last.
+        let wide = draw(&telemetry, 70);
+        assert_eq!(row_text(&wide), "93% context · limit 40% · $0.02");
+        assert!(!row_text(&wide).contains("Opus"));
     }
 
     #[test]

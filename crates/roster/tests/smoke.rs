@@ -1634,9 +1634,10 @@ fn statusline_telemetry_reaches_the_sidebar_card() {
 
     let mut screen = Screen::new(cols, rows);
 
-    // The full badge line on the card: model, context, cost.
+    // The full badge line on the card: context, then cost. The model badge
+    // is dropped — redundant in a Claude-only fleet (see `telemetry_line`).
     assert!(
-        drain_while(&mut screen, "Opus · 62% context · $1.23", true, &rx),
+        drain_while(&mut screen, "62% context · $1.23", true, &rx),
         "statusline telemetry never reached the sidebar:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -1653,7 +1654,7 @@ fn statusline_telemetry_reaches_the_sidebar_card() {
     // The script exits (~2s): the pane lingers as an exited card, but its
     // badges must clear — frozen telemetry on a dead pane misleads.
     assert!(
-        drain_while(&mut screen, "Opus · 62% context", false, &rx),
+        drain_while(&mut screen, "62% context", false, &rx),
         "telemetry never cleared after the pane exited:\n{}",
         screen.grid().lines().join("\n")
     );

@@ -752,10 +752,11 @@ impl Widget for Sidebar<'_> {
                 }
                 SidebarRow::EntryTelemetry(index) => {
                     // Badge line under the detail row, same indent. The
-                    // focused card gets the full line — model, context %,
-                    // cost, rate limit; any other card planned here is one
-                    // whose context alert escalated, and shows just that
-                    // badge (see `telemetry_row_visible`).
+                    // focused card gets the full line — context %, rate
+                    // limit, cost (model dropped, redundant in a Claude-only
+                    // fleet); any other card planned here is one whose
+                    // context alert escalated, and shows just that badge
+                    // (see `telemetry_row_visible`).
                     let entry = &self.entries[index];
                     if inverted {
                         Self::draw_focus_bar(buf, area.x, y);
@@ -1658,7 +1659,7 @@ mod tests {
             .render(Rect::new(0, 0, 40, 16), &mut buf);
         // The badge line sits under the focused card's detail row, at the
         // card indent, with the muted separators.
-        assert_eq!(buffer_row(&buf, 4), "▍   Opus · 62% context · $1.23");
+        assert_eq!(buffer_row(&buf, 4), "▍   62% context · $1.23");
         // The focused card is the inverted surface, so its quiet badges
         // take the selected surface's dark-muted tier — the healthy
         // context badge too.
@@ -1718,46 +1719,34 @@ mod tests {
                 model: Some("Opus".into()),
                 context_pct: Some(62.0),
                 cost_usd: Some(12.34),
-                rate_limit: None,
+                rate_limit: Some(RateLimit {
+                    five_hour: Some(RateLimitWindow {
+                        used_pct: 40.0,
+                        resets_in: None,
+                    }),
+                    seven_day: None,
+                }),
             }),
         );
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         // Too narrow for the whole line: the cut is marked with the same
         // trailing … the name and reason rows use, and no partial cost
-        // survives to read as a smaller number than it is. (Focused, so
-        // the full line renders at all.)
-        let mut buf = Buffer::empty(Rect::new(0, 0, 26, 14));
+        // survives to read as a smaller number than it is. Cost trails the
+        // limit, so it is what falls off — context and the limit outlive the
+        // cut. (Focused, so the full line renders at all.)
+        let mut buf = Buffer::empty(Rect::new(0, 0, 32, 14));
         Sidebar::new(&entries, None, None, session.window_count(), 0)
             .focused(Some(0))
-            .render(Rect::new(0, 0, 26, 14), &mut buf);
+            .render(Rect::new(0, 0, 32, 14), &mut buf);
         let row = buffer_row(&buf, 4);
         assert!(row.ends_with('…'), "cut not marked: {row}");
         assert!(
             !row.contains('$'),
             "clipped cost reads as a fabricated number: {row}"
         );
-
-        // Cell-width budgeting: a double-width model name must not push
-        // the … past the buffer's clip and hard-cut a number after all.
-        session.set_telemetry(
-            ids[1],
-            Some(Telemetry {
-                model: Some("私のモデル".into()),
-                context_pct: Some(62.0),
-                cost_usd: Some(12.34),
-                rate_limit: None,
-            }),
-        );
-        let entries = sidebar_entries(&session, &Detector::builtin(), now);
-        let mut buf = Buffer::empty(Rect::new(0, 0, 26, 14));
-        Sidebar::new(&entries, None, None, session.window_count(), 0)
-            .focused(Some(0))
-            .render(Rect::new(0, 0, 26, 14), &mut buf);
-        let row = buffer_row(&buf, 4);
-        assert!(row.ends_with('…'), "wide-char cut not marked: {row}");
         assert!(
-            !row.contains('$'),
-            "wide-char clip fabricated a number: {row}"
+            row.contains("62% context") && row.contains("limit 40%"),
+            "context or limit fell off the narrow card: {row}"
         );
     }
 
@@ -1983,10 +1972,13 @@ mod tests {
             .render(Rect::new(0, 0, 40, 16), &mut buf);
         let row = buffer_row(&buf, 4);
         assert!(row.contains("5% context"), "badge row: {row}");
-        // Quiet badges take the dark-muted tier, on the light fill.
-        let model = buf.cell((4, 4)).unwrap().style();
-        assert_eq!(model.fg, selected_muted().fg);
-        assert_eq!(model.bg, selected().bg);
+        // Quiet badges take the dark-muted tier, on the light fill. The cost
+        // badge is quiet chrome (the model badge is gone); the context badge
+        // below carries the only signal color on this row.
+        let cx = row[..row.find('$').unwrap()].chars().count() as u16;
+        let cost = buf.cell((cx, 4)).unwrap().style();
+        assert_eq!(cost.fg, selected_muted().fg);
+        assert_eq!(cost.bg, selected().bg);
         // The critical context badge stays the blocked red — danger is red
         // on every surface — bold, on the light fill. (Column arithmetic
         // counts chars, not bytes: the row leads with the 3-byte '▍'.)

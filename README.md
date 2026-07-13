@@ -146,8 +146,8 @@ asks, so it runs uninterrupted but stays observable. that's the difference
 from `--dangerously-skip-permissions`, which hides the asks entirely. the
 sidebar header's `auto-yes` pill arms the whole fleet at once, and per-card
 pills still win, so one sensitive agent can stay manual. with the statusline
-feed on, the focused card carries a quiet telemetry line — model, context
-remaining, session cost, and the busiest rate-limit window — and any card's
+feed on, the focused card carries a quiet telemetry line — context
+remaining, the busiest rate-limit window, and session cost — and any card's
 context badge surfaces on its own (yellow, then red) as that agent nears a
 compaction. the feed also drives fleet-level rate-limit awareness: your
 account's usage limits are one budget shared by every agent, so the sidebar
