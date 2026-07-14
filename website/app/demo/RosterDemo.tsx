@@ -36,20 +36,21 @@ type Agent = {
   selected?: boolean;
 };
 
-// Three agents in three states, each with its reason — the blocked card's
-// "Allow …?" is the money shot: state you can see, prompt you can act on.
+// Three agents in three states, blocked first the way roster sorts by
+// attention — the blocked card's "Allow …?" is the money shot: state you can
+// see, prompt you can act on.
 const AGENTS: Agent[] = [
-  {
-    title: "Add shell commands to the launcher",
-    state: "idle",
-    reason: "waiting for your input",
-    elapsed: "2m",
-  },
   {
     title: "Tune the detection fixtures",
     state: "blocked",
     reason: "Allow Bash(cargo test)?",
     elapsed: "40s",
+  },
+  {
+    title: "Add shell commands to the launcher",
+    state: "idle",
+    reason: "waiting for your input",
+    elapsed: "2m",
   },
   {
     title: "Rebuild the roster UI on the website",
@@ -60,11 +61,17 @@ const AGENTS: Agent[] = [
   },
 ];
 
-/** A red pill badge — roster's `auto` / `auto-yes` approval chips. */
-function Badge({ children }: { children: React.ReactNode }) {
+/** How many agents are blocked — surfaced next to the agents header, in red. */
+const BLOCKED_COUNT = AGENTS.filter((a) => a.state === "blocked").length;
+
+/** A red pill badge — roster's `auto` / `auto-yes` approval chips. `small` is
+    the per-card size; the default is the sidebar-header `auto-yes` chip. */
+function Badge({ children, small }: { children: React.ReactNode; small?: boolean }) {
   return (
     <span
-      className="rounded-[3px] px-1.5 py-px text-[10px] font-semibold uppercase leading-none tracking-wide"
+      className={`rounded-[3px] font-semibold uppercase leading-none tracking-wide ${
+        small ? "px-1 py-[2px] text-[9px]" : "px-1.5 py-px text-[10px]"
+      }`}
       style={{ background: RED, color: "#fff" }}
     >
       {children}
@@ -72,30 +79,34 @@ function Badge({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** One sidebar row: a fixed state-dot column, then title + elapsed over the
-    colored state word and its reason — both aligned under the title. */
+/** One sidebar row, matching roster: a status dot (hollow when idle, filled
+    otherwise) + task title + elapsed, then the reason with its `auto` approval
+    chip. The focused agent's card gets the full highlighted box. */
 function AgentCard({ agent }: { agent: Agent }) {
   const color = STATE_COLOR[agent.state];
+  const idle = agent.state === "idle";
   return (
     <div
-      className="rounded-[6px] px-2 py-1.5"
+      className="rounded-[5px] px-2 py-1"
       style={{
         background: agent.selected ? "#252a3f" : "transparent",
+        border: `1px solid ${agent.selected ? "#3b4261" : "transparent"}`,
         boxShadow: agent.selected ? `inset 2px 0 0 ${RED}` : "none",
       }}
     >
-      <div className="flex gap-2">
-        {/* Fixed dot column keeps title and reason on one left edge. */}
-        <span aria-hidden className="mt-[3px] text-[10px] leading-none" style={{ color }}>
-          ●
+      <div className="flex gap-1.5">
+        {/* Fixed dot column keeps title and reason on one left edge. Hollow ring
+            for idle, filled dot otherwise — roster's own status glyphs. */}
+        <span aria-hidden className="mt-[2px] text-[9px] leading-none" style={{ color }}>
+          {idle ? "○" : "●"}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5">
-            <span aria-hidden style={{ color: BRIGHT }}>
+            <span aria-hidden className="text-[11px]" style={{ color: BRIGHT }}>
               ✳
             </span>
             <span
-              className="min-w-0 flex-1 truncate font-semibold"
+              className="min-w-0 flex-1 truncate text-[13px] font-semibold"
               style={{ color: agent.selected ? BRIGHT : TEXT }}
             >
               {agent.title}
@@ -104,9 +115,12 @@ function AgentCard({ agent }: { agent: Agent }) {
               {agent.elapsed}
             </span>
           </div>
-          <div className="mt-0.5 truncate text-[11px]">
-            <span style={{ color }}>{agent.state}</span>
-            <span style={{ color: MUTED }}> · {agent.reason}</span>
+          <div className="mt-px flex items-center gap-1.5">
+            <span className="min-w-0 flex-1 truncate text-[11px]">
+              <span style={{ color }}>{agent.state}</span>
+              <span style={{ color: MUTED }}> · {agent.reason}</span>
+            </span>
+            <Badge small>auto</Badge>
           </div>
         </div>
       </div>
@@ -186,14 +200,18 @@ export function RosterDemo() {
                   ~/Desktop/roster
                 </div>
 
-                {/* Agents header + global approval toggle */}
-                <div className="mt-4 mb-1 flex items-center justify-between px-1.5">
-                  <span
-                    className="text-[11px] font-semibold uppercase tracking-wide"
-                    style={{ color: TEXT }}
-                  >
+                {/* Agents header: the label + a live blocked count (roster
+                    surfaces how many need you, in red) + the global toggle. */}
+                <div className="mt-4 mb-1 flex items-center gap-2 px-1.5">
+                  <span className="text-[12px]" style={{ color: TEXT }}>
                     agents
                   </span>
+                  {BLOCKED_COUNT > 0 && (
+                    <span className="text-[11px] font-semibold" style={{ color: RED }}>
+                      {BLOCKED_COUNT} blocked
+                    </span>
+                  )}
+                  <span className="flex-1" />
                   <Badge>auto-yes</Badge>
                 </div>
 
