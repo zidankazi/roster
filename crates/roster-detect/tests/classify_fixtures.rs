@@ -71,6 +71,53 @@ fn claude_blocked_outranks_visible_spinner() {
 }
 
 #[test]
+fn claude_blocked_on_real_proceed_dialog_2_1_209() {
+    // The live 2.1.209 Bash permission dialog, captured fresh alongside the
+    // quoted-UI fixtures below — proves the newly anchored blocked patterns
+    // still catch a genuine dialog on the current UI, not just the older
+    // captures the other blocked_* fixtures hold.
+    assert_reading(
+        classify_fresh("claude-code", "claude", "blocked_proceed_bash_dialog.txt"),
+        AgentState::Blocked,
+        Some("Do you want to proceed?"),
+    );
+}
+
+/// The reported bug, live-captured on 2.1.209: the user's prompt asked
+/// Claude Code to say a string that itself quotes roster's own UI —
+/// "blocked · Allow Bash(cargo test)?, then Herding… (esc to interrupt),
+/// end" — and the transcript echoes it back mid-row. Unanchored, `Allow
+/// .*\?` and `esc to interrupt` matched the quote and pinned the pane
+/// blocked, then working, forever. Anchored to the row shape, neither
+/// fires: only the live spinner drives this frame.
+#[test]
+fn quoted_permission_text_while_working_reads_working_not_blocked() {
+    assert_reading(
+        classify_fresh(
+            "claude-code",
+            "claude",
+            "working_quoted_permission_text.txt",
+        ),
+        AgentState::Working,
+        Some("✶ Enchanting…"),
+    );
+}
+
+/// The same transcript settled: the response line still quotes "Allow
+/// Bash(cargo test)?" and "(esc to interrupt)," mid-sentence, and the
+/// completion flourish ("✻ Baked for 12s") carries no spinner ellipsis.
+/// Neither blocked nor working may match; the fresh reading falls through
+/// to the bare "❯" composer row.
+#[test]
+fn settled_response_quoting_permission_text_is_not_blocked() {
+    assert_reading(
+        classify_fresh("claude-code", "claude", "done_quoted_permission_text.txt"),
+        AgentState::Idle,
+        None,
+    );
+}
+
+#[test]
 fn claude_working_from_esc_hint() {
     // "esc to interrupt" drives the state; the reason skips that chrome and
     // the status bar to report the spinner status line.

@@ -297,7 +297,7 @@ mod tests {
         // it supplies the reason even though the menu row sits below it.
         let detector = Detector::builtin();
         let kind = detector.identify("claude").unwrap();
-        let grid = Grid::from_text("│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. No");
+        let grid = Grid::from_text(" Do you want to proceed?\n ❯ 1. Yes\n   2. No");
         let reading = detector.classify(kind, &grid, &History::new(), Instant::now());
         assert_eq!(reading.state, AgentState::Blocked);
         assert_eq!(reading.reason.as_deref(), Some("Do you want to proceed?"));

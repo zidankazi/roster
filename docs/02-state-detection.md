@@ -60,9 +60,11 @@ The shipped config is Claude Code only. Detection is still **data, not code** �
 [claude-code]
 # how to recognize the pane
 match_command = ["claude"]
-# patterns evaluated against visible grid rows (regex)
-blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d\. Yes']
-working = ['esc to interrupt', 'Thinking', '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]']  # spinner glyphs
+# patterns evaluated against visible grid rows (regex) — anchored to the
+# dialog/hint row shape, so a settled response *quoting* UI text ("...blocked ·
+# Allow Bash(cargo test)?, then...") never matches
+blocked = ['^\s*Do you want to proceed\?$', '^\s*Allow .*\?$', '^\s*❯ \d+\. Yes']
+working = ['esc to interrupt\)?$', 'Thinking', '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]']  # spinner glyphs
 idle    = ['│\s*>\s*$']                                     # empty prompt line
 # where to pull the human-readable reason from, per state
 reason.blocked = "matched_line"   # use the line that matched `blocked`

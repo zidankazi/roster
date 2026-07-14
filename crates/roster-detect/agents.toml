@@ -9,7 +9,7 @@
 # See docs/02-state-detection.md.
 #
 # The claude-code patterns are tuned against Claude Code 2.1 captured live
-# (see crates/roster/examples/capture.rs; latest capture 2.1.207). Its
+# (see crates/roster/examples/capture.rs; latest capture 2.1.209). Its
 # permission prompts show "Do you want to proceed?" over a "❯ 1. Yes" menu;
 # while working it shows a spinner status line ("✻ Crunching…", a random
 # verb, or a multi-word live task description on 2.1.207) — 2.1.205 no
@@ -26,8 +26,27 @@ match_command = ["claude"]
 # Without it, the first match_command binary is launched bare.
 # launch_command = "claude --dangerously-skip-permissions"
 # Order matters: earlier patterns win the reason, so "Do you want to proceed?"
-# must outrank the "❯ N. Yes" menu row rendered beneath it.
-blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d+\. Yes']
+# must outrank the "❯ N. Yes" menu row rendered beneath it. All three are
+# anchored to the row shapes of the real dialog (leading space, row ends at
+# the match — trailing whitespace is trimmed before matching): a settled
+# response quoting permission-prompt text mid-sentence ("...blocked ·
+# Allow Bash(cargo test)?, then...") must not match; only a row that IS the
+# dialog row may. The menu pattern gets no end anchor: on the live 2.1.209
+# dialog the options read "Yes" / "Yes, and always allow access to
+# roster/ from this project", so moving the selection puts the longer text
+# on the ❯ row — end-anchoring it would break that. The three stay layered:
+# a wrapped Allow-question row can miss the question pattern while the menu
+# row still catches the dialog.
+blocked = ['^\s*Do you want to proceed\?$', '^\s*Allow .*\?$', '^\s*❯ \d+\. Yes']
+# The interrupt hints are end-anchored (optionally through a closing paren)
+# for the same reason the blocked patterns are: a real hint row ends at
+# "interrupt" ("✶ Flowing… esc to interrupt", standalone "  esc to
+# interrupt") or at "interrupt)" in the "(… esc to interrupt)" livery, while
+# a settled response quoting that text carries prose past it ("(esc to
+# interrupt), the three", "(esc to interrupt), end") — accepted residual: a
+# quote that happens to end its row right there, shaped exactly like the
+# real hint, stays indistinguishable, same as the spinner-quote case below.
+#
 # "Waiting for N background agent(s) to finish" is a genuine working state:
 # the main thread has yielded its spinner while a backgrounded task runs, so
 # there is no "esc to interrupt" and the idle prompt is on screen. Without
@@ -64,7 +83,7 @@ blocked = ['Do you want to proceed\?', 'Allow .*\?', '❯ \d+\. Yes']
 # capture so far came with an interrupt hint that already matches. The
 # required "…" keeps the completion flourish ("✻ Brewed for 5s") from
 # matching.
-working = ['esc to interrupt', '(?i)ctrl\+c to interrupt', 'Waiting for \d+ background agent', '^\s*[✻✢✳✶] \S[^…]*…( \(.*)?$']
+working = ['esc to interrupt\)?$', '(?i)ctrl\+c to interrupt\)?$', 'Waiting for \d+ background agent', '^\s*[✻✢✳✶] \S[^…]*…( \(.*)?$']
 idle    = ['^❯']                                              # input prompt line
 reason.blocked = "matched_line"
 reason.working = "last_nonempty"
