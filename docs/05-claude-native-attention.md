@@ -161,18 +161,18 @@ What that unlocks, roughly in dependency order:
   branch, diff stat), the chrome gets re-judged for signal-over-noise: every
   visible element must earn its place. This is the same taste milestone as
   Phase 3, widened.
-- **Claude-only, staged** — shells stop being a tenant roster offers, in
-  three deliberate steps, each gated on the previous one landing:
-  1. *Shells can't own a workspace* (implemented): the launcher stops offering
-     a `shell` row, and the bare-start placeholder is always replaced by the
-     first launch. Shells survive only as splits beside an agent.
-  2. *Verification moves in-product*: the diff view and ship actions above —
-     the reasons a shell-next-to-the-agent exists today.
-  3. *Shells removed entirely*: once step 2 covers the verify loop, panes run
-     configured agents only. **Do not jump to step 3 early** — removing
-     shells before in-product verification exists trades a real workflow for
-     nothing. The "any command runs in a pane" README claim is retired in the
-     same change as step 3, not before.
+- **Claude-only, staged — amended 2026-07-14.** The original plan was three
+  deliberate steps toward shells stopping being a tenant roster offers, step 1
+  gated landing in `16887b8` (the launcher dropped its `shell` row; the
+  bare-start placeholder became unconditionally replaced). On 2026-07-14 the
+  maintainer reversed step 1 directly: shells are a supported tenant again —
+  the launcher offers a `shell` row and non-agent panes surface in a
+  dedicated `shells` sidebar section above `agents` (see `sidebar.rs`,
+  `launcher.rs`). This supersedes `16887b8`'s step-1 behavior; the bare-start
+  placeholder itself is unaffected (it still never appears as a shell row).
+  The remaining steps from the original plan — verification moving
+  in-product, and shells being removed entirely — are not decided either way
+  by this amendment; see "Open questions" below.
 
 What pillar 2 is **not**: it is not a wrapper. The agent keeps running in a
 real PTY pane — full TUI, real keys, scrollback. Structured agent-session
@@ -206,6 +206,12 @@ Then, for the agent that finished: they open its diff, judge it, and push its br
 
 Still open:
 
+- **Shells: verification-in-product and eventual removal** — the original
+  Pillar 2 staged plan's steps 2 and 3 (moving diff/ship verification
+  in-product, then dropping shells as a tenant entirely) are neither
+  reaffirmed nor retired by the 2026-07-14 step-1 reversal above; whether
+  roster still ends there is an open maintainer decision, not something an
+  agent should assume either way.
 - The exact **`Notification` payload** fields for notification data (matcher types are known; the data shape was unverified). Confirm before relying on `Notification` over `PermissionRequest`.
 - **Statusline slot conflict** — *resolved (v1)*: registration stays a manual merge (`--print-statusline` prints the snippet; roster never edits `~/.claude/settings.json` itself), and when a `statusLine` is already configured the command warns on stderr that merging replaces it — the user decides. Chaining/wrapping the existing command (pipe the same JSON through it, echo its output) is a possible follow-up, deliberately not built: subprocess handling inside the deadline adds failure modes to a path that must never disturb a Claude session.
 - **Todo / turn-history source** — previously assumed impossible without the transcript. That assumption needs revisiting: task-lifecycle hook events may now provide a sanctioned, transcript-free source for step-level progress (see "Future ideas" above). Not yet verified against the installed Claude Code version or scoped as a phase.
