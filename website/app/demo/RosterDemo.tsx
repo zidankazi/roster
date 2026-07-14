@@ -72,38 +72,43 @@ function Badge({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** One sidebar row: title + elapsed, then the colored state word and its reason. */
+/** One sidebar row: a fixed state-dot column, then title + elapsed over the
+    colored state word and its reason — both aligned under the title. */
 function AgentCard({ agent }: { agent: Agent }) {
   const color = STATE_COLOR[agent.state];
   return (
     <div
-      className="relative rounded-[5px] px-2.5 py-2"
+      className="rounded-[6px] px-2 py-1.5"
       style={{
-        background: agent.selected ? "#24283b" : "transparent",
+        background: agent.selected ? "#252a3f" : "transparent",
         boxShadow: agent.selected ? `inset 2px 0 0 ${RED}` : "none",
       }}
     >
-      <div className="flex items-center gap-1.5">
-        <span aria-hidden style={{ color }}>
+      <div className="flex gap-2">
+        {/* Fixed dot column keeps title and reason on one left edge. */}
+        <span aria-hidden className="mt-[3px] text-[10px] leading-none" style={{ color }}>
           ●
         </span>
-        <span aria-hidden style={{ color: BRIGHT }}>
-          ✳
-        </span>
-        <span className="min-w-0 flex-1 truncate font-semibold" style={{ color: BRIGHT }}>
-          {agent.title}
-        </span>
-        <span className="whitespace-nowrap text-[11px]" style={{ color: MUTED }}>
-          <span aria-hidden>⧉ </span>
-          {agent.elapsed}
-        </span>
-      </div>
-      <div className="mt-0.5 flex items-center gap-2 pl-[22px]">
-        <span className="min-w-0 flex-1 truncate">
-          <span style={{ color }}>{agent.state}</span>
-          <span style={{ color: MUTED }}> · {agent.reason}</span>
-        </span>
-        <Badge>auto</Badge>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-1.5">
+            <span aria-hidden style={{ color: BRIGHT }}>
+              ✳
+            </span>
+            <span
+              className="min-w-0 flex-1 truncate font-semibold"
+              style={{ color: agent.selected ? BRIGHT : TEXT }}
+            >
+              {agent.title}
+            </span>
+            <span className="whitespace-nowrap text-[11px]" style={{ color: MUTED }}>
+              {agent.elapsed}
+            </span>
+          </div>
+          <div className="mt-0.5 truncate text-[11px]">
+            <span style={{ color }}>{agent.state}</span>
+            <span style={{ color: MUTED }}> · {agent.reason}</span>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -164,7 +169,7 @@ export function RosterDemo() {
           <div className="flex" style={{ minHeight: 620 }}>
             {/* Sidebar */}
             <aside
-              className="flex w-[248px] flex-none flex-col"
+              className="flex w-[266px] flex-none flex-col"
               style={{ background: "#1a1b26", borderRight: "1px solid #2a2b3a" }}
             >
               <div className="flex-1 overflow-hidden px-2.5 py-3">
@@ -192,7 +197,7 @@ export function RosterDemo() {
                   <Badge>auto-yes</Badge>
                 </div>
 
-                <div className="space-y-0.5">
+                <div className="space-y-1">
                   {AGENTS.map((a) => (
                     <AgentCard key={a.title} agent={a} />
                   ))}
