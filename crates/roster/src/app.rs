@@ -334,9 +334,12 @@ pub struct App {
     last_area: Rect,
     /// A grabbed split divider, in pane-local coordinates, while dragging.
     dragging: Option<(u16, u16)>,
-    /// The bare-start shell pane: a backdrop for the launcher only. The
-    /// first launch replaces it unconditionally, so a plain shell never
-    /// survives as its own workspace — it is scenery, not a tenant.
+    /// The bare-start shell pane: a backdrop for the launcher only. An
+    /// ordinary shell (the launcher's `shell` row, a split) is a supported
+    /// tenant and does survive as its own workspace — but this placeholder
+    /// never does: the first launch replaces it unconditionally, and it is
+    /// filtered out of the shells section rather than ever appearing as a
+    /// row (see `last_shells`).
     placeholder: Option<PaneId>,
     /// Attachment counter feeding [`PaneRuntime::generation`].
     next_generation: u64,
@@ -2553,8 +2556,10 @@ impl App {
 
     /// Start `command` in its own fresh window. The bare-start backdrop
     /// shell, if one exists, is replaced by this first launch regardless of
-    /// focus or whether the user typed into it — a plain shell never
-    /// survives as its own workspace.
+    /// focus or whether the user typed into it — the placeholder never
+    /// survives past it, unlike an ordinary shell pane (the launcher's
+    /// `shell` row, a split), which is a supported tenant and keeps
+    /// running.
     fn launch(&mut self, command: &str) {
         // In a session the server spawns; the pane lands when PaneOpened
         // comes back, replacing the backdrop placeholder if there is one.

@@ -198,10 +198,12 @@ pub(crate) fn shell_display_name(title: Option<&str>, command: &str) -> String {
 /// Build the sidebar's shells section: every pane whose command does not
 /// identify as a configured agent — the same [`Detector::identify`] call
 /// [`sidebar_entries`] uses on the way in, so a claude pane can never land
-/// in both sections. Ordered by pane id; shells carry no state, so there is
-/// nothing to triage them by.
+/// in both sections. Ordered by pane id: inherited from `Session::panes()`
+/// (already ascending-id) through `filter_map`, which preserves order —
+/// shells carry no state, so there is nothing to triage them by and nothing
+/// to re-sort here.
 pub fn shell_entries(session: &Session, detector: &Detector) -> Vec<ShellEntry> {
-    let mut entries: Vec<ShellEntry> = session
+    session
         .panes()
         .into_iter()
         .filter_map(|pane| {
@@ -214,16 +216,15 @@ pub fn shell_entries(session: &Session, detector: &Detector) -> Vec<ShellEntry> 
                 name: shell_display_name(pane.title.as_deref(), command),
             })
         })
-        .collect();
-    entries.sort_by_key(|entry| entry.pane);
-    entries
+        .collect()
 }
 
 /// Rows the shells block occupies above the `agents` header: a header row,
 /// one row per shell, and a blank spacer — or 0 with no shells, so a
 /// shell-less sidebar renders (and hit-tests) exactly its pre-shells
-/// layout. Render draws this block and `hit_test` shifts by it, so the two
-/// can't drift.
+/// layout. Render advances past the block by this exact height rather than
+/// re-summing its own per-row increments, and `hit_test` shifts by the same
+/// call, so the two can't drift.
 pub fn shells_height(shells: usize) -> u16 {
     if shells == 0 {
         0
@@ -507,6 +508,7 @@ pub struct Sidebar<'a> {
     shells: &'a [ShellEntry],
     selected: Option<usize>,
     hovered: Option<usize>,
+    hovered_shell: Option<usize>,
     hovered_auto: Option<usize>,
     hovered_auto_all: bool,
     focused: Option<usize>,
@@ -536,6 +538,7 @@ impl<'a> Sidebar<'a> {
             shells: &[],
             selected,
             hovered,
+            hovered_shell: None,
             hovered_auto: None,
             hovered_auto_all: false,
             focused: None,
@@ -609,6 +612,14 @@ impl<'a> Sidebar<'a> {
         self
     }
 
+    /// The shells-section row index under the mouse — same quiet `❯`
+    /// marker an agent card's hover state draws, so the affordance reads
+    /// consistently across both sections.
+    pub fn hovered_shell(mut self, index: Option<usize>) -> Self {
+        self.hovered_shell = index;
+        self
+    }
+
     /// Whether the header's `auto-yes` fleet toggle is under the mouse.
     pub fn hovered_auto_all(mut self, hovered: bool) -> Self {
         self.hovered_auto_all = hovered;
@@ -671,17 +682,23 @@ impl Widget for Sidebar<'_> {
         // banner off from the `agents` header — without it the two blocks
         // read as one convoluted cluster. Only drawn when the caller
         // resolved a workspace — a sidebar with none renders exactly the
-        // header from before these rows existed.
+        // header from before these rows existed. Each row is guarded by
+        // `bottom`, same discipline as the shells and agents blocks below:
+        // a 1-3 row sidebar (height clamped below the banner's own three
+        // rows) must skip the rows it has no buffer for rather than write
+        // past them.
         if let Some(workspace) = self.workspace {
             let title = "roster";
-            let title_x = area.x + area.width.saturating_sub(title.chars().count() as u16) / 2;
-            buf.set_stringn(
-                title_x,
-                y,
-                title,
-                usize::from(area.right().saturating_sub(title_x)),
-                bright(),
-            );
+            if y < bottom {
+                let title_x = area.x + area.width.saturating_sub(title.chars().count() as u16) / 2;
+                buf.set_stringn(
+                    title_x,
+                    y,
+                    title,
+                    usize::from(area.right().saturating_sub(title_x)),
+                    bright(),
+                );
+            }
             y += 1;
 
             let cols = clock_cols(area.width);
@@ -696,15 +713,17 @@ impl Widget for Sidebar<'_> {
             // more". The full path is still one hover away below.
             let truncated = truncate(workspace, workspace_budget);
             let path_cut = truncated != workspace;
-            buf.set_stringn(area.x + 1, y, &truncated, workspace_budget, muted());
-            if let (Some(clock), Some(cols)) = (self.clock, cols) {
-                buf.set_stringn(
-                    area.x + cols.start,
-                    y,
-                    clock,
-                    usize::from(cols.end - cols.start),
-                    muted(),
-                );
+            if y < bottom {
+                buf.set_stringn(area.x + 1, y, &truncated, workspace_budget, muted());
+                if let (Some(clock), Some(cols)) = (self.clock, cols) {
+                    buf.set_stringn(
+                        area.x + cols.start,
+                        y,
+                        clock,
+                        usize::from(cols.end - cols.start),
+                        muted(),
+                    );
+                }
             }
             y += 1;
 
@@ -719,31 +738,34 @@ impl Widget for Sidebar<'_> {
             // sidebar (see `lib.rs`), so this deliberately paints over
             // whatever sits alongside the sidebar for the one row it
             // occupies, exactly like `toast.rs`'s cards float over panes.
-            if self.hovered_workspace && path_cut {
-                let buf_area = *buf.area();
-                let text_width = Span::raw(workspace).width() as u16;
-                let start_x = area.x + 1;
-                let room_right = buf_area.right().saturating_sub(start_x);
-                let (draw_x, overlay_width) = if room_right >= text_width {
-                    (start_x, text_width)
+            if y < bottom {
+                if self.hovered_workspace && path_cut {
+                    let buf_area = *buf.area();
+                    let text_width = Span::raw(workspace).width() as u16;
+                    let start_x = area.x + 1;
+                    let room_right = buf_area.right().saturating_sub(start_x);
+                    let (draw_x, overlay_width) = if room_right >= text_width {
+                        (start_x, text_width)
+                    } else {
+                        // Not enough room growing rightward — the sidebar
+                        // sits on the right edge of the frame — so grow
+                        // leftward instead, anchored to the sidebar's own
+                        // right margin.
+                        let end_x = area.x + area.width.saturating_sub(1);
+                        let room_left = end_x.saturating_sub(buf_area.x);
+                        let width = text_width.min(room_left.max(1));
+                        (end_x.saturating_sub(width), width)
+                    };
+                    buf.set_style(
+                        Rect::new(draw_x, y, overlay_width, 1),
+                        Style::default().bg(SURFACE_RAISED),
+                    );
+                    buf.set_stringn(draw_x, y, workspace, usize::from(overlay_width), normal());
                 } else {
-                    // Not enough room growing rightward — the sidebar sits
-                    // on the right edge of the frame — so grow leftward
-                    // instead, anchored to the sidebar's own right margin.
-                    let end_x = area.x + area.width.saturating_sub(1);
-                    let room_left = end_x.saturating_sub(buf_area.x);
-                    let width = text_width.min(room_left.max(1));
-                    (end_x.saturating_sub(width), width)
-                };
-                buf.set_style(
-                    Rect::new(draw_x, y, overlay_width, 1),
-                    Style::default().bg(SURFACE_RAISED),
-                );
-                buf.set_stringn(draw_x, y, workspace, usize::from(overlay_width), normal());
-            } else {
-                let rule_width = area.width.saturating_sub(2);
-                let rule = "─".repeat(usize::from(rule_width));
-                buf.set_stringn(area.x + 1, y, &rule, usize::from(rule_width), muted());
+                    let rule_width = area.width.saturating_sub(2);
+                    let rule = "─".repeat(usize::from(rule_width));
+                    buf.set_stringn(area.x + 1, y, &rule, usize::from(rule_width), muted());
+                }
             }
             y += 1;
         }
@@ -753,12 +775,26 @@ impl Widget for Sidebar<'_> {
         // vocabulary and no triage order, just a `$` prefix and a name.
         // Absent entirely with no shells (see `shells_height`), so a
         // shell-less sidebar draws pixel-identical to its pre-shells self.
+        // Every draw here is guarded by `bottom` — a short sidebar (or one
+        // a shells list alone fills) must never push the `agents` header
+        // past the card region and onto the pinned button row below it,
+        // which would desync what's drawn from what `hit_test` resolves
+        // there, and an unguarded write past a short buffer panics outright.
         if !self.shells.is_empty() {
-            buf.set_stringn(area.x + 1, y, "shells", width.saturating_sub(1), muted());
+            let block_start = y;
+            if y < bottom {
+                buf.set_stringn(area.x + 1, y, "shells", width.saturating_sub(1), muted());
+            }
             y += 1;
-            for shell in self.shells {
+            for (index, shell) in self.shells.iter().enumerate() {
                 if y >= bottom {
                     break;
+                }
+                if self.hovered_shell == Some(index) {
+                    // Same quiet hover marker an agent card draws, in the
+                    // same column — the affordance reads consistently
+                    // across both sections.
+                    buf.set_string(area.x, y, "❯", muted());
                 }
                 buf.set_stringn(area.x + 1, y, "$", width.saturating_sub(2), muted());
                 let name_width = width.saturating_sub(3);
@@ -771,41 +807,53 @@ impl Widget for Sidebar<'_> {
                 );
                 y += 1;
             }
-            y += 1;
+            // The block's true height comes from `shells_height`, not from
+            // re-summing the increments above: a sidebar too short to draw
+            // every shell row still advances past the block exactly as far
+            // as `hit_test` does, so the `agents` header below can't land
+            // inside the region `hit_test` still treats as shells.
+            y = block_start + shells_height(self.shells.len());
         }
 
         // Quiet header: lowercase, dim; the blocked count follows it inline
         // (only when someone actually needs you), and the `auto-yes`
-        // fleet toggle holds the right edge at fixed columns.
+        // fleet toggle holds the right edge at fixed columns. Guarded by
+        // `bottom` like the shells block above — an unbounded shells list
+        // must not push this header (or the pill below) past the buffer.
         let blocked = self.blocked_count();
-        buf.set_stringn(area.x + 1, y, "agents", width.saturating_sub(1), muted());
-        if blocked > 0 {
-            let summary = format!("{blocked} blocked");
-            let budget = auto_all_cols(area.width)
-                .map(|cols| cols.start.saturating_sub(1 + 6 + 2 + 1))
-                .unwrap_or_else(|| area.width.saturating_sub(1 + 6 + 2 + 1));
-            buf.set_stringn(
-                area.x + 1 + 6 + 2,
-                y,
-                &summary,
-                usize::from(budget),
-                Style::default()
-                    .fg(state_color(AgentState::Blocked))
-                    .add_modifier(Modifier::BOLD),
-            );
+        if y < bottom {
+            buf.set_stringn(area.x + 1, y, "agents", width.saturating_sub(1), muted());
+            if blocked > 0 {
+                let summary = format!("{blocked} blocked");
+                let budget = auto_all_cols(area.width)
+                    .map(|cols| cols.start.saturating_sub(1 + 6 + 2 + 1))
+                    .unwrap_or_else(|| area.width.saturating_sub(1 + 6 + 2 + 1));
+                buf.set_stringn(
+                    area.x + 1 + 6 + 2,
+                    y,
+                    &summary,
+                    usize::from(budget),
+                    Style::default()
+                        .fg(state_color(AgentState::Blocked))
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
         }
         // The fleet toggle: arm auto-approve for every agent, or disarm
         // all when everything is already on. An accent-filled pill when the
         // whole fleet is armed, a quiet one otherwise — same vocabulary as
         // the per-card chip.
-        if let Some(cols) = auto_all_cols(area.width) {
-            let all_on = !self.entries.is_empty() && self.entries.iter().all(|e| e.auto_approve);
-            buf.set_string(
-                area.x + cols.start,
-                y,
-                AUTO_ALL,
-                chip(all_on, self.hovered_auto_all, false),
-            );
+        if y < bottom {
+            if let Some(cols) = auto_all_cols(area.width) {
+                let all_on =
+                    !self.entries.is_empty() && self.entries.iter().all(|e| e.auto_approve);
+                buf.set_string(
+                    area.x + cols.start,
+                    y,
+                    AUTO_ALL,
+                    chip(all_on, self.hovered_auto_all, false),
+                );
+            }
         }
         y += 2;
 
@@ -2919,5 +2967,168 @@ mod tests {
         let cell = buf.cell((name_col, 1)).unwrap();
         assert!(!cell.style().add_modifier.contains(Modifier::DIM));
         assert_ne!(cell.style(), bright().add_modifier(Modifier::BOLD));
+    }
+
+    #[test]
+    fn unbounded_shells_do_not_panic_on_a_one_row_sidebar() {
+        // Reviewer repro A: a single shell into a 12x1 sidebar used to panic
+        // ("index outside of buffer … index is (1, 2)") — the shells
+        // header, its spacer, and the `agents` header past it wrote
+        // unconditionally instead of stopping at `bottom`.
+        let shells = vec![ShellEntry {
+            pane: PaneId::from_raw(1),
+            name: "zsh".into(),
+        }];
+        let area = Rect::new(0, 0, 12, 1);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&[], None, None, 1, 0)
+            .shells(&shells)
+            .render(area, &mut buf);
+    }
+
+    #[test]
+    fn unbounded_shells_do_not_panic_on_a_short_sidebar() {
+        // Reviewer repro B: 30 shells into a 40x10 rect used to panic at
+        // (1, 11) — the per-shell loop itself stopped at `bottom`, but the
+        // header/spacer around it and the `agents` header below kept
+        // writing past the buffer's last row.
+        let shells: Vec<ShellEntry> = (0..30)
+            .map(|i| ShellEntry {
+                pane: PaneId::from_raw(i),
+                name: format!("shell-{i}"),
+            })
+            .collect();
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&[], None, None, 1, 0)
+            .shells(&shells)
+            .render(area, &mut buf);
+    }
+
+    #[test]
+    fn unbounded_shells_never_draw_the_agents_header_or_a_shell_row_past_the_footer() {
+        let shells: Vec<ShellEntry> = (0..20)
+            .map(|i| ShellEntry {
+                pane: PaneId::from_raw(i),
+                name: format!("shell-{i}"),
+            })
+            .collect();
+        let limits = RateLimit {
+            five_hour: Some(RateLimitWindow {
+                used_pct: 42.0,
+                resets_in: None,
+            }),
+            seven_day: None,
+        };
+        let area = Rect::new(0, 0, 40, 14);
+        let footer = limits_footer_height(Some(&limits), area.height);
+        assert!(footer > 0, "test area too short to give the footer room");
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&[], None, None, 1, 0)
+            .shells(&shells)
+            .rate_limits(Some(&limits))
+            .render(area, &mut buf);
+
+        // The card region's `bottom`, mirroring what render itself computes.
+        let bottom = area.height - footer;
+        for y in bottom..area.height {
+            let row = buffer_row(&buf, y);
+            assert!(
+                !row.contains("agents"),
+                "row {y} should be footer, not the agents header: {row}"
+            );
+            assert!(
+                !row.contains('$'),
+                "row {y} should be footer, not a shell row: {row}"
+            );
+        }
+        // The footer's own line survives the clamp intact — the usage bar
+        // and percentage still draw rather than getting blanked by it.
+        let footer_line = buffer_row(&buf, bottom + 1);
+        assert!(footer_line.contains("5h"), "footer line: {footer_line}");
+        assert!(footer_line.contains('%'), "footer line: {footer_line}");
+    }
+
+    #[test]
+    fn shell_row_hover_draws_the_same_quiet_marker_an_agent_cards_hover_uses() {
+        let mut session = Session::new();
+        let a = session.focused().unwrap();
+        session.pane_mut(a).unwrap().command = Some("zsh".into());
+        let shells = shell_entries(&session, &Detector::builtin());
+        assert_eq!(shells.len(), 1);
+
+        let area = Rect::new(0, 0, 32, 14);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&[], None, None, 1, 0)
+            .shells(&shells)
+            .hovered_shell(Some(0))
+            .render(area, &mut buf);
+        // Row 0 is the `shells` header, row 1 the one shell row — same
+        // marker column (0) an agent card's hover ❯ uses, same quiet tier.
+        assert_eq!(buf.cell((0, 1)).unwrap().symbol(), "❯");
+        let style = buf.cell((0, 1)).unwrap().style();
+        assert_eq!(style.fg, muted().fg);
+        assert!(!style.add_modifier.contains(Modifier::DIM));
+
+        // No hover on the row: no marker drawn.
+        let mut unhovered = Buffer::empty(area);
+        Sidebar::new(&[], None, None, 1, 0)
+            .shells(&shells)
+            .render(area, &mut unhovered);
+        assert_eq!(unhovered.cell((0, 1)).unwrap().symbol(), " ");
+    }
+
+    #[test]
+    fn agents_header_lands_exactly_shells_height_rows_below_the_top() {
+        // Pins render's block sizing to `shells_height` itself rather than
+        // to a hand-summed header+rows+spacer that could silently drift
+        // from what `hit_test` derives from the same call.
+        let now = Instant::now();
+        for count in [0usize, 1, 3, 7] {
+            let mut session = Session::new();
+            let agent = session.focused().unwrap();
+            session.pane_mut(agent).unwrap().command = Some("claude".into());
+            session.set_reading(agent, AgentState::Idle, None, now);
+            let mut last = agent;
+            for _ in 0..count {
+                let shell = session.split(last, SplitDirection::Horizontal).unwrap();
+                session.pane_mut(shell).unwrap().command = Some("zsh".into());
+                last = shell;
+            }
+            let entries = sidebar_entries(&session, &Detector::builtin(), now);
+            let shells = shell_entries(&session, &Detector::builtin());
+            assert_eq!(shells.len(), count);
+
+            let area = Rect::new(0, 0, 40, 20);
+            let mut buf = Buffer::empty(area);
+            Sidebar::new(&entries, None, None, 1, 0)
+                .shells(&shells)
+                .render(area, &mut buf);
+
+            let header_row = shells_height(count);
+            let row = buffer_row(&buf, header_row);
+            assert!(
+                row.contains("agents"),
+                "count {count}: expected header at row {header_row}: {row}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_banner_does_not_panic_on_a_sidebar_shorter_than_its_own_rows() {
+        // Pre-existing gap the shells-block clamp above shares a root cause
+        // with: the title/workspace/divider rows wrote unconditionally, so
+        // a 1-3 row sidebar with a workspace set wrote past the buffer.
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        for height in 1..=3u16 {
+            let area = Rect::new(0, 0, 20, height);
+            let mut buf = Buffer::empty(area);
+            Sidebar::new(&entries, None, None, 1, 0)
+                .workspace(Some("~/Desktop/roster"))
+                .clock(Some("12:34"))
+                .render(area, &mut buf);
+        }
     }
 }

@@ -494,6 +494,10 @@ pub fn render(frame: &mut Frame, view: &View) {
         Some(Hit::SidebarAuto(index)) => Some(index),
         _ => None,
     };
+    let hovered_shell = match view.hover {
+        Some(Hit::SidebarShell(index)) => Some(index),
+        _ => None,
+    };
     // The card whose pane holds focus carries the accent bar. Entries span
     // every workspace but focus is the active window's, so at most one card
     // matches.
@@ -508,6 +512,7 @@ pub fn render(frame: &mut Frame, view: &View) {
         )
         .shells(view.shells)
         .focused(focused_entry)
+        .hovered_shell(hovered_shell)
         .hovered_auto(hovered_auto)
         .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
         .rate_limits(view.rate_limits)

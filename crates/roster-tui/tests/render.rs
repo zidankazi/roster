@@ -551,11 +551,20 @@ fn degenerate_frames_render_without_panicking() {
     let now = Instant::now();
     let (mut session, left, right) = two_agent_session(now);
     session.focus(right);
+    // A populated shells list too — the sidebar's shells block sits above
+    // the `agents` header and used to write past the buffer on a frame too
+    // short to hold it (see sidebar.rs's `unbounded shells` regression
+    // tests for the direct repro; this sweep is the full-frame belt).
+    for _ in 0..20 {
+        let shell = session.split(right, SplitDirection::Horizontal).unwrap();
+        session.pane_mut(shell).unwrap().command = Some("zsh".into());
+    }
     let mut grids = HashMap::new();
     grids.insert(left, Grid::from_text("left"));
     grids.insert(right, Grid::from_text("right"));
     let detector = Detector::builtin();
     let entries = sidebar_entries(&session, &detector, now);
+    let shells = shell_entries(&session, &detector);
     let exited = HashMap::new();
     let scrolled = HashMap::new();
     let items = launch_items(&detector, "zsh");
@@ -590,7 +599,7 @@ fn degenerate_frames_render_without_panicking() {
                 grids: &grids,
                 exited: &exited,
                 entries: &entries,
-                shells: &[],
+                shells: &shells,
                 selected: None,
                 hover: None,
                 zoomed: false,

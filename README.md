@@ -79,7 +79,9 @@ roster claude claude  # or launch a couple up front
 
 run bare and roster opens a welcome screen: pick an agent, or type any command
 (it's a real terminal) and hit enter. Claude Code gets a named card with live
-state, anything else just runs.
+state; anything else runs as a plain shell — no state, no triage, but still
+listed for context in the sidebar's `shells` section above `agents`, click to
+jump.
 
 the sidebar rolls every agent into a colored glyph and triages by who needs
 you first: blocked (longest wait leading), then done, then idle, working at the
@@ -92,10 +94,13 @@ status bar shows the full key palette, and `roster --help` lists it all.
 
 each agent from `+ new agent` opens its own workspace window instead of
 splitting the current pane; cycle them with `ctrl-b n`/`p` or click the `⧉`
-indicator in the status bar. the sidebar is one list ranked
+indicator in the status bar. the `agents` section is one list ranked
 most-blocked-first across every workspace, so the agent waiting on you rises
 to the top no matter where it lives — with more than one workspace each card
-carries a `⧉N` tag naming its home. cards and pane title bars name
+carries a `⧉N` tag naming its home. any non-agent pane (a shell, a dev
+server) surfaces above it in its own `shells` section instead — context, not
+signal, so no glyph or triage order, just a name to click and jump to. cards
+and pane title bars name
 themselves after the task Claude Code is working on (`fix auth bug`, not
 `claude-code`) — the card truncates to its column, the title bar has the
 pane's width for it. when Claude Code never broadcasts a task title (a
@@ -186,7 +191,9 @@ overridable at `~/.config/roster/agents.toml`; start from the built-in with
 `roster --print-config > ~/.config/roster/agents.toml`. set `launch_command` on
 an agent to control exactly what the launcher runs, or press **tab** in the
 launcher to edit the flags for a one-off (anything you type runs verbatim, so
-`claude --continue` works too).
+`claude --continue` works too). the launcher always lists a trailing `shell`
+row after your configured agents, for opening a plain shell pane without
+typing one out.
 
 ## building from source
 
