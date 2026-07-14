@@ -5,7 +5,7 @@
 // each agent's state AND the exact reason it's in that state (roster's wedge),
 // and a focused pane whose contents are real brainless Claude Code components.
 // Purely presentational — no live PTY, no I/O; it's a screenshot you can read.
-import { DemoPane } from "./DemoPane";
+import { DemoPaneBody, DemoComposer } from "./DemoPane";
 
 // roster's real palette (crates/roster-tui/src/style.rs): a neutral grayscale
 // foreground ramp on dark surfaces, a red ACCENT, and the state ramp —
@@ -200,10 +200,10 @@ export function RosterDemo() {
           {/* Body: sidebar + focused pane. min-height (not a hard height) so the
               pane grows with its content and never scrolls the composer out of
               view if font metrics render the session taller than expected. */}
-          <div className="flex" style={{ minHeight: 740 }}>
+          <div className="flex" style={{ minHeight: 560 }}>
             {/* Sidebar */}
             <aside
-              className="flex w-[320px] flex-none flex-col"
+              className="flex w-[300px] flex-none flex-col"
               style={{ background: BG_RAISED, borderRight: `1px solid ${BORDER}` }}
             >
               <div className="flex-1 overflow-hidden px-4 py-5">
@@ -261,10 +261,11 @@ export function RosterDemo() {
               </div>
             </aside>
 
-            {/* Focused pane — red border signals it holds keyboard focus */}
-            <div className="min-w-0 flex-1 p-3.5">
+            {/* Focused pane — red border signals it holds keyboard focus.
+                Flex all the way down so the composer pins to the pane bottom. */}
+            <div className="flex min-w-0 flex-1 flex-col p-3.5">
               <div
-                className="flex h-full flex-col overflow-hidden rounded-[8px]"
+                className="flex flex-1 flex-col overflow-hidden rounded-[8px]"
                 style={{ border: `1px solid ${RED}`, background: BG }}
               >
                 {/* Pane title: the focused agent's task, in brand red */}
@@ -283,11 +284,14 @@ export function RosterDemo() {
                   </span>
                 </div>
 
-                {/* The Claude Code session itself — all brainless components at
-                    a uniform 15px base (matching the chrome), so text wraps
-                    inside the pane instead of overflowing. */}
-                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-                  <DemoPane />
+                {/* The session transcript scrolls in the middle (flex-1)… */}
+                <div className="min-h-0 flex-1 overflow-hidden px-6 pt-5">
+                  <DemoPaneBody />
+                </div>
+                {/* …and the composer is pinned to the pane bottom (flex-none),
+                    calm space between it and the transcript above. */}
+                <div className="flex-none px-6 pb-5 pt-4">
+                  <DemoComposer />
                 </div>
               </div>
             </div>

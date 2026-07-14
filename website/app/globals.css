@@ -144,7 +144,7 @@ main {
    the whole page to scroll. */
 .roster-demo {
   width: 100%;
-  max-width: 1280px;
+  max-width: 1120px;
   padding: 0 clamp(12px, 4vw, 40px);
 }
 
@@ -156,7 +156,7 @@ main {
 }
 
 .roster-window {
-  min-width: 1000px;
+  min-width: 920px;
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid #2a2b3a;
