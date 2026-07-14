@@ -32,9 +32,9 @@ use roster_term::Screen;
 use roster_tui::{
     confirm_button_at, confirm_contains, content_rect, exited_buttons, hit_test, launch_items,
     menu_contains, menu_fits, menu_item_at, panes_area, pin_to_top, pointer_for, render,
-    sidebar_entries, toast_rects, ConfirmButton, ContextMenuItem, ContextMenuView, Hit, HitContext,
-    LaunchItem, Launcher, LauncherState, Message, Pointer, SidebarEntry, SidebarSide, SidebarState,
-    ToastLevel, View,
+    shell_entries, sidebar_entries, toast_rects, ConfirmButton, ContextMenuItem, ContextMenuView,
+    Hit, HitContext, LaunchItem, Launcher, LauncherState, Message, Pointer, ShellEntry,
+    SidebarEntry, SidebarSide, SidebarState, ToastLevel, View,
 };
 
 use crate::keys::encode_key;
@@ -323,6 +323,12 @@ pub struct App {
     mode: Mode,
     launchables: Vec<LaunchItem>,
     last_entries: Vec<SidebarEntry>,
+    /// The sidebar's shells-section rows, rebuilt alongside `last_entries`
+    /// each frame — but never fed into it: shells carry no state, so
+    /// auto-approve inheritance, pinning, and triage never see them. The
+    /// bare-start placeholder pane is filtered out here (it's scenery, not
+    /// a shells-section tenant — see `placeholder`).
+    last_shells: Vec<ShellEntry>,
     last_detect: Instant,
     /// The frame area of the most recent draw, for mouse hit-testing.
     last_area: Rect,
@@ -421,7 +427,7 @@ impl App {
         let (output_tx, output_rx) = mpsc::channel();
         let auto_approve: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
         let hook_sock = start_hook_listener(output_tx.clone(), Arc::clone(&auto_approve));
-        let launchables = launch_items(&detector);
+        let launchables = launch_items(&detector, &default_shell());
         let mut app = App {
             session: Session::new(),
             runtimes: HashMap::new(),
@@ -435,6 +441,7 @@ impl App {
             },
             launchables,
             last_entries: Vec::new(),
+            last_shells: Vec::new(),
             last_detect: Instant::now() - DETECT_EVERY,
             last_area: Rect::new(0, 0, SPAWN_COLS, SPAWN_ROWS),
             dragging: None,
@@ -598,7 +605,7 @@ impl App {
         });
 
         let (output_tx, output_rx) = mpsc::channel();
-        let launchables = launch_items(&detector);
+        let launchables = launch_items(&detector, &default_shell());
         let mut app = App {
             session,
             runtimes: HashMap::new(),
@@ -612,6 +619,7 @@ impl App {
             },
             launchables,
             last_entries: Vec::new(),
+            last_shells: Vec::new(),
             last_detect: Instant::now() - DETECT_EVERY,
             last_area: Rect::new(0, 0, SPAWN_COLS, SPAWN_ROWS),
             dragging: None,
@@ -823,6 +831,13 @@ impl App {
             self.sync_remote_layout();
 
             self.last_entries = sidebar_entries(&self.session, &self.detector, Instant::now());
+            // The bare-start backdrop shell is scenery, not a tenant — it
+            // must never appear as a shells-section row on the welcome
+            // screen (see `placeholder`'s doc).
+            self.last_shells = shell_entries(&self.session, &self.detector)
+                .into_iter()
+                .filter(|shell| Some(shell.pane) != self.placeholder)
+                .collect();
             // Light the `auto` chip from the shared set (a poisoned lock
             // just leaves chips unlit). Different fields than last_entries, so
             // the borrows are disjoint.
@@ -940,6 +955,7 @@ impl App {
                 grids: &grids,
                 exited: &exited,
                 entries: &self.last_entries,
+                shells: &self.last_shells,
                 selected,
                 hover,
                 zoomed: self.zoomed,
@@ -1845,6 +1861,7 @@ impl App {
                 limits: self.rate_limits.as_ref(),
                 zoomed: self.zoomed_pane(),
                 workspace_header: self.workspace.is_some(),
+                shells: &self.last_shells,
             },
             (x, y),
         );
@@ -2174,6 +2191,11 @@ impl App {
                             self.session.focus(entry.pane);
                         }
                     }
+                    Hit::SidebarShell(index) => {
+                        if let Some(shell) = self.last_shells.get(index) {
+                            self.session.focus(shell.pane);
+                        }
+                    }
                     Hit::SidebarAuto(index) => {
                         // The chip is a button on the card, not the card:
                         // toggle without stealing focus from the pane the
@@ -2470,6 +2492,7 @@ impl App {
                 | Hit::StatusViewGrid
                 | Hit::StatusViewSolo
                 | Hit::SidebarEntry(_)
+                | Hit::SidebarShell(_)
                 | Hit::SidebarAuto(_)
                 | Hit::SidebarAutoAll
                 | Hit::StatusWindows

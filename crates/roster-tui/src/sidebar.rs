@@ -14,7 +14,13 @@
 //! raised surfaces on the panel's base canvas; the card whose pane holds
 //! focus is the one *inverted* card — light fill, dark text, plus the
 //! accent bar down its left edge — so the sidebar always answers "which
-//! agent am I looking at" from across the room. When any pane's feed
+//! agent am I looking at" from across the room. Above the `agents` header,
+//! a `shells` section (see [`shell_entries`], [`shells_height`]) lists
+//! every pane whose command doesn't identify as a configured agent, as
+//! quiet single-line rows with no glyph vocabulary and no triage order —
+//! context for what's open, not signal that needs the user's attention.
+//! It is present only when a shell pane exists, so a shell-less sidebar
+//! renders pixel-identical to the pre-shells layout. When any pane's feed
 //! reports the account's rate limits, a footer pinned to the panel's
 //! bottom shows each window as a labeled usage bar
 //! (see [`limits_footer_height`]); without one the sidebar renders exactly
@@ -159,6 +165,71 @@ pub fn pin_to_top(entries: &mut [SidebarEntry]) {
 /// the focused card one row off.
 pub fn focused_entry(entries: &[SidebarEntry], focused: Option<PaneId>) -> Option<usize> {
     focused.and_then(|id| entries.iter().position(|entry| entry.pane == id))
+}
+
+/// One shells-section sidebar row: a pane whose command didn't identify as
+/// a configured agent — context, not signal, so unlike [`SidebarEntry`] it
+/// carries no state, reason, or triage order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShellEntry {
+    /// The pane this row describes.
+    pub pane: PaneId,
+    /// The row's display name (see [`shell_display_name`]).
+    pub name: String,
+}
+
+/// A non-agent pane's display name: its title when non-blank, else the
+/// basename of its command's first token (`zsh` from `/bin/zsh -l`). Shared
+/// by [`shell_entries`] and `pane_display_name`'s non-agent fallback (in
+/// `lib.rs`, which draws the pane's own top border) so the sidebar row and
+/// the pane it names can't disagree about what to call it. Crate-internal:
+/// nothing outside `roster-tui` names a shell pane.
+pub(crate) fn shell_display_name(title: Option<&str>, command: &str) -> String {
+    title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let first = command.split_whitespace().next().unwrap_or(command);
+            first.rsplit('/').next().unwrap_or(first).to_string()
+        })
+}
+
+/// Build the sidebar's shells section: every pane whose command does not
+/// identify as a configured agent — the same [`Detector::identify`] call
+/// [`sidebar_entries`] uses on the way in, so a claude pane can never land
+/// in both sections. Ordered by pane id; shells carry no state, so there is
+/// nothing to triage them by.
+pub fn shell_entries(session: &Session, detector: &Detector) -> Vec<ShellEntry> {
+    let mut entries: Vec<ShellEntry> = session
+        .panes()
+        .into_iter()
+        .filter_map(|pane| {
+            let command = pane.command.as_deref()?;
+            if detector.identify(command).is_some() {
+                return None;
+            }
+            Some(ShellEntry {
+                pane: pane.id,
+                name: shell_display_name(pane.title.as_deref(), command),
+            })
+        })
+        .collect();
+    entries.sort_by_key(|entry| entry.pane);
+    entries
+}
+
+/// Rows the shells block occupies above the `agents` header: a header row,
+/// one row per shell, and a blank spacer — or 0 with no shells, so a
+/// shell-less sidebar renders (and hit-tests) exactly its pre-shells
+/// layout. Render draws this block and `hit_test` shifts by it, so the two
+/// can't drift.
+pub fn shells_height(shells: usize) -> u16 {
+    if shells == 0 {
+        0
+    } else {
+        shells as u16 + 2
+    }
 }
 
 /// A pane-switch request surfaced by the sidebar. The binary owns the
@@ -433,6 +504,7 @@ const PIN_MARKER: &str = "★";
 /// The agent-state sidebar widget.
 pub struct Sidebar<'a> {
     entries: &'a [SidebarEntry],
+    shells: &'a [ShellEntry],
     selected: Option<usize>,
     hovered: Option<usize>,
     hovered_auto: Option<usize>,
@@ -461,6 +533,7 @@ impl<'a> Sidebar<'a> {
     ) -> Self {
         Sidebar {
             entries,
+            shells: &[],
             selected,
             hovered,
             hovered_auto: None,
@@ -473,6 +546,14 @@ impl<'a> Sidebar<'a> {
             clock: None,
             hovered_workspace: false,
         }
+    }
+
+    /// The shells-section rows, drawn above the `agents` header (see the
+    /// module doc). Empty — the default — renders exactly the sidebar from
+    /// before the section existed.
+    pub fn shells(mut self, shells: &'a [ShellEntry]) -> Self {
+        self.shells = shells;
+        self
     }
 
     /// The account's fleet-aggregated rate-limit reading, shown as a footer
@@ -667,6 +748,32 @@ impl Widget for Sidebar<'_> {
             y += 1;
         }
 
+        // The shells section: quieter single-line rows for panes that
+        // aren't a configured agent — context, not signal, so no glyph
+        // vocabulary and no triage order, just a `$` prefix and a name.
+        // Absent entirely with no shells (see `shells_height`), so a
+        // shell-less sidebar draws pixel-identical to its pre-shells self.
+        if !self.shells.is_empty() {
+            buf.set_stringn(area.x + 1, y, "shells", width.saturating_sub(1), muted());
+            y += 1;
+            for shell in self.shells {
+                if y >= bottom {
+                    break;
+                }
+                buf.set_stringn(area.x + 1, y, "$", width.saturating_sub(2), muted());
+                let name_width = width.saturating_sub(3);
+                buf.set_stringn(
+                    area.x + 3,
+                    y,
+                    truncate(&shell.name, name_width),
+                    name_width,
+                    normal(),
+                );
+                y += 1;
+            }
+            y += 1;
+        }
+
         // Quiet header: lowercase, dim; the blocked count follows it inline
         // (only when someone actually needs you), and the `auto-yes`
         // fleet toggle holds the right edge at fixed columns.
@@ -705,8 +812,10 @@ impl Widget for Sidebar<'_> {
         // The empty panel invites instead of gaping: a quiet centered
         // hint, its launch key in the same key-accent, label-muted
         // vocabulary as the status bar's hints. The pinned `+ new agent`
-        // button below stays the mouse-first way in.
-        if self.entries.is_empty() {
+        // button below stays the mouse-first way in. Skipped when shells
+        // exist with no agents — the panel already has content, so the
+        // `agents` header stands as the (hint-less) invitation instead.
+        if self.entries.is_empty() && self.shells.is_empty() {
             let hint = "no agents yet";
             let hint_y = (area.y + area.height / 2).saturating_sub(1).max(y);
             if hint_y < bottom {
@@ -1129,6 +1238,13 @@ mod tests {
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         assert_eq!(entries.len(), 3);
         assert!(entries.iter().all(|e| e.pane != ids[3]));
+
+        // The pane sidebar_entries skips isn't dropped — it's the shells
+        // section's one row.
+        let shells = shell_entries(&session, &Detector::builtin());
+        assert_eq!(shells.len(), 1);
+        assert_eq!(shells[0].pane, ids[3]);
+        assert_eq!(shells[0].name, "zsh");
     }
 
     #[test]
@@ -2745,5 +2861,63 @@ mod tests {
             buf.cell((marker_col, 2)).unwrap().style().fg,
             Some(crate::style::ACCENT)
         );
+    }
+
+    #[test]
+    fn zero_shells_leaves_the_agents_header_directly_under_the_divider() {
+        let now = Instant::now();
+        let (session, _) = populated_session(now);
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let area = Rect::new(0, 0, 40, 20);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, 1, 0).render(area, &mut buf);
+        // No shells (the default, and no `.shells(...)` call): the `agents`
+        // header sits on the very first row — no block was inserted above
+        // it, exactly the pre-shells layout.
+        let header_row = buffer_row(&buf, 0);
+        assert!(header_row.contains("agents"), "{header_row}");
+        assert!(!header_row.contains("shells"), "{header_row}");
+    }
+
+    #[test]
+    fn shells_header_renders_above_the_agents_header_with_agent_cards_below() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        let a = session.focused().unwrap();
+        let b = session.split(a, SplitDirection::Horizontal).unwrap();
+        let shell = session.split(b, SplitDirection::Vertical).unwrap();
+        session.pane_mut(a).unwrap().command = Some("claude".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
+        session.pane_mut(shell).unwrap().command = Some("zsh".into());
+        session.set_reading(a, AgentState::Working, Some("running tests".into()), now);
+        session.set_reading(b, AgentState::Blocked, Some("Approve?".into()), now);
+
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        let shells = shell_entries(&session, &Detector::builtin());
+        assert_eq!(shells.len(), 1);
+
+        let area = Rect::new(0, 0, 40, 20);
+        let mut buf = Buffer::empty(area);
+        Sidebar::new(&entries, None, None, 1, 0)
+            .shells(&shells)
+            .render(area, &mut buf);
+
+        // Row 0: `shells` header. Row 1: the one shell row, carrying its
+        // name. Row 2: the blank spacer. Row 3: `agents` header, shifted
+        // down by the shells block (see `shells_height`). Row 5: the first
+        // (blocked — higher triage priority) agent card's name row.
+        assert!(buffer_row(&buf, 0).contains("shells"));
+        let shell_row = buffer_row(&buf, 1);
+        assert!(shell_row.contains("zsh"), "{shell_row}");
+        assert!(buffer_row(&buf, 3).contains("agents"));
+        assert!(buffer_row(&buf, 5).contains("claude-code"));
+
+        // The shell row is quieter than an agent card: never DIM (house
+        // rule against theme-dependent chrome), and not the bright/bold
+        // tier the agent name uses.
+        let name_col = shell_row.find("zsh").expect("shell name drawn") as u16;
+        let cell = buf.cell((name_col, 1)).unwrap();
+        assert!(!cell.style().add_modifier.contains(Modifier::DIM));
+        assert_ne!(cell.style(), bright().add_modifier(Modifier::BOLD));
     }
 }

@@ -1,9 +1,10 @@
 //! The agent launcher: a centered modal for starting agents at runtime.
 //!
-//! Lists the configured agents, filters as you type, and falls back to
-//! running whatever you typed — so known agents are two keystrokes and
-//! anything else is still one command line away. Selection produces a
-//! [`Message`]-style intent; the binary owns the actual spawn.
+//! Lists the configured agents, then one plain-shell row, filters as you
+//! type, and falls back to running whatever you typed — so known agents are
+//! two keystrokes and anything else is still one command line away.
+//! Selection produces a [`Message`]-style intent; the binary owns the actual
+//! spawn.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -21,7 +22,7 @@ use crate::style::{
 /// One launchable item: a display name and the command it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LaunchItem {
-    /// Display name, e.g. `claude-code`.
+    /// Display name, e.g. `claude-code` or `shell`.
     pub name: String,
     /// The shell command to run.
     pub command: String,
@@ -29,10 +30,13 @@ pub struct LaunchItem {
 
 /// Build the launcher's item list: every configured agent — started with
 /// its `launch_command` when the config sets one (flags included), its
-/// first `match_command` binary otherwise. No plain-shell row: a shell can't
-/// own a workspace, so it isn't offered here (free-typed commands still run).
-pub fn launch_items(detector: &Detector) -> Vec<LaunchItem> {
-    detector
+/// first `match_command` binary otherwise — then one plain-shell row running
+/// `shell`. Agents lead the list; the shell trails as a secondary, always-
+/// available way to open one (free-typed commands still run too, filter or
+/// no filter). The tui never reads `$SHELL` itself — `shell` is the
+/// binary's call, so this crate stays free of environment reads.
+pub fn launch_items(detector: &Detector, shell: &str) -> Vec<LaunchItem> {
+    let mut items: Vec<LaunchItem> = detector
         .agents()
         .filter_map(|agent| {
             let command = agent
@@ -44,7 +48,12 @@ pub fn launch_items(detector: &Detector) -> Vec<LaunchItem> {
                 command,
             })
         })
-        .collect()
+        .collect();
+    items.push(LaunchItem {
+        name: "shell".to_string(),
+        command: shell.to_string(),
+    });
+    items
 }
 
 /// Launcher input state: the typed filter and the selected row.
@@ -614,15 +623,22 @@ mod tests {
     use super::*;
 
     fn items() -> Vec<LaunchItem> {
-        launch_items(&Detector::builtin())
+        launch_items(&Detector::builtin(), "zsh")
     }
 
     #[test]
-    fn launch_items_lists_agents_only() {
+    fn launch_items_appends_a_shell_row_after_the_agents() {
         let items = items();
         let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
-        assert_eq!(names, vec!["claude-code"], "no plain-shell row");
+        assert_eq!(names, vec!["claude-code", "shell"]);
         assert_eq!(items[0].command, "claude");
+        assert_eq!(items[1].command, "zsh");
+
+        // Selecting the trailing shell row runs the shell command, same as
+        // selecting any agent runs its command.
+        let mut state = LauncherState::new();
+        state.select(1);
+        assert_eq!(state.command(&items).as_deref(), Some("zsh"));
     }
 
     #[test]
@@ -638,7 +654,7 @@ mod tests {
             "#,
         )
         .unwrap();
-        let items = launch_items(&detector);
+        let items = launch_items(&detector, "zsh");
         assert_eq!(items[0].name, "claude-code");
         assert_eq!(items[0].command, "claude --dangerously-skip-permissions");
         assert_eq!(items[1].command, "worker", "no override, bare binary");
@@ -741,10 +757,13 @@ mod tests {
             "#,
         )
         .unwrap();
-        let items = launch_items(&detector);
+        // "sh" (no 'z') keeps the shell row clear of the "zz" filter below.
+        let items = launch_items(&detector, "sh");
         let mut state = LauncherState::new();
+        // Three items now (claude-code, worker, shell): wrapping backward
+        // from the first lands on the last.
         state.select_prev(&items);
-        assert_eq!(state.selected(&items), Some(1));
+        assert_eq!(state.selected(&items), Some(2));
         state.select_next(&items);
         assert_eq!(state.selected(&items), Some(0));
 
@@ -754,7 +773,7 @@ mod tests {
         assert_eq!(state.command(&items).as_deref(), Some("zz"));
         state.backspace();
         state.backspace();
-        assert_eq!(state.filtered(&items).len(), 2);
+        assert_eq!(state.filtered(&items).len(), 3);
     }
 
     #[test]

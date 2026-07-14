@@ -8,8 +8,8 @@ use ratatui::layout::Rect;
 use roster_core::{PaneId, Session};
 
 use crate::sidebar::{
-    auto_all_cols, auto_chip_cols, focused_entry, limits_footer_height, sidebar_rows, SidebarEntry,
-    SidebarRow,
+    auto_all_cols, auto_chip_cols, focused_entry, limits_footer_height, shells_height,
+    sidebar_rows, ShellEntry, SidebarEntry, SidebarRow,
 };
 use crate::{
     chrome_area, close_button_cols, panes_area, sidebar_button_row, sidebar_inner, status_controls,
@@ -21,6 +21,8 @@ use crate::{
 pub enum Hit {
     /// A sidebar agent card.
     SidebarEntry(usize),
+    /// A shells-section row — click jumps to that pane, same as a card.
+    SidebarShell(usize),
     /// An agent card's `auto` chip on its detail row — click toggles
     /// auto-approve for that pane.
     SidebarAuto(usize),
@@ -90,6 +92,7 @@ impl Pointer {
 pub fn pointer_for(hit: Hit) -> Pointer {
     match hit {
         Hit::SidebarEntry(_)
+        | Hit::SidebarShell(_)
         | Hit::SidebarAuto(_)
         | Hit::SidebarAutoAll
         | Hit::SidebarNewAgent
@@ -127,6 +130,11 @@ pub struct HitContext<'a> {
     /// pushes every row below it (the `auto-yes` toggle, the first card)
     /// down by three.
     pub workspace_header: bool,
+    /// The shells-section rows render drew above the `agents` header — same
+    /// shift contract as `workspace_header`, sized by
+    /// [`shells_height`] so hit-testing can't drift from what the sidebar
+    /// actually drew.
+    pub shells: &'a [ShellEntry],
 }
 
 /// Resolve what sits under (`x`, `y`) for a frame of `area`. `context`
@@ -143,6 +151,7 @@ pub fn hit_test(
         limits,
         zoomed,
         workspace_header,
+        shells,
     } = *context;
     let (x, y) = pos;
     // Positions in the inset margin are outside the chrome — nothing
@@ -200,7 +209,22 @@ pub fn hit_test(
         if workspace_header && y == bar.y + 1 {
             return Hit::SidebarWorkspace;
         }
-        let header = bar.y + u16::from(workspace_header) * 3;
+        // The shells block, when render drew it, sits between the banner
+        // and the `agents` header — same shift contract as the banner
+        // above, sized by `shells_height` so the two sides can't drift.
+        let shell_block = bar.y + u16::from(workspace_header) * 3;
+        let shells_h = shells_height(shells.len());
+        if shells_h > 0 && y >= shell_block && y < shell_block + shells_h {
+            let offset = y - shell_block;
+            return if offset >= 1 && offset <= shells.len() as u16 {
+                Hit::SidebarShell(usize::from(offset - 1))
+            } else {
+                // The shells header row and its trailing blank spacer are
+                // inert, mirroring the `agents` header's own rows below.
+                Hit::Sidebar
+            };
+        }
+        let header = shell_block + shells_h;
         // Mirror the sidebar's row plan: cards start two rows below the
         // sidebar's own header, and the header row hosts the `auto-yes`
         // fleet toggle.
@@ -303,7 +327,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 0)
             ),
@@ -318,7 +343,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (0, 5)
             ),
@@ -334,7 +360,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 1)
             ),
@@ -350,7 +377,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 3)
             ),
@@ -365,7 +393,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 4)
             ),
@@ -381,7 +410,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 5)
             ),
@@ -396,7 +426,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 6)
             ),
@@ -411,7 +442,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 28)
             ),
@@ -427,7 +459,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 29)
             ),
@@ -445,7 +478,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 27)
             ),
@@ -460,7 +494,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (4, 26)
             ),
@@ -475,7 +510,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (11, 26)
             ),
@@ -490,7 +526,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 25)
             ),
@@ -523,6 +560,7 @@ mod tests {
                 limits: None,
                 zoomed: None,
                 workspace_header: false,
+                shells: &[],
             },
             (5, 3),
         );
@@ -537,6 +575,7 @@ mod tests {
                 limits: None,
                 zoomed: None,
                 workspace_header: false,
+                shells: &[],
             },
             (5, 6),
         );
@@ -560,7 +599,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (22, 1)
             ),
@@ -575,7 +615,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (31, 1)
             ),
@@ -590,7 +631,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (32, 1)
             ),
@@ -605,7 +647,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (21, 1)
             ),
@@ -623,7 +666,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (26, 4)
             ),
@@ -638,7 +682,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (31, 4)
             ),
@@ -653,7 +698,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (29, 7)
             ),
@@ -670,7 +716,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (25, 4)
             ),
@@ -685,7 +732,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (32, 4)
             ),
@@ -700,7 +748,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (28, 3)
             ),
@@ -737,7 +786,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 5)
             ),
@@ -752,7 +802,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (29, 5)
             ),
@@ -770,7 +821,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 7)
             ),
@@ -785,7 +837,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (29, 8)
             ),
@@ -814,7 +867,8 @@ mod tests {
                     &HitContext {
                         limits: None,
                         zoomed: None,
-                        workspace_header: false
+                        workspace_header: false,
+                        shells: &[],
                     },
                     (x, 28)
                 ),
@@ -844,7 +898,8 @@ mod tests {
                     &HitContext {
                         limits: None,
                         zoomed: None,
-                        workspace_header: false
+                        workspace_header: false,
+                        shells: &[],
                     },
                     (x, 28)
                 ),
@@ -879,7 +934,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 3)
             ),
@@ -898,7 +954,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (3, 26)
             ),
@@ -924,7 +981,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (40, 1)
             ),
@@ -939,7 +997,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (40, 10)
             ),
@@ -955,7 +1014,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (80, 1)
             ),
@@ -970,7 +1030,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (80, 20)
             ),
@@ -987,7 +1048,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (34, 10)
             ),
@@ -1002,7 +1064,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (40, 27)
             ),
@@ -1028,7 +1091,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (72, 1)
             ),
@@ -1043,7 +1107,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (74, 1)
             ),
@@ -1058,7 +1123,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (71, 1)
             ),
@@ -1074,7 +1140,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (75, 1)
             ),
@@ -1090,7 +1157,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (74, 5)
             ),
@@ -1107,7 +1175,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (115, 1)
             ),
@@ -1134,7 +1203,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (80, 10)
             ),
@@ -1149,7 +1219,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (80, 1)
             ),
@@ -1166,7 +1237,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (115, 1)
             ),
@@ -1182,7 +1254,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 3)
             ),
@@ -1196,61 +1269,90 @@ mod tests {
         let now = Instant::now();
         let mut session = Session::new();
         // Window 0: a plain shell, no agents — it contributes nothing to
-        // the flat list. Window 1: a single agent, whose card leads.
+        // the flat agent list, only its own row in the shells section.
+        // Window 1: a single agent, whose card leads the agents section.
         let shell = session.focused().unwrap();
         session.pane_mut(shell).unwrap().command = Some("zsh".into());
         let agent = session.new_window();
         session.pane_mut(agent).unwrap().command = Some("claude".into());
         session.set_reading(agent, AgentState::Working, Some("w".into()), now);
         let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);
+        let shells = crate::shell_entries(&session, &Detector::builtin());
+        assert_eq!(
+            shells.len(),
+            1,
+            "the shell pane classifies as a shell, not an agent"
+        );
 
         let area = Rect::new(0, 0, 120, 30);
-        // Rows: the agent's card at y3-4, then blank — no header or
-        // placeholder rows for the agentless window.
+        let ctx = HitContext {
+            limits: None,
+            zoomed: None,
+            workspace_header: false,
+            shells: &shells,
+        };
+        // The shells block: header row (1), the one shell row (2), blank
+        // spacer (3) — then the `agents` header shifted down to row 4 (see
+        // `shells_height`), its first card two rows below that.
         assert_eq!(
-            hit_test(
-                area,
-                &session,
-                SidebarSide::Left,
-                &entries,
-                &HitContext {
-                    limits: None,
-                    zoomed: None,
-                    workspace_header: false
-                },
-                (5, 3)
-            ),
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 2)),
+            Hit::SidebarShell(0)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 6)),
             Hit::SidebarEntry(0)
         );
         assert_eq!(
-            hit_test(
-                area,
-                &session,
-                SidebarSide::Left,
-                &entries,
-                &HitContext {
-                    limits: None,
-                    zoomed: None,
-                    workspace_header: false
-                },
-                (5, 4)
-            ),
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 7)),
             Hit::SidebarEntry(0)
         );
         assert_eq!(
-            hit_test(
-                area,
-                &session,
-                SidebarSide::Left,
-                &entries,
-                &HitContext {
-                    limits: None,
-                    zoomed: None,
-                    workspace_header: false
-                },
-                (5, 5)
-            ),
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 8)),
             Hit::Sidebar
+        );
+    }
+
+    #[test]
+    fn shell_row_clicks_resolve_and_shift_everything_below_the_shells_block() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        let agent = session.focused().unwrap();
+        let shell_a = session.split(agent, SplitDirection::Horizontal).unwrap();
+        let shell_b = session.split(shell_a, SplitDirection::Vertical).unwrap();
+        session.pane_mut(agent).unwrap().command = Some("claude".into());
+        session.pane_mut(shell_a).unwrap().command = Some("zsh".into());
+        session.pane_mut(shell_b).unwrap().command = Some("bash".into());
+        session.set_reading(agent, AgentState::Idle, None, now);
+
+        let entries = crate::sidebar_entries(&session, &Detector::builtin(), now);
+        let shells = crate::shell_entries(&session, &Detector::builtin());
+        assert_eq!(shells.len(), 2);
+
+        let area = Rect::new(0, 0, 120, 30);
+        let ctx = HitContext {
+            limits: None,
+            zoomed: None,
+            workspace_header: false,
+            shells: &shells,
+        };
+        // Shells block: header (y=1), two shell rows (y=2,3), blank spacer
+        // (y=4) — then the `agents` header at y=5, its auto-yes toggle
+        // columns still resolving there, and the first card two rows below.
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 2)),
+            Hit::SidebarShell(0)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 3)),
+            Hit::SidebarShell(1)
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (22, 5)),
+            Hit::SidebarAutoAll
+        );
+        assert_eq!(
+            hit_test(area, &session, SidebarSide::Left, &entries, &ctx, (5, 7)),
+            Hit::SidebarEntry(0)
         );
     }
 
@@ -1269,7 +1371,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (115, 28)
             ),
@@ -1284,7 +1387,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (117, 28)
             ),
@@ -1304,7 +1408,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (115, 28)
             ),
@@ -1319,7 +1424,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (108, 28)
             ),
@@ -1334,7 +1440,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (60, 28)
             ),
@@ -1381,7 +1488,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 24)
             ),
@@ -1398,7 +1506,8 @@ mod tests {
                 &HitContext {
                     limits: Some(&limits),
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 24)
             ),
@@ -1414,7 +1523,8 @@ mod tests {
                 &HitContext {
                     limits: Some(&limits),
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 21)
             ),
@@ -1430,6 +1540,7 @@ mod tests {
             limits: None,
             zoomed: None,
             workspace_header: true,
+            shells: &[],
         };
         // Title row (y=1, inset) is inert; the path row (y=2) is the
         // hoverable target; the divider (y=3) is inert too.
@@ -1470,7 +1581,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (121, 5)
             ),
@@ -1485,7 +1597,8 @@ mod tests {
                 &HitContext {
                     limits: None,
                     zoomed: None,
-                    workspace_header: false
+                    workspace_header: false,
+                    shells: &[],
                 },
                 (5, 30)
             ),

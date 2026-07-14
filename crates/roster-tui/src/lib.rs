@@ -33,8 +33,9 @@ pub use menu::{
 };
 pub use pane::PaneView;
 pub use sidebar::{
-    auto_all_cols, auto_chip_cols, format_age, limits_footer_height, pin_to_top, sidebar_entries,
-    sidebar_rows, Message, Sidebar, SidebarEntry, SidebarRow, SidebarState,
+    auto_all_cols, auto_chip_cols, format_age, limits_footer_height, pin_to_top, shell_entries,
+    shells_height, sidebar_entries, sidebar_rows, Message, ShellEntry, Sidebar, SidebarEntry,
+    SidebarRow, SidebarState,
 };
 pub use style::{
     cell_style, muted, selected, selected_muted, state_color, state_glyph, state_glyph_style,
@@ -75,6 +76,10 @@ pub struct View<'a> {
     pub exited: &'a HashMap<PaneId, u32>,
     /// Sidebar rows, already built and sorted (see [`sidebar_entries`]).
     pub entries: &'a [SidebarEntry],
+    /// The sidebar's shells-section rows (see [`shell_entries`]): panes
+    /// whose command isn't a configured agent. Empty renders no `shells`
+    /// section at all.
+    pub shells: &'a [ShellEntry],
     /// The sidebar row to highlight, if any.
     pub selected: Option<usize>,
     /// What the mouse pointer is over, for hover affordances: the ✕ under
@@ -501,6 +506,7 @@ pub fn render(frame: &mut Frame, view: &View) {
             view.session.window_count(),
             view.tick,
         )
+        .shells(view.shells)
         .focused(focused_entry)
         .hovered_auto(hovered_auto)
         .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
@@ -540,20 +546,17 @@ pub fn render(frame: &mut Frame, view: &View) {
 
 /// A pane's display name: its agent card's [`SidebarEntry::display_name`]
 /// when detected — the live task title, falling back to the config name —
-/// else the basename of its command's binary. One resolver for the pane
-/// border, the exited card, and (via the entry method) the sidebar card,
-/// so the surfaces can't disagree about what a pane is called.
+/// else [`shell_entries`]'s own resolver ([`shell_display_name`]). One
+/// resolver for the pane border, the exited card, and (via the entry
+/// method or `shell_display_name`) the sidebar card, so the surfaces can't
+/// disagree about what a pane is called.
 fn pane_display_name(view: &View, id: PaneId) -> String {
     if let Some(entry) = view.entries.iter().find(|e| e.pane == id) {
         return entry.display_name().to_string();
     }
-    let command = view
-        .session
-        .pane(id)
-        .and_then(|p| p.command.clone())
-        .unwrap_or_default();
-    let name = command.split_whitespace().next().unwrap_or("").to_string();
-    name.rsplit('/').next().unwrap_or(&name).to_string()
+    let pane = view.session.pane(id);
+    let command = pane.and_then(|p| p.command.as_deref()).unwrap_or_default();
+    sidebar::shell_display_name(pane.and_then(|p| p.title.as_deref()), command)
 }
 
 /// One pane's title, riding the panel's top border: a space-padded live

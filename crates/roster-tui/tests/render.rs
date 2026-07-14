@@ -11,8 +11,8 @@ use ratatui::Terminal;
 use roster_core::{AgentState, Grid, Session, SplitDirection};
 use roster_detect::Detector;
 use roster_tui::{
-    launch_items, muted, render, selected, selected_muted, sidebar_entries, state_color, Hit,
-    LauncherState, SidebarSide, View, ACCENT,
+    launch_items, muted, render, selected, selected_muted, shell_entries, sidebar_entries,
+    state_color, Hit, LauncherState, SidebarSide, View, ACCENT,
 };
 
 fn region_text(buf: &Buffer, x0: u16, x1: u16, y: u16) -> String {
@@ -67,6 +67,7 @@ fn panes_get_title_bars_and_content_shifts_down() {
         grids: &grids,
         exited: &exited,
         entries: &entries,
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: false,
@@ -206,6 +207,7 @@ fn pane_title_prefers_the_panes_terminal_title_over_the_agent_name() {
         grids: &grids,
         exited: &exited,
         entries: &entries,
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: false,
@@ -248,6 +250,72 @@ fn pane_title_prefers_the_panes_terminal_title_over_the_agent_name() {
 }
 
 #[test]
+fn shell_panes_own_border_matches_its_sidebar_shells_row() {
+    // Regression guard: shell_entries and the pane border's own title both
+    // resolve a non-agent pane's name (title-first, command-basename
+    // fallback) through the same shared helper. Before that unification,
+    // shell_entries alone read the pane's title while the border's
+    // fallback branch always used the bare command — the same shell pane
+    // could be called two different things on screen at once.
+    let now = Instant::now();
+    let mut session = Session::new();
+    let shell = session.focused().unwrap();
+    session.pane_mut(shell).unwrap().command = Some("/bin/zsh -l".into());
+    session.set_title(shell, Some("~/Desktop/roster".into()));
+
+    let mut grids = HashMap::new();
+    grids.insert(shell, Grid::from_text("prompt$ "));
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+    let shells = shell_entries(&session, &detector);
+    assert_eq!(shells.len(), 1);
+    assert_eq!(shells[0].name, "~/Desktop/roster", "sidebar row's own name");
+
+    let exited = HashMap::new();
+    let scrolled = HashMap::new();
+    let view = View {
+        session: &session,
+        grids: &grids,
+        exited: &exited,
+        entries: &entries,
+        shells: &shells,
+        selected: None,
+        hover: None,
+        zoomed: false,
+        side: SidebarSide::Left,
+        launcher: None,
+        confirm: None,
+        context_menu: None,
+        toasts: &[],
+        rate_limits: None,
+        selection: None,
+        scrolled: &scrolled,
+        welcome: false,
+        mode_badge: None,
+        status: "",
+        tick: 0,
+        workspace: None,
+        clock: None,
+    };
+
+    let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+    terminal.draw(|frame| render(frame, &view)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    // The pane's own top border must show the same title the sidebar's
+    // shells row shows — never the bare `/bin/zsh -l` command.
+    let border_title = region_text(&buf, 34, 98, 1);
+    assert!(
+        border_title.contains("~/Desktop/roster"),
+        "border title: {border_title}"
+    );
+    assert!(
+        !border_title.contains("/bin/zsh"),
+        "border title: {border_title}"
+    );
+}
+
+#[test]
 fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
     // Regression guard for the low-contrast chrome bug: on a terminal's
     // default palette, `Modifier::DIM` renders as a near-invisible faint
@@ -268,6 +336,7 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
         grids: &grids,
         exited: &exited,
         entries: &entries,
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: false,
@@ -343,6 +412,7 @@ fn hover_lights_up_interactive_chrome() {
             grids: &grids,
             exited: &exited,
             entries: &entries,
+            shells: &[],
             selected: None,
             hover,
             zoomed: false,
@@ -427,6 +497,7 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
         grids: &grids,
         exited: &exited,
         entries: &entries,
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: true,
@@ -487,7 +558,7 @@ fn degenerate_frames_render_without_panicking() {
     let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
     let scrolled = HashMap::new();
-    let items = launch_items(&detector);
+    let items = launch_items(&detector, "zsh");
     let state = LauncherState::new();
     // Sizes straddling every threshold: the inset gate (24x8 and just
     // under), non-panelled slivers, near-zero frames, and the
@@ -519,6 +590,7 @@ fn degenerate_frames_render_without_panicking() {
                 grids: &grids,
                 exited: &exited,
                 entries: &entries,
+                shells: &[],
                 selected: None,
                 hover: None,
                 zoomed: false,
@@ -556,7 +628,7 @@ fn launcher_modal_overlays_the_frame() {
     let detector = Detector::builtin();
     let entries = sidebar_entries(&session, &detector, now);
     let exited = HashMap::new();
-    let items = launch_items(&detector);
+    let items = launch_items(&detector, "zsh");
     let state = LauncherState::new();
     let scrolled = HashMap::new();
     let view = View {
@@ -564,6 +636,7 @@ fn launcher_modal_overlays_the_frame() {
         grids: &grids,
         exited: &exited,
         entries: &entries,
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: false,
@@ -603,7 +676,7 @@ fn welcome_screen_shows_wordmark_picker_and_command_hint() {
 
     let detector = Detector::builtin();
     let exited = HashMap::new();
-    let items = launch_items(&detector);
+    let items = launch_items(&detector, "zsh");
     let state = LauncherState::new();
     let scrolled = HashMap::new();
     let view = View {
@@ -611,6 +684,7 @@ fn welcome_screen_shows_wordmark_picker_and_command_hint() {
         grids: &grids,
         exited: &exited,
         entries: &[],
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: false,
@@ -663,7 +737,7 @@ fn welcome_wordmark_reveals_with_the_tick() {
     grids.insert(only, Grid::from_text(""));
     let detector = Detector::builtin();
     let exited = HashMap::new();
-    let items = launch_items(&detector);
+    let items = launch_items(&detector, "zsh");
     let state = LauncherState::new();
 
     let draw = |tick: u64| -> String {
@@ -673,6 +747,7 @@ fn welcome_wordmark_reveals_with_the_tick() {
             grids: &grids,
             exited: &exited,
             entries: &[],
+            shells: &[],
             selected: None,
             hover: None,
             zoomed: false,
@@ -745,6 +820,7 @@ fn exited_pane_overlay_card_and_title_marker() {
         grids: &grids,
         exited: &exited,
         entries: &[],
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: false,
@@ -810,6 +886,7 @@ fn exited_marker_survives_a_long_task_title() {
         grids: &grids,
         exited: &exited,
         entries: &entries,
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: false,
@@ -872,6 +949,7 @@ fn exited_marker_survives_a_wide_char_task_title() {
         grids: &grids,
         exited: &exited,
         entries: &entries,
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: false,
@@ -920,6 +998,7 @@ fn exited_pane_too_small_for_the_card_keeps_the_strip() {
         grids: &grids,
         exited: &exited,
         entries: &[],
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: false,
@@ -988,6 +1067,7 @@ fn sidebar_ranks_globally_across_workspaces_and_tags_cards() {
         grids: &grids,
         exited: &exited,
         entries: &entries,
+        shells: &[],
         selected: None,
         hover: None,
         zoomed: false,
@@ -1064,6 +1144,7 @@ fn done_pulse_keeps_sidebar_and_title_glyphs_in_step() {
             grids: &grids,
             exited: &exited,
             entries: &entries,
+            shells: &[],
             selected: None,
             hover: None,
             zoomed: false,
@@ -1150,6 +1231,7 @@ fn fleet_rate_limit_footer_shows_through_the_full_frame() {
             grids: &grids,
             exited: &exited,
             entries: &entries,
+            shells: &[],
             selected: None,
             hover: None,
             zoomed: false,
