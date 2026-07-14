@@ -456,3 +456,34 @@ fn pane_tracker_full_lifecycle() {
     assert_eq!(seen.state, AgentState::Idle);
     assert_eq!(seen.reason, None);
 }
+
+/// Blocked commits on the very first reading with no debounce cushion (a
+/// false-positive blocked match has no recovery), so every non-blocked
+/// fixture is swept here and checked against that no-history path directly,
+/// rather than relying on someone remembering a per-fixture assertion.
+#[test]
+fn working_and_idle_fixtures_never_read_as_blocked() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-code");
+    let entries =
+        std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()));
+
+    let mut swept = 0;
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|e| panic!("reading entry in {}: {e}", dir.display()));
+        let name = entry.file_name();
+        let name = name.to_str().expect("fixture filename is valid utf-8");
+        if !name.ends_with(".txt") || name.starts_with("blocked_") {
+            continue;
+        }
+
+        let reading = classify_fresh("claude-code", "claude", name);
+        assert_ne!(
+            reading.state,
+            AgentState::Blocked,
+            "fixture {name} false-blocked"
+        );
+        swept += 1;
+    }
+
+    assert!(swept > 0, "swept zero fixtures — path or filter is wrong");
+}
