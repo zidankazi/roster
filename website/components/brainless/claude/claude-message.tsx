@@ -19,7 +19,7 @@ export function ClaudeMessage({
     return (
       <div
         className={cn(
-          "flex w-full min-w-0 items-baseline font-mono text-[13px] leading-[1.55]",
+          "flex w-full min-w-0 items-baseline font-mono text-[15px] leading-[1.55]",
           className,
         )}
         style={{ background: "#3a3a3a" }}
@@ -38,7 +38,7 @@ export function ClaudeMessage({
   }
   return (
     <div
-      className={cn("font-mono text-[13px] leading-[1.6] text-[#c0caf5]", className)}
+      className={cn("font-mono text-[15px] leading-[1.6] text-[#e6e6e6]", className)}
     >
       {children}
     </div>

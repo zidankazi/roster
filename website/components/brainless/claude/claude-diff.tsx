@@ -26,25 +26,25 @@ export function ClaudeDiff({
   className?: string;
 }) {
   return (
-    <div className={cn("min-w-0 font-mono text-[13px] leading-[1.55]", className)}>
+    <div className={cn("min-w-0 font-mono text-[15px] leading-[1.55]", className)}>
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
         <span aria-hidden className="shrink-0" style={{ color: GREEN }}>
           ⏺
         </span>
-        <span className="text-[#c0caf5]">Update</span>
+        <span className="text-[#e6e6e6]">Update</span>
         <span className="min-w-0 break-all">
-          <span className="text-[#565f89]">(</span>
-          <span className="text-[#7dcfff]">{file}</span>
-          <span className="text-[#565f89]">)</span>
+          <span className="text-[#808080]">(</span>
+          <span className="text-[#9a9a9a]">{file}</span>
+          <span className="text-[#808080]">)</span>
         </span>
       </div>
       {summary ? (
-        <div className="flex min-w-0 items-baseline gap-2 text-[#8b8fa3]">
+        <div className="flex min-w-0 items-baseline gap-2 text-[#9a9a9a]">
           {/* invisible status glyph spacer: aligns ⎿ under "Update" */}
           <span aria-hidden className="invisible shrink-0">
             ⏺
           </span>
-          <span aria-hidden className="shrink-0" style={{ color: "#565f89" }}>
+          <span aria-hidden className="shrink-0" style={{ color: "#808080" }}>
             ⎿
           </span>
           <span className="min-w-0 break-words">{summary}</span>
@@ -61,12 +61,12 @@ export function ClaudeDiff({
                 : "transparent";
           const mark = l.type === "add" ? "+" : l.type === "del" ? "-" : " ";
           const markColor =
-            l.type === "add" ? GREEN : l.type === "del" ? "#f7768e" : "#565f89";
+            l.type === "add" ? GREEN : l.type === "del" ? "#f7768e" : "#808080";
           return (
             <div key={i} className="flex min-w-0" style={{ background: bg }}>
               <span
                 className="w-9 shrink-0 select-none pr-2 text-right"
-                style={{ color: "#3b3f52" }}
+                style={{ color: "#3a3a3a" }}
               >
                 {l.n ?? ""}
               </span>
@@ -76,7 +76,7 @@ export function ClaudeDiff({
               <span
                 className="min-w-0 break-all"
                 style={{
-                  color: l.type === "ctx" ? "#8b8fa3" : "#c0caf5",
+                  color: l.type === "ctx" ? "#9a9a9a" : "#e6e6e6",
                 }}
               >
                 {l.type !== "ctx" ? (

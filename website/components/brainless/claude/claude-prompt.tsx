@@ -27,7 +27,7 @@ export type ClaudeEffort =
   | "max"
   | "ultracode";
 
-const FG = "#c0caf5";
+const FG = "#e6e6e6";
 const GRAY = "#949494";
 const RULE = "#808080"; // 38;5;244
 
@@ -109,7 +109,7 @@ export function ClaudePrompt({
   const rainbow = Boolean(e?.rainbow);
 
   return (
-    <div className={cn("min-w-0 font-mono text-[13px] leading-[1.6]", className)}>
+    <div className={cn("min-w-0 font-mono text-[15px] leading-[1.6]", className)}>
       {e ? (
         <div
           className="flex justify-end px-1 pb-1 text-[12px]"
@@ -148,7 +148,7 @@ export function ClaudePrompt({
             ? { value, onChange }
             : { defaultValue, onChange })}
           className={cn(
-            "term-input min-w-0 flex-1 bg-transparent py-0.5 pl-[1ch] outline-none placeholder:text-[#565f89]",
+            "term-input min-w-0 flex-1 bg-transparent py-0.5 pl-[1ch] outline-none placeholder:text-[#808080]",
             inputClassName,
           )}
           style={{ color: FG, caretColor: FG, caretShape: "block" } as React.CSSProperties}

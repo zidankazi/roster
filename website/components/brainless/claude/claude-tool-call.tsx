@@ -39,7 +39,7 @@ export function ClaudeToolCall({
     <details
       open={defaultOpen}
       className={cn(
-        "group font-mono text-[13px] leading-[1.55] [&_summary::-webkit-details-marker]:hidden",
+        "group font-mono text-[15px] leading-[1.55] [&_summary::-webkit-details-marker]:hidden",
         className,
       )}
     >
@@ -47,7 +47,7 @@ export function ClaudeToolCall({
         className={cn(
           "list-none",
           expandable ? "cursor-pointer" : "cursor-default",
-          "rounded-none outline-none focus-visible:ring-1 focus-visible:ring-[#7dcfff]/60",
+          "rounded-none outline-none focus-visible:ring-1 focus-visible:ring-[#9a9a9a]/60",
         )}
       >
         <span className="flex min-w-0 items-baseline gap-2">
@@ -55,29 +55,29 @@ export function ClaudeToolCall({
             ⏺
           </span>
           <span className="min-w-0 break-words">
-            <span className="text-[#c0caf5]">{tool}</span>
+            <span className="text-[#e6e6e6]">{tool}</span>
             {arg !== undefined ? (
               <>
-                <span className="text-[#565f89]">(</span>
-                <span className="text-[#7dcfff]">{arg}</span>
-                <span className="text-[#565f89]">)</span>
+                <span className="text-[#808080]">(</span>
+                <span className="text-[#9a9a9a]">{arg}</span>
+                <span className="text-[#808080]">)</span>
               </>
             ) : null}
           </span>
         </span>
-        <span className="flex min-w-0 items-baseline gap-2 text-[#8b8fa3]">
+        <span className="flex min-w-0 items-baseline gap-2 text-[#9a9a9a]">
           {/* invisible status glyph spacer: aligns ⎿ under the tool name */}
           <span aria-hidden className="invisible shrink-0">
             ⏺
           </span>
           <span className="flex min-w-0 items-baseline gap-2">
-            <span aria-hidden className="shrink-0 text-[#565f89]">
+            <span aria-hidden className="shrink-0 text-[#808080]">
               ⎿
             </span>
             <span className="min-w-0 break-words">
               {result}
               {expandable ? (
-                <span className="ml-2 text-[#565f89] group-open:hidden">
+                <span className="ml-2 text-[#808080] group-open:hidden">
                   (ctrl+o to expand)
                 </span>
               ) : null}
@@ -87,7 +87,7 @@ export function ClaudeToolCall({
       </summary>
 
       {expandable ? (
-        <div className="mt-1 whitespace-pre-wrap pl-[32px] text-[#8b8fa3]">
+        <div className="mt-1 whitespace-pre-wrap pl-[32px] text-[#9a9a9a]">
           {children}
         </div>
       ) : null}

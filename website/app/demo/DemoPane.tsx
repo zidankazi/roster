@@ -18,7 +18,7 @@ import { ClaudeToolCall } from "@/components/brainless/claude/claude-tool-call";
 import { ClaudeThinking } from "@/components/brainless/claude/claude-thinking";
 import { ClaudePrompt } from "@/components/brainless/claude/claude-prompt";
 
-const GRAY = "#7d8299";
+const GRAY = "#8a8a8a";
 
 // The pasted /goal prompt, parked in the composer — mirrors the real screenshot
 // where the launch prompt sits waiting with the cursor after it.
@@ -27,7 +27,7 @@ const GOAL =
 
 export function DemoPane() {
   return (
-    <div className="space-y-3 font-mono text-[13px] leading-[1.6] text-[#c0caf5]">
+    <div className="space-y-3 font-mono text-[15px] leading-[1.6] text-[#e6e6e6]">
       {/* Compact identity header — mascot + the three lines Claude Code boots
           with, no welcome-box border to clash with the pane frame. */}
       <div className="flex items-start gap-3">

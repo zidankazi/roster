@@ -54,7 +54,7 @@ export function ClaudePermission({
   return (
     <fieldset
       className={cn(
-        "rounded-none border px-3.5 py-2.5 font-mono text-[13px] leading-[1.6]",
+        "rounded-none border px-3.5 py-2.5 font-mono text-[15px] leading-[1.6]",
         className,
       )}
       style={{ borderColor: ROSE }}
@@ -62,8 +62,8 @@ export function ClaudePermission({
       <legend className="px-2" style={{ color: ROSE }}>
         {title}
       </legend>
-      <div className="text-[#c0caf5]">{command}</div>
-      <div className="mb-1.5 mt-2 text-[#c0caf5]">{question}</div>
+      <div className="text-[#e6e6e6]">{command}</div>
+      <div className="mb-1.5 mt-2 text-[#e6e6e6]">{question}</div>
       <div role="radiogroup" aria-label={question}>
         {options.map((opt, i) => {
           const active = sel === i;
@@ -78,7 +78,7 @@ export function ClaudePermission({
                 setSel(i);
                 onChoose?.(i);
               }}
-              className="flex cursor-pointer items-baseline gap-2 rounded px-1 py-0.5 outline-none focus-visible:ring-1 focus-visible:ring-[#7dcfff]/60"
+              className="flex cursor-pointer items-baseline gap-2 rounded px-1 py-0.5 outline-none focus-visible:ring-1 focus-visible:ring-[#9a9a9a]/60"
               style={{ background: active ? `${ROSE}1f` : "transparent" }}
             >
               <span
@@ -88,7 +88,7 @@ export function ClaudePermission({
                 ❯
               </span>
               <span
-                style={{ color: active ? "#c0caf5" : "#8b8fa3" }}
+                style={{ color: active ? "#e6e6e6" : "#9a9a9a" }}
                 className={active ? "font-semibold" : undefined}
               >
                 {i + 1}. {opt}
