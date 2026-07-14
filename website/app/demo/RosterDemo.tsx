@@ -69,8 +69,8 @@ const BLOCKED_COUNT = AGENTS.filter((a) => a.state === "blocked").length;
 function Badge({ children, small }: { children: React.ReactNode; small?: boolean }) {
   return (
     <span
-      className={`rounded-[3px] font-semibold uppercase leading-none tracking-wide ${
-        small ? "px-1 py-[2px] text-[9px]" : "px-1.5 py-px text-[10px]"
+      className={`rounded-[4px] font-semibold uppercase leading-none tracking-wide ${
+        small ? "px-1.5 py-[3px] text-[11px]" : "px-2 py-[3px] text-[12px]"
       }`}
       style={{ background: RED, color: "#fff" }}
     >
@@ -87,36 +87,36 @@ function AgentCard({ agent }: { agent: Agent }) {
   const idle = agent.state === "idle";
   return (
     <div
-      className="rounded-[5px] px-2 py-1"
+      className="rounded-[7px] px-3 py-2.5"
       style={{
         background: agent.selected ? "#252a3f" : "transparent",
         border: `1px solid ${agent.selected ? "#3b4261" : "transparent"}`,
-        boxShadow: agent.selected ? `inset 2px 0 0 ${RED}` : "none",
+        boxShadow: agent.selected ? `inset 3px 0 0 ${RED}` : "none",
       }}
     >
-      <div className="flex gap-1.5">
+      <div className="flex gap-2.5">
         {/* Fixed dot column keeps title and reason on one left edge. Hollow ring
             for idle, filled dot otherwise — roster's own status glyphs. */}
-        <span aria-hidden className="mt-[2px] text-[9px] leading-none" style={{ color }}>
+        <span aria-hidden className="mt-[4px] text-[12px] leading-none" style={{ color }}>
           {idle ? "○" : "●"}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-1.5">
-            <span aria-hidden className="text-[11px]" style={{ color: BRIGHT }}>
+          <div className="flex items-baseline gap-2">
+            <span aria-hidden className="text-[15px]" style={{ color: BRIGHT }}>
               ✳
             </span>
             <span
-              className="min-w-0 flex-1 truncate text-[13px] font-semibold"
+              className="min-w-0 flex-1 truncate text-[16px] font-semibold"
               style={{ color: agent.selected ? BRIGHT : TEXT }}
             >
               {agent.title}
             </span>
-            <span className="whitespace-nowrap text-[11px]" style={{ color: MUTED }}>
+            <span className="whitespace-nowrap text-[13px]" style={{ color: MUTED }}>
               {agent.elapsed}
             </span>
           </div>
-          <div className="mt-px flex items-center gap-1.5">
-            <span className="min-w-0 flex-1 truncate text-[11px]">
+          <div className="mt-1 flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-[13px]">
               <span style={{ color }}>{agent.state}</span>
               <span style={{ color: MUTED }}> · {agent.reason}</span>
             </span>
@@ -131,12 +131,12 @@ function AgentCard({ agent }: { agent: Agent }) {
 /** A stacked usage meter — roster's 5h / weekly budget gauges. */
 function Meter({ label, pct, note }: { label: string; pct: number; note: string }) {
   return (
-    <div className="flex items-center gap-2 text-[11px]" style={{ color: MUTED }}>
-      <span className="w-4" style={{ color: TEXT }}>
+    <div className="flex items-center gap-2.5 text-[13px]" style={{ color: MUTED }}>
+      <span className="w-5" style={{ color: TEXT }}>
         {label}
       </span>
       <span
-        className="h-2 w-16 overflow-hidden rounded-[2px]"
+        className="h-2.5 w-20 overflow-hidden rounded-[3px]"
         style={{ background: "#2a2b3a" }}
         aria-hidden
       >
@@ -159,55 +159,55 @@ export function RosterDemo() {
         >
           {/* Title bar */}
           <div
-            className="flex h-9 items-center px-3.5"
+            className="flex h-12 items-center px-5"
             style={{ background: "#30303c", borderBottom: "1px solid #00000040" }}
           >
-            <div className="flex items-center gap-2" aria-hidden>
-              <span className="h-3 w-3 rounded-full" style={{ background: "#ff5f57" }} />
-              <span className="h-3 w-3 rounded-full" style={{ background: "#febc2e" }} />
-              <span className="h-3 w-3 rounded-full" style={{ background: "#28c840" }} />
+            <div className="flex items-center gap-2.5" aria-hidden>
+              <span className="h-3.5 w-3.5 rounded-full" style={{ background: "#ff5f57" }} />
+              <span className="h-3.5 w-3.5 rounded-full" style={{ background: "#febc2e" }} />
+              <span className="h-3.5 w-3.5 rounded-full" style={{ background: "#28c840" }} />
             </div>
             <div
-              className="flex flex-1 items-center justify-center gap-2 text-[13px] font-semibold"
+              className="flex flex-1 items-center justify-center gap-2.5 text-[16px] font-semibold"
               style={{ color: BRIGHT }}
             >
               <span aria-hidden>📁</span>
               <span>cargo run -p roster</span>
             </div>
-            <div className="w-[52px]" />
+            <div className="w-[64px]" />
           </div>
 
           {/* Body: sidebar + focused pane. min-height (not a hard height) so the
               pane grows with its content and never scrolls the composer out of
               view if font metrics render the session taller than expected. */}
-          <div className="flex" style={{ minHeight: 620 }}>
+          <div className="flex" style={{ minHeight: 740 }}>
             {/* Sidebar */}
             <aside
-              className="flex w-[266px] flex-none flex-col"
+              className="flex w-[320px] flex-none flex-col"
               style={{ background: "#1a1b26", borderRight: "1px solid #2a2b3a" }}
             >
-              <div className="flex-1 overflow-hidden px-2.5 py-3">
+              <div className="flex-1 overflow-hidden px-4 py-5">
                 {/* Workspace + clock */}
-                <div className="flex items-baseline justify-between px-1.5">
-                  <span className="text-[15px] font-bold" style={{ color: BRIGHT }}>
+                <div className="flex items-baseline justify-between px-1">
+                  <span className="text-[19px] font-bold" style={{ color: BRIGHT }}>
                     roster
                   </span>
-                  <span className="text-[11px]" style={{ color: MUTED }}>
+                  <span className="text-[13px]" style={{ color: MUTED }}>
                     13:12
                   </span>
                 </div>
-                <div className="truncate px-1.5 text-[11px]" style={{ color: MUTED }}>
+                <div className="mt-1 truncate px-1 text-[13px]" style={{ color: MUTED }}>
                   ~/Desktop/roster
                 </div>
 
                 {/* Agents header: the label + a live blocked count (roster
                     surfaces how many need you, in red) + the global toggle. */}
-                <div className="mt-4 mb-1 flex items-center gap-2 px-1.5">
-                  <span className="text-[12px]" style={{ color: TEXT }}>
+                <div className="mb-2.5 mt-6 flex items-center gap-2.5 px-1">
+                  <span className="text-[14px]" style={{ color: TEXT }}>
                     agents
                   </span>
                   {BLOCKED_COUNT > 0 && (
-                    <span className="text-[11px] font-semibold" style={{ color: RED }}>
+                    <span className="text-[13px] font-semibold" style={{ color: RED }}>
                       {BLOCKED_COUNT} blocked
                     </span>
                   )}
@@ -215,7 +215,7 @@ export function RosterDemo() {
                   <Badge>auto-yes</Badge>
                 </div>
 
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   {AGENTS.map((a) => (
                     <AgentCard key={a.title} agent={a} />
                   ))}
@@ -224,7 +224,7 @@ export function RosterDemo() {
 
               {/* Usage meters + new-agent affordance, pinned to the sill */}
               <div
-                className="space-y-1.5 px-3 py-3"
+                className="space-y-2.5 px-4 py-5"
                 style={{ borderTop: "1px solid #2a2b3a" }}
               >
                 <Meter label="5h" pct={2} note="resets 2h57m" />
@@ -232,24 +232,24 @@ export function RosterDemo() {
                 {/* A styled affordance, not a real button — the demo is static,
                     so nothing here should advertise a clickable action. */}
                 <div
-                  className="mt-1 w-full rounded-[5px] py-1.5 text-left text-[12px]"
+                  className="mt-2 w-full rounded-[6px] px-3 py-2.5 text-left text-[14px]"
                   style={{ color: TEXT, background: "#24283b" }}
                   aria-hidden
                 >
-                  <span className="px-2">+ new agent</span>
+                  + new agent
                 </div>
               </div>
             </aside>
 
             {/* Focused pane — red border signals it holds keyboard focus */}
-            <div className="min-w-0 flex-1 p-2.5">
+            <div className="min-w-0 flex-1 p-3.5">
               <div
-                className="flex h-full flex-col overflow-hidden rounded-[6px]"
+                className="flex h-full flex-col overflow-hidden rounded-[8px]"
                 style={{ border: `1px solid ${RED}`, background: "#16161e" }}
               >
                 {/* Pane title: the focused agent's task, in brand red */}
                 <div
-                  className="flex flex-none items-center gap-2 px-3 py-1.5 text-[12px]"
+                  className="flex flex-none items-center gap-2.5 px-4 py-3 text-[15px]"
                   style={{ borderBottom: `1px solid ${RED}33` }}
                 >
                   <span aria-hidden style={{ color: MUTED }}>
@@ -263,9 +263,13 @@ export function RosterDemo() {
                   </span>
                 </div>
 
-                {/* The Claude Code session itself — all brainless components */}
-                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                  <DemoPane />
+                {/* The Claude Code session itself — all brainless components,
+                    zoomed to a comfortable terminal size (brainless hardcodes a
+                    small 13px base; zoom scales the whole session uniformly). */}
+                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                  <div style={{ zoom: 1.2 }}>
+                    <DemoPane />
+                  </div>
                 </div>
               </div>
             </div>
@@ -273,7 +277,7 @@ export function RosterDemo() {
 
           {/* Status bar */}
           <div
-            className="relative flex h-8 items-center justify-center px-3 text-[12px]"
+            className="relative flex h-11 items-center justify-center px-4 text-[14px]"
             style={{ background: "#1a1b26", borderTop: "1px solid #2a2b3a", color: MUTED }}
           >
             <span>
@@ -281,7 +285,7 @@ export function RosterDemo() {
               <span style={{ color: RED }}>ctrl-b</span> keys · then{" "}
               <span style={{ color: RED }}>j</span> jump
             </span>
-            <span className="absolute right-3" style={{ color: RED }}>
+            <span className="absolute right-4" style={{ color: RED }}>
               <span aria-hidden>⧉ </span>2/2
             </span>
           </div>
