@@ -158,8 +158,10 @@ export function RosterDemo() {
             <div className="w-[52px]" />
           </div>
 
-          {/* Body: sidebar + focused pane */}
-          <div className="flex" style={{ height: 620 }}>
+          {/* Body: sidebar + focused pane. min-height (not a hard height) so the
+              pane grows with its content and never scrolls the composer out of
+              view if font metrics render the session taller than expected. */}
+          <div className="flex" style={{ minHeight: 620 }}>
             {/* Sidebar */}
             <aside
               className="flex w-[248px] flex-none flex-col"
@@ -204,13 +206,15 @@ export function RosterDemo() {
               >
                 <Meter label="5h" pct={2} note="resets 2h57m" />
                 <Meter label="wk" pct={45} note="resets 3d" />
-                <button
-                  type="button"
+                {/* A styled affordance, not a real button — the demo is static,
+                    so nothing here should advertise a clickable action. */}
+                <div
                   className="mt-1 w-full rounded-[5px] py-1.5 text-left text-[12px]"
                   style={{ color: TEXT, background: "#24283b" }}
+                  aria-hidden
                 >
                   <span className="px-2">+ new agent</span>
-                </button>
+                </div>
               </div>
             </aside>
 

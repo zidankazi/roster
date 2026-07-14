@@ -73,7 +73,9 @@ export function DemoPane() {
       </div>
 
       <div className="pt-2">
-        <ClaudePrompt value={GOAL} mode="auto" effort="high" />
+        {/* defaultValue (not value): the composer is a preset read-only-in-spirit
+            display, and value-without-onChange is React's controlled-input trap. */}
+        <ClaudePrompt defaultValue={GOAL} mode="auto" effort="high" />
       </div>
     </div>
   );
