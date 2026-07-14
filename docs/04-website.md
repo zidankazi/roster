@@ -24,27 +24,45 @@ the Rust crates and nothing else.
 
 ## What it is
 
-Next.js 15 (App Router) + React 19, TypeScript strict. Everything lives
-under `app/` — components sit next to the one route that uses them; there is
-no separate `components/` tree.
+Next.js 15 (App Router) + React 19, TypeScript strict. App-specific
+components sit next to the one route that uses them under `app/`. The one
+exception is the vendored `components/brainless/` tree (see "The demo" below):
+those come from a shadcn registry and land where the registry's target paths
+put them.
 
 ```
 website/
   package.json         # scripts are plain `next dev/build/start/lint`
   bun.lock             # Bun's lockfile — the authority (see isolation rules)
+  components.json      # shadcn config: aliases + the @brainless registry
+  postcss.config.mjs   # loads @tailwindcss/postcss (Tailwind v4)
   vercel.json          # deploy config; skips builds when website/ didn't change
   next.config.mjs      # default-empty today
   tsconfig.json
+  lib/
+    utils.ts           # shadcn's cn() helper — brainless components import it
+  components/
+    brainless/         # vendored Claude Code UI from the @brainless registry
   app/
     layout.tsx         # metadata + Navbar wrapper
-    page.tsx           # the landing page: Wordmark → Tagline → InstallCommand
-    globals.css        # all styling — plain CSS, no framework
+    page.tsx           # landing: Wordmark → Tagline → InstallCommand → RosterDemo
+    globals.css        # site styling (plain CSS) + a Tailwind v4 @import for brainless
     Navbar.tsx         # brand left; docs + GitHub links right
     Wordmark.tsx       # the animated ASCII wordmark
     Tagline.tsx        # the pitch lines, animated Claude mark inline
     ClaudeMark.tsx     # Lottie-rendered Claude mark (asset: claude-lottie.json)
     InstallCommand.tsx # Homebrew/Script toggle, copy button, red sweep
+    demo/
+      RosterDemo.tsx   # the roster window rebuilt as web chrome (sidebar + pane)
+      DemoPane.tsx     # the focused pane's contents, composed from brainless
 ```
+
+The site's own chrome is still plain CSS in `globals.css` (the `.roster-demo*`
+and `.roster-window` classes frame the demo). Tailwind is pulled in **only**
+so the brainless components render — `globals.css` opens with
+`@import "tailwindcss"` plus the shadcn theme tokens `shadcn init` wrote. Don't
+Tailwind-ify the hand-written landing chrome; the two styling systems coexist,
+they don't merge.
 
 Two deliberate brand bridges — keep them true:
 
@@ -68,12 +86,25 @@ Keep it to a single focused screen. What carries it:
    fallback for machines without brew. Keep it to these two — the toggle
    swaps one line in place, it is not a doorway to a methods wall. If someone
    reads the tagline and copies the line, the page did its job.
-3. **The demo cast — still the missing centerpiece.** An asciinema
-   recording of several Claude Code agents running, the sidebar lighting up
-   with reasons, and a jump straight to the blocked one. That recording is
-   the single highest-leverage asset in the whole project — record it the
-   moment the sidebar looks good. A great cast with a rough binary beats a
-   polished binary nobody can see working.
+3. **The demo — roster rebuilt as web chrome.** `RosterDemo.tsx` renders the
+   whole window on the page below the install line: the title bar, the sidebar
+   reading three agents' state **and reason** (🟢 idle / 🔴 blocked /
+   🟡 working, each with the exact prompt or verb it's sitting on — roster's
+   wedge), the usage meters, and a focused pane. The pane's contents
+   (`DemoPane.tsx`) are real brainless Claude Code components — header,
+   messages, todo list, tool call, thinking line, composer — themed to *this*
+   task, so the pane narrates the work that built it. It's static: no PTY, no
+   I/O, a screenshot you can read and select. A live asciinema cast of several
+   real agents is still the higher-leverage asset to add once the sidebar
+   looks good; this hand-built demo carries the page until then.
+
+   **brainless is a vendored dependency.** The Claude Code components come from
+   the `@brainless` shadcn registry (registered in `components.json`). To add
+   or refresh one: `bunx shadcn@latest add @brainless/<name>`. They land under
+   `components/brainless/` and are Tailwind-styled — that is why Tailwind and
+   shadcn's tokens exist in the project at all. Keep the components' semantics
+   (`details`, `listbox`, `radiogroup`, `aria-live`) intact; never flatten
+   them back into a `<pre>`.
 4. If a comparison section ever lands, keep it generic — tmux / GUI
    managers / status-only tools, matching the README table. Never name
    specific competing products in the repo.
