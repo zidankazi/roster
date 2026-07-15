@@ -23,11 +23,11 @@ const GOAL =
     composer is rendered separately by RosterDemo so it can pin to the bottom. */
 export function DemoPaneBody() {
   return (
-    <div className="space-y-3 font-mono text-[12px] leading-[1.6] text-[#e6e6e6]">
+    <div className="space-y-3 font-mono text-[13px] leading-[1.6] text-[#e6e6e6]">
       {/* Compact identity header — mascot + the three lines Claude Code boots
           with, no welcome-box border to clash with the pane frame. */}
       <div className="flex items-start gap-3">
-        <ClaudeLogo scale={2.2} />
+        <ClaudeLogo scale={2.5} />
         <div className="min-w-0">
           <div className="font-semibold">
             Claude Code <span style={{ color: GRAY }}>v2.1.209</span>
@@ -66,7 +66,7 @@ export function DemoPaneBody() {
 /** The input composer, pinned to the pane bottom by RosterDemo. */
 export function DemoComposer() {
   return (
-    <div className="font-mono text-[12px] leading-[1.6] text-[#e6e6e6]">
+    <div className="font-mono text-[13px] leading-[1.6] text-[#e6e6e6]">
       {/* defaultValue (not value): the composer is a preset read-only-in-spirit
           display, and value-without-onChange is React's controlled-input trap. */}
       <ClaudePrompt defaultValue={GOAL} mode="auto" effort="high" />

@@ -39,7 +39,7 @@ export function ClaudeToolCall({
     <details
       open={defaultOpen}
       className={cn(
-        "group font-mono text-[12px] leading-[1.55] [&_summary::-webkit-details-marker]:hidden",
+        "group font-mono text-[13px] leading-[1.55] [&_summary::-webkit-details-marker]:hidden",
         className,
       )}
     >
