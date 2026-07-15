@@ -97,7 +97,7 @@ function Badge({ children, small }: { children: React.ReactNode; small?: boolean
   return (
     <span
       className={`shrink-0 rounded-[3px] font-semibold uppercase leading-none tracking-wide ${
-        small ? "px-1 py-[2px] text-[8px]" : "px-2 py-[3px] text-[11px]"
+        small ? "px-1 py-[1px] text-[7px]" : "px-1.5 py-[2px] text-[9px]"
       }`}
       style={{ background: RED, color: "#fff" }}
     >
@@ -131,27 +131,27 @@ function AgentCard({ agent }: { agent: Agent }) {
       <div className="flex gap-1.5">
         {/* Fixed dot column keeps title and reason on one left edge. Hollow ring
             for idle, filled dot otherwise — roster's own status glyphs. */}
-        <span aria-hidden className="mt-[2px] text-[8px] leading-none" style={{ color: dot }}>
+        <span aria-hidden className="mt-[2px] text-[7px] leading-none" style={{ color: dot }}>
           {idle ? "○" : "●"}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1">
-            <span aria-hidden className="text-[10px]" style={{ color: sparkleFg }}>
+            <span aria-hidden className="text-[8px]" style={{ color: sparkleFg }}>
               ✳
             </span>
             <span
-              className="min-w-0 flex-1 truncate text-[11px] font-semibold"
+              className="min-w-0 flex-1 truncate text-[9px] font-semibold"
               style={{ color: titleFg }}
             >
               {agent.title}
             </span>
-            <span className="shrink-0 whitespace-nowrap text-[9px]" style={{ color: metaFg }}>
+            <span className="shrink-0 whitespace-nowrap text-[8px]" style={{ color: metaFg }}>
               <span aria-hidden>⧉ </span>
               {agent.elapsed}
             </span>
           </div>
           <div className="mt-px flex items-center gap-1">
-            <span className="min-w-0 flex-1 truncate text-[10px]">
+            <span className="min-w-0 flex-1 truncate text-[8px]">
               <span style={{ color: dot }}>{agent.state}</span>
               <span style={{ color: metaFg }}> · {agent.reason}</span>
             </span>
@@ -166,12 +166,12 @@ function AgentCard({ agent }: { agent: Agent }) {
 /** A stacked usage meter — roster's 5h / weekly budget gauges. */
 function Meter({ label, pct, note }: { label: string; pct: number; note: string }) {
   return (
-    <div className="flex items-center gap-2.5 text-[12px]" style={{ color: MUTED }}>
-      <span className="w-5" style={{ color: TEXT }}>
+    <div className="flex items-center gap-2 text-[10px]" style={{ color: MUTED }}>
+      <span className="w-4" style={{ color: TEXT }}>
         {label}
       </span>
       <span
-        className="h-2.5 w-20 overflow-hidden rounded-[3px]"
+        className="h-2 w-16 overflow-hidden rounded-[3px]"
         style={{ background: "#3a3a3a" }}
         aria-hidden
       >
@@ -203,7 +203,7 @@ export function RosterDemo() {
               <span className="h-3.5 w-3.5 rounded-full" style={{ background: "#28c840" }} />
             </div>
             <div
-              className="flex flex-1 items-center justify-center gap-2.5 text-[14px] font-semibold"
+              className="flex flex-1 items-center justify-center gap-2 text-[12px] font-semibold"
               style={{ color: BRIGHT }}
             >
               <span aria-hidden>📁</span>
@@ -224,25 +224,25 @@ export function RosterDemo() {
               <div className="flex-1 overflow-hidden px-6 py-5">
                 {/* Workspace + clock */}
                 <div className="flex items-baseline justify-between px-1">
-                  <span className="text-[16px] font-bold" style={{ color: BRIGHT }}>
+                  <span className="text-[13px] font-bold" style={{ color: BRIGHT }}>
                     roster
                   </span>
-                  <span className="text-[12px]" style={{ color: MUTED }}>
+                  <span className="text-[10px]" style={{ color: MUTED }}>
                     13:12
                   </span>
                 </div>
-                <div className="mt-1 truncate px-1 text-[12px]" style={{ color: MUTED }}>
+                <div className="mt-1 truncate px-1 text-[10px]" style={{ color: MUTED }}>
                   ~/Desktop/roster
                 </div>
 
                 {/* Agents header: the label + a live blocked count (roster
                     surfaces how many need you, in red) + the global toggle. */}
-                <div className="mb-2 mt-5 flex items-center gap-2.5 px-1">
-                  <span className="text-[13px]" style={{ color: TEXT }}>
+                <div className="mb-2 mt-4 flex items-center gap-2 px-1">
+                  <span className="text-[11px]" style={{ color: TEXT }}>
                     agents
                   </span>
                   {BLOCKED_COUNT > 0 && (
-                    <span className="text-[12px] font-semibold" style={{ color: RED }}>
+                    <span className="text-[10px] font-semibold" style={{ color: RED }}>
                       {BLOCKED_COUNT} blocked
                     </span>
                   )}
@@ -267,7 +267,7 @@ export function RosterDemo() {
                 {/* A styled affordance, not a real button — the demo is static,
                     so nothing here should advertise a clickable action. */}
                 <div
-                  className="mt-2 w-full rounded-[6px] px-3 py-2.5 text-left text-[13px]"
+                  className="mt-2 w-full rounded-[6px] px-3 py-2 text-left text-[11px]"
                   style={{ color: TEXT, background: "#262626" }}
                   aria-hidden
                 >
@@ -285,7 +285,7 @@ export function RosterDemo() {
               >
                 {/* Pane title: the focused agent's task, in brand red */}
                 <div
-                  className="flex flex-none items-center gap-2.5 px-6 py-3.5 text-[13px]"
+                  className="flex flex-none items-center gap-2 px-6 py-3 text-[11px]"
                   style={{ borderBottom: `1px solid ${RED}33` }}
                 >
                   <span aria-hidden style={{ color: MUTED }}>
@@ -314,7 +314,7 @@ export function RosterDemo() {
 
           {/* Status bar */}
           <div
-            className="relative flex h-11 items-center justify-center px-6 text-[13px]"
+            className="relative flex h-11 items-center justify-center px-6 text-[11px]"
             style={{ background: BG_RAISED, borderTop: `1px solid ${BORDER}`, color: MUTED }}
           >
             <span>

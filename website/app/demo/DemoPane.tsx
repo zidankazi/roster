@@ -6,6 +6,7 @@
 // watch, never a <pre> dump. Split into a scrolling body and a pinned
 // composer so RosterDemo can anchor the composer to the pane's bottom (a
 // flex-none sibling) the way a real Claude Code pane sits.
+import * as React from "react";
 import { ClaudeLogo } from "@/components/brainless/claude/claude-header";
 import { ClaudeMessage } from "@/components/brainless/claude/claude-message";
 import { ClaudeTodoList } from "@/components/brainless/claude/claude-todo-list";
@@ -13,6 +14,13 @@ import { ClaudeThinking } from "@/components/brainless/claude/claude-thinking";
 import { ClaudePrompt } from "@/components/brainless/claude/claude-prompt";
 
 const GRAY = "#8a8a8a";
+
+// The whole Claude session is brainless registry components with baked-in 13px
+// type; roster's real pane packs its text far denser than the browser default.
+// A single `zoom` on each block shrinks fonts, glyphs, borders and gaps together
+// — uniformly, and without forking the registry components — so the pane reads
+// at terminal density instead of dwarfing the window frame around it.
+const PANE_SCALE = { zoom: 0.82 } as React.CSSProperties;
 
 // The pasted /goal prompt, parked in the composer — mirrors the real screenshot
 // where the launch prompt sits waiting with the cursor after it.
@@ -23,7 +31,10 @@ const GOAL =
     composer is rendered separately by RosterDemo so it can pin to the bottom. */
 export function DemoPaneBody() {
   return (
-    <div className="space-y-3 font-mono text-[13px] leading-[1.6] text-[#e6e6e6]">
+    <div
+      style={PANE_SCALE}
+      className="space-y-3 font-mono text-[13px] leading-[1.6] text-[#e6e6e6]"
+    >
       {/* Compact identity header — mascot + the three lines Claude Code boots
           with, no welcome-box border to clash with the pane frame. */}
       <div className="flex items-start gap-3">
@@ -66,7 +77,7 @@ export function DemoPaneBody() {
 /** The input composer, pinned to the pane bottom by RosterDemo. */
 export function DemoComposer() {
   return (
-    <div className="font-mono text-[13px] leading-[1.6] text-[#e6e6e6]">
+    <div style={PANE_SCALE} className="font-mono text-[13px] leading-[1.6] text-[#e6e6e6]">
       {/* defaultValue (not value): the composer is a preset read-only-in-spirit
           display, and value-without-onChange is React's controlled-input trap. */}
       <ClaudePrompt defaultValue={GOAL} mode="auto" effort="high" />
