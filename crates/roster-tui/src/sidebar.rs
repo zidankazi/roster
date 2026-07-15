@@ -1310,7 +1310,7 @@ mod tests {
     }
 
     #[test]
-    fn longer_waiting_rows_lead_within_a_state() {
+    fn longer_waiting_rows_lead_within_the_blocked_state() {
         let now = Instant::now();
         let mut session = Session::new();
         let a = session.focused().unwrap();
@@ -1331,6 +1331,56 @@ mod tests {
         );
         let entries = sidebar_entries(&session, &Detector::builtin(), now);
         // Both panes run claude; the longer-waiting one (pane b, 60s) leads.
+        // Blocked is the one tier that ranks by neglect rather than recency.
+        assert_eq!(entries[0].pane, b);
+        assert_eq!(entries[1].pane, a);
+    }
+
+    #[test]
+    fn most_recently_finished_rows_lead_within_the_done_state() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        let a = session.focused().unwrap();
+        let b = session.split(a, SplitDirection::Horizontal).unwrap();
+        session.pane_mut(a).unwrap().command = Some("claude".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
+        session.set_reading(
+            a,
+            AgentState::Done,
+            Some("finished long ago".into()),
+            now - Duration::from_secs(300),
+        );
+        session.set_reading(
+            b,
+            AgentState::Done,
+            Some("just finished".into()),
+            now - Duration::from_secs(4),
+        );
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // The fresh completion (pane b, 4s) leads the older one — done reads
+        // as a feed of what just landed, the opposite of the blocked tier.
+        assert_eq!(entries[0].pane, b);
+        assert_eq!(entries[1].pane, a);
+    }
+
+    #[test]
+    fn most_recently_idle_rows_lead_within_the_idle_state() {
+        let now = Instant::now();
+        let mut session = Session::new();
+        let a = session.focused().unwrap();
+        let b = session.split(a, SplitDirection::Horizontal).unwrap();
+        session.pane_mut(a).unwrap().command = Some("claude".into());
+        session.pane_mut(b).unwrap().command = Some("claude".into());
+        // Panes are born idle, so a bare idle reading is not a state change
+        // and would leave `last_change` unset. Work first, then fall idle —
+        // that transition is what the ordering reads.
+        let start = now - Duration::from_secs(600);
+        session.set_reading(a, AgentState::Working, Some("w".into()), start);
+        session.set_reading(b, AgentState::Working, Some("w".into()), start);
+        session.set_reading(a, AgentState::Idle, None, now - Duration::from_secs(300));
+        session.set_reading(b, AgentState::Idle, None, now - Duration::from_secs(4));
+        let entries = sidebar_entries(&session, &Detector::builtin(), now);
+        // Pane b went idle 4s ago, pane a 300s ago: the fresher one leads.
         assert_eq!(entries[0].pane, b);
         assert_eq!(entries[1].pane, a);
     }

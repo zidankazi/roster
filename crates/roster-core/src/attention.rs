@@ -5,7 +5,6 @@
 //! identically. Pure ranking over snapshots the caller assembles — no
 //! clock, no I/O. See `docs/05-claude-native-attention.md`.
 
-use std::cmp::Reverse;
 use std::time::Duration;
 
 use crate::session::AgentState;
@@ -34,21 +33,29 @@ impl AttentionItem {
             (AgentState::Blocked, true) => 0,
             _ => 1,
         };
-        Priority(
-            tier(self.state),
-            ask,
-            Reverse(self.waiting_for.unwrap_or(Duration::ZERO)),
-        )
+        // The two tiers want opposite ends of the same duration. Blocked
+        // triages by neglect — the ask ignored longest is the one most at
+        // risk of being ignored forever — so its key inverts. Every other
+        // tier reads as a feed of what just happened: whoever landed in the
+        // state most recently leads, which is the plain age. An unknown age
+        // has earned neither end and trails its tier.
+        let within_tier = match (self.state, self.waiting_for) {
+            (AgentState::Blocked, Some(w)) => Duration::MAX.saturating_sub(w),
+            (_, Some(w)) => w,
+            (_, None) => Duration::MAX,
+        };
+        Priority(tier(self.state), ask, within_tier)
     }
 }
 
 /// A totally ordered "needs-you-ness" key; smaller means more urgent.
 ///
-/// Within a tier the longest wait leads (a destructive ask leads the
-/// blocked tier outright, and a missing duration counts as zero wait);
-/// equal keys leave the order to the caller.
+/// Within the blocked tier the longest wait leads, and a destructive ask
+/// leads the tier outright. Within every other tier the most recent arrival
+/// leads. A missing duration trails its tier either way; equal keys leave
+/// the order to the caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Priority(u8, u8, Reverse<Duration>);
+pub struct Priority(u8, u8, Duration);
 
 /// The state's urgency tier — the core judgment, in one place: 🔴 blocked
 /// needs a decision now; 🔵 done holds finished work awaiting review;
@@ -141,14 +148,33 @@ mod tests {
     }
 
     #[test]
-    fn longest_wait_leads_within_every_tier() {
+    fn most_recent_arrival_leads_outside_the_blocked_tier() {
         let items = [
-            waiting(AgentState::Done, 5),
             waiting(AgentState::Done, 90),
-            waiting(AgentState::Idle, 5),
+            waiting(AgentState::Done, 5),
             waiting(AgentState::Idle, 90),
+            waiting(AgentState::Idle, 5),
+            waiting(AgentState::Working, 90),
+            waiting(AgentState::Working, 5),
         ];
-        assert_eq!(rank(&items), vec![1, 0, 3, 2]);
+        assert_eq!(rank(&items), vec![1, 0, 3, 2, 5, 4]);
+    }
+
+    #[test]
+    fn recency_never_reorders_the_blocked_tier() {
+        // Blocked triages by neglect, so it keeps the opposite order to the
+        // tiers above — the flip must not leak across the tier boundary.
+        let items = [blocked(5, false), blocked(90, false)];
+        assert_eq!(rank(&items), vec![1, 0]);
+    }
+
+    #[test]
+    fn an_unknown_age_trails_its_tier() {
+        // A pane that has never changed state carries no age. It is not the
+        // most recent arrival — it may have sat idle since startup — so it
+        // must not lead on a recency tier.
+        let items = [item(AgentState::Idle), waiting(AgentState::Idle, 600)];
+        assert_eq!(rank(&items), vec![1, 0]);
     }
 
     #[test]

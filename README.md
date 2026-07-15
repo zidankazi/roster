@@ -85,7 +85,8 @@ jump.
 
 the sidebar rolls every agent into a colored glyph and triages by who needs
 you first: blocked (longest wait leading), then done, then idle, working at the
-bottom. two layouts: grid tiles every pane, solo shows one full size with the
+bottom. inside every tier but blocked the most recent arrival leads, so the
+agent that just finished or just fell idle is the one you see first. two layouts: grid tiles every pane, solo shows one full size with the
 sidebar as the switcher. toggle with the `grid · solo` pills in the status bar
 or by double-clicking a title bar. `ctrl-b` is the prefix; hold it and the
 status bar shows the full key palette, and `roster --help` lists it all.
