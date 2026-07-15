@@ -37,7 +37,7 @@ website/
   components.json      # shadcn config: aliases + the @brainless registry
   postcss.config.mjs   # loads @tailwindcss/postcss (Tailwind v4)
   vercel.json          # deploy config; skips builds when website/ didn't change
-  next.config.mjs      # default-empty today
+  next.config.mjs      # one rewrite: /install.sh → the repo's install.sh
   tsconfig.json
   lib/
     utils.ts           # shadcn's cn() helper — brainless components import it
@@ -183,10 +183,53 @@ skips deploys for commits that didn't touch the directory (its `git diff
 ... -- .` is relative to the Vercel dashboard's Root Directory setting,
 `website/` — an out-of-repo config the claim depends on).
 
+## The install endpoint
+
+The site serves the short install line the README and `InstallCommand.tsx`
+both print:
+
+```sh
+curl -fsSL https://roster-dev.vercel.app/install.sh | sh
+```
+
+It is a **rewrite**, not a file: `next.config.mjs` proxies `/install.sh` to
+the repo's own `install.sh` on `main` via raw.githubusercontent. The reasons
+it is a rewrite and not a copy in `public/`, both worth keeping:
+
+- **One source of truth.** A copy would be a second `install.sh` to keep in
+  sync, and the `ignoreCommand` above means a root-only edit never redeploys
+  the site — the copy would go stale silently, which is the worst failure
+  mode a `curl | sh` endpoint has.
+- **It is testable locally.** Next-native rewrites apply under `bun run dev`
+  (`vercel.json` rewrites do not), so `curl -fsSL localhost:3002/install.sh`
+  proves the endpoint before it ships.
+
+Consequences to know:
+
+- The endpoint serves whatever `install.sh` is on **GitHub's `main`**, not
+  the local tree — an unpushed change to the script is not live, and the
+  script goes live on push, independent of any site deploy.
+- raw.githubusercontent is a hard runtime dependency of the install path.
+  It was already the dependency when the README printed the raw URL; the
+  rewrite adds Vercel in front of it.
+- The vercel.app host is the placeholder. When the domain lands the rewrite
+  does not change — only the host printed in three places: the README's
+  install block, `install.sh`'s header comment, and `METHODS` in
+  `InstallCommand.tsx`.
+- **The Vercel project name is a security constraint now — don't rename or
+  delete the project.** `roster-dev.vercel.app` is bound to the project's
+  name, not to an account the way `raw.githubusercontent.com/zidankazi/…`
+  is. Free the name and any Vercel user can claim the subdomain and serve
+  arbitrary shell to everyone running the README's line. This is the price
+  of a vanity `curl | sh` host, and it is why the raw URL stays printed in
+  `install.sh`'s header as the infrastructure-free fallback. When the real
+  domain lands, keep the vercel.app project alive and redirecting rather
+  than renaming it out from under the line people have already copied.
+
 ## Later, maybe
 
 **MDX docs.** Next.js was chosen over plain HTML to leave room for a
 rendered docs site (Markdown pages with live components) later. Nothing is
-configured for it today — `next.config.mjs` is empty — and `/docs` stays
-plain `.md` regardless: those files are read by agents, not browsers. Don't
-build a docs site before the demo cast exists.
+configured for it today — `next.config.mjs` holds only the install rewrite —
+and `/docs` stays plain `.md` regardless: those files are read by agents, not
+browsers. Don't build a docs site before the demo cast exists.

@@ -61,7 +61,7 @@ without reading every screen.
 ## install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zidankazi/roster/main/install.sh | sh
+curl -fsSL https://roster-dev.vercel.app/install.sh | sh
 ```
 
 or `brew install zidankazi/roster/roster` · `cargo install --git https://github.com/zidankazi/roster roster` · [prebuilt binaries](https://github.com/zidankazi/roster/releases)

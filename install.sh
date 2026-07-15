@@ -2,6 +2,12 @@
 # roster installer — downloads the prebuilt binary for this platform from
 # GitHub releases, verifies its checksum, and installs it.
 #
+#   curl -fsSL https://roster-dev.vercel.app/install.sh | sh
+#
+# That host is a rewrite in front of this file on main
+# (website/next.config.mjs). It is a convenience, not the source: the URL it
+# fetches works directly and is the fallback if the site is ever down —
+#
 #   curl -fsSL https://raw.githubusercontent.com/zidankazi/roster/main/install.sh | sh
 #
 # Options via environment variables:

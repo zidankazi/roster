@@ -4,9 +4,10 @@ import { useState } from "react";
 
 // roster's two install paths (see docs/04-website.md). Homebrew is the default
 // — the clean, trusted line; the script is the fallback for machines without
-// brew. The raw-GitHub URL is a placeholder until the domain lands, at which
-// point only this constant and install.sh's header change (see the
-// domain-install-endpoint plan).
+// brew. /install.sh is this site's own rewrite in front of the repo's
+// install.sh (website/next.config.mjs); the host is a placeholder until the
+// domain lands, at which point only this constant, install.sh's header and the
+// README change.
 const METHODS = [
   {
     id: "brew",
@@ -16,8 +17,7 @@ const METHODS = [
   {
     id: "script",
     label: "Script",
-    command:
-      "curl -fsSL https://raw.githubusercontent.com/zidankazi/roster/main/install.sh | sh",
+    command: "curl -fsSL https://roster-dev.vercel.app/install.sh | sh",
   },
 ] as const;
 
