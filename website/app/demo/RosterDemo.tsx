@@ -99,7 +99,7 @@ function Badge({ children, small }: { children: React.ReactNode; small?: boolean
   return (
     <span
       className={`shrink-0 rounded-[3px] font-semibold uppercase leading-none tracking-wide ${
-        small ? "px-1 py-[1px] text-[7px]" : "px-1.5 py-[2px] text-[9px]"
+        small ? "px-1 py-[1px] text-[8px]" : "px-1.5 py-[2px] text-[9px]"
       }`}
       style={{ background: RED, color: "#fff" }}
     >
@@ -122,7 +122,7 @@ function AgentCard({ agent }: { agent: Agent }) {
   const sparkleFg = sel ? SELECTED_FG : BRIGHT;
   return (
     <div
-      className="rounded-[5px] px-2 py-1"
+      className="rounded-[5px] px-2 py-1.5"
       style={{
         // Every card is a filled box (raised surface); the focused one flips to
         // the light bar with a red left edge, the way roster paints selection.
@@ -133,27 +133,27 @@ function AgentCard({ agent }: { agent: Agent }) {
       <div className="flex gap-1.5">
         {/* Fixed dot column keeps title and reason on one left edge. Hollow ring
             for idle, filled dot otherwise — roster's own status glyphs. */}
-        <span aria-hidden className="mt-[2px] text-[7px] leading-none" style={{ color: dot }}>
+        <span aria-hidden className="mt-[2px] text-[8px] leading-none" style={{ color: dot }}>
           {idle ? "○" : "●"}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1">
-            <span aria-hidden className="text-[8px]" style={{ color: sparkleFg }}>
+            <span aria-hidden className="text-[9px]" style={{ color: sparkleFg }}>
               ✳
             </span>
             <span
-              className="min-w-0 flex-1 truncate text-[9px] font-semibold"
+              className="min-w-0 flex-1 truncate text-[10px] font-semibold"
               style={{ color: titleFg }}
             >
               {agent.title}
             </span>
-            <span className="shrink-0 whitespace-nowrap text-[8px]" style={{ color: metaFg }}>
+            <span className="shrink-0 whitespace-nowrap text-[9px]" style={{ color: metaFg }}>
               <span aria-hidden>⧉ </span>
               {agent.elapsed}
             </span>
           </div>
           <div className="mt-px flex items-center gap-1">
-            <span className="min-w-0 flex-1 truncate text-[8px]">
+            <span className="min-w-0 flex-1 truncate text-[9px]">
               <span style={{ color: dot }}>{agent.state}</span>
               <span style={{ color: metaFg }}> · {agent.reason}</span>
             </span>
