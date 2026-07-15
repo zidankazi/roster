@@ -59,8 +59,13 @@ pub struct Priority(u8, u8, Duration);
 
 /// The state's urgency tier — the core judgment, in one place: 🔴 blocked
 /// needs a decision now; 🔵 done holds finished work awaiting review;
-/// 🟢 idle may need a nudge; 🟡 working needs nothing from the human, so
-/// it sinks to the bottom.
+/// 🟢 idle has stopped and may need a nudge; 🟡 working needs nothing from
+/// the human, so it sinks to the bottom.
+///
+/// This decides tiers only. It does not imply an order *within* one: idle
+/// ranks above working because a stopped agent may need a nudge, but the
+/// agent that just fell idle still leads the ones that stopped before it —
+/// the tier says who to look at, [`Priority`] says in what order.
 fn tier(state: AgentState) -> u8 {
     match state {
         AgentState::Blocked => 0,
