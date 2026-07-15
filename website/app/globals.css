@@ -141,13 +141,26 @@ main {
 /* The roster demo: a dark terminal card framed on the cream page, like a real
    app window sitting on the desktop. Wider than the install pill, so it gets
    its own full-width band that scrolls sideways on phones instead of forcing
-   the whole page to scroll. Pulled up a hair from the uniform column gap so it
-   sits a touch closer under the install pill. */
+   the whole page to scroll. A hair of extra top space over the column gap to
+   give it a little more room under the install pill. */
 .roster-demo {
-  margin-top: -0.25rem;
+  margin-top: 0.25rem;
+  /* A static screenshot, not a real terminal — nothing in it should look
+     grabbable, so no text (sidebar, pane, or composer) is selectable. */
+  -webkit-user-select: none;
+  user-select: none;
   width: 100%;
   max-width: 1120px;
   padding: 0 clamp(12px, 4vw, 40px);
+}
+
+/* The composer's real <input> stays focusable and its text selectable even
+   under the container's user-select:none; the demo is a screenshot, so freeze
+   it entirely — no focus, no caret, no selection. */
+.roster-demo input {
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* Keeps the window's proportions intact on narrow screens: the frame holds its
