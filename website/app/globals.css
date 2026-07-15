@@ -86,6 +86,88 @@ body {
    reach the page top. Kept in one place so those four uses cannot drift apart. */
 :root {
   --nav-h: 56px;
+  /* The entrance's easing, in one place so the three fade-up rules below cannot
+     drift apart when the feel is retuned. */
+  --ease-entrance: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* The page entrance. Everything here is one screen that arrives at once, so the
+   fades are what give it a reading order: backdrop, then the demo, then the
+   copy under the wordmark, then the nav.
+
+   The timings are pinned to the wordmark's own reveal wipe, which is JS and
+   starts at first paint: it advances 6 columns per 125ms tick across a 48-column
+   mark, so it lands at 1000ms (see Wordmark.tsx — MARK_WIDTH, TICK_MS). The
+   tagline follows 20ms behind it, and the install block after that. Change the
+   wipe's speed and these delays want re-pinning.
+
+   `both` fill is required, not cosmetic. It does two jobs: without it every
+   element paints at full opacity until its delay elapses — the flash the stagger
+   exists to avoid — and its backwards fill is what applies the from-state's
+   `pointer-events: none` over the delay, so nothing is clickable before it is
+   visible (opacity:0 alone does not remove hit-testing, which would leave the
+   install pill and the nav links live but invisible).
+
+   That `pointer-events` sits in the from-state only, deliberately: it is a
+   discrete property, so it flips to the underlying value at the halfway mark,
+   and naming it in `to` would overwrite the backdrop's own permanent
+   `pointer-events: none` when the animation fills forwards. */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+    pointer-events: none;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    pointer-events: none;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.hero-backdrop {
+  animation: fade-in 1100ms ease-out both;
+}
+
+/* The product shot rises as the wipe is still drawing, so the two read as one
+   arrival rather than a queue. Opacity + translateY only: this element carries
+   `zoom`, and anything that changes its layout box here re-triggers the
+   flex/overflow interaction the demo's sizing comments warn about. */
+.roster-demo {
+  animation: fade-up 900ms var(--ease-entrance) 250ms both;
+}
+
+.tagline {
+  animation: fade-up 700ms var(--ease-entrance) 1020ms both;
+}
+
+.install-block {
+  animation: fade-up 700ms var(--ease-entrance) 1180ms both;
+}
+
+.nav {
+  animation: fade-in 700ms ease-out 1340ms both;
+}
+
+/* Reduced motion drops the entrance entirely. `animation: none` is enough to
+   restore the resting state — the from-state only ever existed as a fill. */
+@media (prefers-reduced-motion: reduce) {
+  .hero-backdrop,
+  .roster-demo,
+  .tagline,
+  .install-block,
+  .nav {
+    animation: none;
+  }
 }
 
 /* Sticky top navigation, transparent so the hero photo runs unbroken to the top

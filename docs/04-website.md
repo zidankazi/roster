@@ -169,6 +169,19 @@ What carries it:
 Resist a features wall. The demo and the one-line install carry it;
 everything else is noise.
 
+**The entrance.** Everything above arrives on one screen at once, so a
+staggered fade in `globals.css` gives it a reading order instead: backdrop,
+demo, tagline, install, nav. It is plain CSS keyframes (`fade-up` / `fade-in`)
+with a delay per element — no JS, nothing to hydrate, and `prefers-reduced-motion`
+drops it entirely.
+
+The one coupling to know: the delays are pinned to the **wordmark's own reveal
+wipe**, which is JS and owns its entrance already (`Wordmark.tsx`). That wipe
+advances 6 columns per 125ms tick across the 48-column mark, landing at exactly
+1000ms — which is why the tagline waits until 1020ms, 20ms behind it. Change
+`MARK_WIDTH` or `TICK_MS` and the copy's delays want re-pinning, or the type
+will arrive over a half-drawn wordmark.
+
 ## Build, run, deploy
 
 ```sh
