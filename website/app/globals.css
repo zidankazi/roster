@@ -352,7 +352,7 @@ main {
    footprint behind), so the flex row centres cleanly around the scaled window.
    Tune the shrink here in one place. */
 .roster-demo {
-  --demo-zoom: 0.68;
+  --demo-zoom: 0.72;
   zoom: var(--demo-zoom);
   flex: none;
   /* An explicit width equal to the window's min-width. The scroll wrapper is
