@@ -169,9 +169,10 @@ main {
   z-index: 0;
   display: flex;
   flex-direction: column;
-  /* Type left, rider right: the photo's subject sits centre-right with clean
-     gradient beside him, and centred text lands squarely on the bike. Only the
-     hero goes asymmetric — the demo below stays centred on main's axis. */
+  /* Type left, bloom right: the image's left half is near-black and its red
+     gathers on the right, so centred text would sit in the hot corner and lose
+     its ground. Only the hero goes asymmetric — the demo below stays centred
+     on main's axis. */
   align-items: flex-start;
   justify-content: center;
   gap: 2.75rem;
@@ -186,9 +187,9 @@ main {
   padding: 2rem clamp(20px, 5vw, 64px) 3rem;
 }
 
-/* Below the point where the text column and the rider would fight for the same
-   pixels, the crop has nowhere left to put him — so the hero recentres and the
-   photo goes back to being a backdrop rather than a partner to the type. */
+/* Below the point where the text column and the bloom would fight for the same
+   pixels, the crop has nowhere left to put it — so the hero recentres and the
+   image goes back to being a texture rather than a partner to the type. */
 @media (max-width: 900px) {
   .hero {
     align-items: center;
@@ -210,11 +211,10 @@ main {
   height: calc(100% + var(--nav-h));
   overflow: hidden;
   pointer-events: none;
-  /* Only the last stretch fades. The earlier 48% fade was eating the bike from
-     the wheels up — most of what the picture is. The image's bottom edge runs
-     mid-grey on the right (#727f87), so it can't simply be cut against the
-     near-black page; this dissolves the last of the wheels into the background,
-     which reads as speed rather than as a crop. */
+  /* Only the last stretch fades. The image's bottom edge is not one colour to
+     cut against: it runs pure black on the left but #b12c20 on the right, so a
+     hard edge would leave a lit band across the seam while the other end
+     vanished. This dissolves the bloom's last inch into the page instead. */
   -webkit-mask-image: linear-gradient(
     to bottom,
     #000 0%,
@@ -224,22 +224,22 @@ main {
   mask-image: linear-gradient(to bottom, #000 0%, #000 82%, transparent 100%);
 }
 
-/* No zoom, deliberately. An earlier pass scaled up and translated to push the
-   rider out from under the centred text, which worked but cropped away the
-   whole bike and the negative space around it — the composition is the reason
-   this picture is worth showing at all. A viewport-tall hero leaves `cover` at
-   1:1 little to trim, so the frame arrives close to intact.
+/* No zoom, deliberately: scaling up to push the frame around is cropping by
+   another name, and here the black hollow on the left is not scenery — it is
+   the ground the type is legible against. Trim it and the type has nothing to
+   sit on. A viewport-tall hero leaves `cover` at 1:1 little to trim, so the
+   frame arrives close to intact.
 
    How little depends on the window, and short wide ones are the weak case: at
-   1440x900 the band trims ~12% vertically, but at 1920x800 it trims ~42% and
-   takes the wheels with it. Nothing here can fix that — a 3:2 frame in a 2.6:1
-   band has to lose something — so if that shape matters, it wants an art
-   direction call (a second crop of the source), not a tweak to this rule.
+   1440x900 the band trims ~12% vertically, but at 1920x800 it trims ~42%.
+   Nothing here can fix that — a 3:2 frame in a 2.6:1 band has to lose
+   something — so if that shape matters, it wants an art direction call (a
+   second crop of the source), not a tweak to this rule.
 
-   The brightness knock-down is what makes the picture work on a dark page. The
-   rider is near-black and the air around him is near-white haze; dimming pushes
-   that haze to a mid grey the light tagline can sit on, while he stays black
-   and reads as a silhouette inside the glow. */
+   The knock-down earns its place, but not by lifting anything: the hollow is
+   already black and the type needs no help from it. It holds the red bloom
+   short of clipping (peak 0.95 -> 0.87 at 1440x900), and the contrast bump
+   deepens the hollow the type sits in. */
 .hero-backdrop img {
   width: 100%;
   height: 100%;
@@ -249,12 +249,13 @@ main {
 }
 
 /* Two scrims, stacked. The horizontal one beds the left text column in shadow
-   and clears before the rider, so the type gets contrast without dimming the
-   subject — the photo's own gradient runs the other way (dark left, bright
-   haze right), so this deepens what is already there rather than fighting it.
-   The vertical one seats the frame into the page top and bottom; its bottom
-   fade is left to the mask rather than doubled up here, so it only has to keep
-   the nav's strip readable and stop the top edge reading as a line. */
+   and clears before the bloom, so the type gets contrast without dulling the
+   red — the image's own gradient already runs the same way (near-black left,
+   hot right), so this deepens what is there rather than fighting it. The
+   vertical one seats the frame into the page top and bottom; its bottom fade
+   is left to the mask rather than doubled up here, so it only has to keep the
+   nav's strip readable — the top edge runs bright (#fb8e70) — and stop that
+   edge reading as a line. */
 .hero-backdrop::after {
   content: "";
   position: absolute;
@@ -373,8 +374,8 @@ main {
   font-size: clamp(8px, 2.6vw, 18px);
   line-height: 1.05;
   user-select: none;
-  /* Same reason as .tagline: the red has to hold against the photo's bright
-     haze as well as its dark rider. */
+  /* Same reason as .tagline, and sharper here: the wordmark's red has to hold
+     against the image's own red, not just against its black. */
   text-shadow: 0 0 28px rgba(11, 17, 23, 0.95), 0 0 10px rgba(11, 17, 23, 0.85);
 }
 
@@ -382,12 +383,12 @@ main {
 .tagline {
   text-align: left;
   line-height: 1.55;
-  /* The photo's haze runs near-white on the right, where light text would
-     otherwise disappear. The halo travels with the glyphs, so it holds contrast
-     wherever the crop happens to put the bright patch — a fixed scrim behind
-     the block can't, since the bright patch moves with the viewport. It has to
-     be an unoffset glow rather than a drop shadow: a directional shadow leaves
-     the glyph's top edge sitting bare on the haze. */
+  /* The image runs hot on the right, where light text would otherwise wash
+     out. The halo travels with the glyphs, so it holds contrast wherever the
+     crop happens to put the bright patch — a fixed scrim behind the block
+     can't, since the bright patch moves with the viewport. It has to be an
+     unoffset glow rather than a drop shadow: a directional shadow leaves the
+     glyph's top edge sitting bare against the bloom. */
   text-shadow: 0 0 26px rgba(11, 17, 23, 0.98), 0 0 12px rgba(11, 17, 23, 0.95),
     0 1px 3px rgba(11, 17, 23, 0.9);
 }

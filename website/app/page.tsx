@@ -7,9 +7,12 @@ import { HeroBackdrop } from "./HeroBackdrop";
 export default function Home() {
   return (
     <main>
-      {/* The hero is its own viewport-height section so the backdrop photo has
-          room to show its full 3:2 frame. Squeezed into a shorter band it can
-          only be centre-cropped, which is what its composition lives in. */}
+      {/* The hero is its own viewport-height section. That height bought the
+          old photo room to show its 3:2 frame whole; this backdrop doesn't
+          need it — a shorter band centre-crops the bright top margin away
+          first and leaves the black hollow the type reads against intact. The
+          height is kept, but nothing here depends on it any more; see
+          docs/04-website.md ("The hero"). */}
       <section className="hero">
         <HeroBackdrop />
         <Wordmark />

@@ -44,13 +44,13 @@ website/
   components/
     brainless/         # vendored Claude Code UI from the @brainless registry
   public/
-    hero-cyclist.webp  # the hero backdrop photo (see "The hero" below)
+    hero-backdrop.webp # the hero backdrop image (see "The hero" below)
   app/
     layout.tsx         # metadata + Navbar wrapper
     page.tsx           # landing: hero (Wordmark → Tagline → InstallCommand) then RosterDemo
     globals.css        # site styling (plain CSS) + a Tailwind v4 @import for brainless
     Navbar.tsx         # brand left; docs + GitHub links right
-    HeroBackdrop.tsx   # the decorative hero photo, masked + scrimmed in globals.css
+    HeroBackdrop.tsx   # the decorative hero image, masked + scrimmed in globals.css
     Wordmark.tsx       # the animated ASCII wordmark
     Tagline.tsx        # the pitch lines, animated Claude mark inline
     ClaudeMark.tsx     # Lottie-rendered Claude mark (asset: claude-lottie.json)
@@ -81,43 +81,58 @@ Two deliberate brand bridges — keep them true:
 ## The hero
 
 The page is dark (`#0b1117`) and opens on a full-viewport hero: a decorative
-photo behind the wordmark, tagline and install line. The photo is atmosphere,
-not information — it says nothing about the product and is not required to.
+image behind the wordmark, tagline and install line. It is atmosphere, not
+information — it says nothing about the product and is not required to. The
+current one is abstract on purpose: a black hollow bleeding red at the edges.
+A depicted subject invites the reader to work out what it has to do with a
+terminal multiplexer, and there is no answer to that question worth giving.
 
 Rules that keep it working, each learned the hard way:
 
-- **Show the frame whole.** The photo's composition is the whole reason it's
-  worth showing; centre-cropping into it destroys exactly that. This is why the
-  hero is a full viewport tall — a 3:2 image cannot be shown whole in a short
-  band, so a shorter hero necessarily crops. Don't add `scale`/`translate` to
-  push the subject around: that is cropping by another name.
-- **Type left, subject right.** The hero is the one asymmetric part of the
-  page — centred text lands on the subject. A horizontal scrim beds the text
-  column and clears before the subject, so type gets contrast without dimming
-  the picture. Below 900px it recentres and the scrim goes heavy: at phone
-  aspect ratios `cover` keeps roughly a third of the frame's width, the
-  composition is gone regardless, and the type should simply win.
-- **Text carries its own contrast.** The photo runs near-white in places, so
-  the hero type uses an unoffset halo (`text-shadow` with no offset) rather
-  than a fixed scrim behind the block — the bright patch moves with the crop
-  and the viewport; the halo travels with the glyphs.
+- **The crop is benign now — the hero height is not.** The old photo had a
+  composition that centre-cropping destroyed, and a full-viewport hero was the
+  price of protecting it. This frame has no such composition: a short band
+  trims the bright top margin (`#f2866b`, luma 0.60) well before it reaches the
+  central black hollow (luma 0.07) the type reads against — checked at
+  1920×800, the shape the old frame lost its subject in. Still don't add
+  `scale`/`translate`: that slides the hollow out from under the type, which is
+  the one thing that would break. **Open question:** showing the frame whole
+  was the *only* stated reason the hero owns a full viewport (see "One screen,
+  one pitch"). That reason is gone; whether the height still earns itself is
+  worth settling in its own change, not assumed.
+- **Type left, bright side right.** The hero is the one asymmetric part of the
+  page — centred text lands in the hot corner. A horizontal scrim beds the text
+  column and clears before the bloom, so type gets contrast without dulling the
+  red. Below 900px it recentres and the scrim goes heavy: at phone aspect ratios
+  `cover` keeps roughly a third of the frame's width, the composition is gone
+  regardless, and the type should simply win.
+- **Text carries its own contrast.** The image runs hot in places, so the hero
+  type uses an unoffset halo (`text-shadow` with no offset) rather than a fixed
+  scrim behind the block — the bright patch moves with the crop and the
+  viewport; the halo travels with the glyphs.
 - **The nav is transparent and has no `backdrop-filter`.** A backdrop-filter
   blurs what's behind it even when the background is fully transparent, which
-  paints a visible band across the top of the photo.
+  paints a visible band across the top of the image.
 
-**Swapping the photo** is a one-file drop at `public/hero-cyclist.webp` — no
+**Swapping the image** is a one-file drop at `public/hero-backdrop.webp` — no
 code change unless the aspect ratio moves, in which case update the `width`/
 `height` on the `img` in `HeroBackdrop.tsx`. Size it for the zoom-free hero:
 roughly 2× the widest viewport you care about, since it renders near 1:1 at
-DPR 2. The current file is a Lanczos upscale of a 1536×1024 original and is
-softer than it should be; a genuinely high-resolution source replaces it.
+DPR 2. The current file is 1536×1024 native, which is short of that — it is
+soft at DPR 2 on a wide window. Its predecessor was the same 1536×1024 source
+Lanczos-upscaled to 3840×2560, which bought bytes and no detail; shipping the
+native pixels instead is not a regression. A genuinely high-resolution source
+is still the fix, and neither file was one.
 
 ## One screen, one pitch
 
 The pitch is still one screen's worth of ideas, but it is no longer one
 viewport: the hero fills the fold and the demo sits below it, reached by a
-scroll. That is the deliberate trade for showing the photo whole. Resist
-letting anything else in between — the scroll must land on the demo.
+scroll. That was the deliberate trade for showing the old photo whole — a
+trade the current backdrop no longer asks for, since it crops without loss
+(see "The hero"). The demo is below the fold today on inherited grounds, not
+live ones; that is worth revisiting. Until it is, resist letting anything else
+in between — the scroll must land on the demo.
 
 What carries it:
 
