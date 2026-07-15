@@ -153,6 +153,12 @@ main {
   align-items: center;
   padding-bottom: 6rem;
   gap: 2.75rem;
+  /* The page itself never scrolls sideways — only the demo band does, inside
+     its own overflow-x:auto wrapper. `clip` (not `hidden`) enforces this
+     without creating a scroll container, so the sticky nav and vertical page
+     scroll are untouched. Guards the small residual overflow the shrunk demo
+     leaves at narrow widths. */
+  overflow-x: clip;
 }
 
 /* The hero owns a full viewport height so the 3:2 photo can be shown close to
@@ -168,14 +174,14 @@ main {
   position: relative;
   z-index: 0;
   display: flex;
-  flex-direction: column;
-  /* Type left, bloom right: the image's left half is near-black and its red
-     gathers on the right, so centred text would sit in the hot corner and lose
-     its ground. Only the hero goes asymmetric — the demo below stays centred
-     on main's axis. */
-  align-items: flex-start;
+  /* Copy left, demo right: the image's left half is near-black and its red
+     gathers on the right, so the copy sits on the dark ground where the type
+     stays legible and the demo window takes the hot side. Below the stacking
+     breakpoint they collapse to a single centred column. */
+  flex-direction: row;
+  align-items: center;
   justify-content: center;
-  gap: 2.75rem;
+  gap: clamp(24px, 4vw, 56px);
   width: 100%;
   /* svh, not vh. On mobile Safari `100vh` is the URL-bar-hidden height, so a
      vh-sized hero stands taller than the screen and — being centred — pushes
@@ -187,12 +193,42 @@ main {
   padding: 2rem clamp(20px, 5vw, 64px) 3rem;
 }
 
-/* Below the point where the text column and the bloom would fight for the same
-   pixels, the crop has nowhere left to put it — so the hero recentres and the
-   image goes back to being a texture rather than a partner to the type. */
-@media (max-width: 900px) {
+/* The headline column — wordmark, tagline, install controls stacked with the
+   uniform gap the hero used to own directly (its children are now these two
+   columns). Left-aligned and flexible so the demo takes only what it needs. */
+.hero-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2.75rem;
+  flex: 1 1 0;
+  min-width: 0;
+  /* The whole headline column reads a touch smaller than the demo beside it;
+     zoom reflows the box so it still left-aligns and cedes the freed width to
+     the demo. The install block takes an extra step down below. */
+  zoom: 0.9;
+}
+
+/* Below the point where the copy column and the demo would fight for the same
+   pixels, they stack: copy on top, demo below, both centred and the backdrop
+   back to being a texture behind the type rather than a partner to it. The
+   stack breakpoint is ~1200px, not the backdrop's 900px art-direction line: the
+   demo holds a fixed ~626px footprint, so the copy beside it runs out of room
+   well before 900px would stack them. */
+@media (max-width: 1200px) {
   .hero {
+    flex-direction: column;
+  }
+
+  .hero-copy {
+    /* Stretch to the full column and drop the shrink zoom: it only existed to
+       balance the copy against the demo beside it, and stacked there is no
+       demo beside it. Leaving zoom on here also mis-sizes flex shrink-to-fit so
+       the tagline stops wrapping and overflows the viewport on phones. */
+    align-self: stretch;
     align-items: center;
+    zoom: 1;
   }
 }
 
@@ -292,20 +328,44 @@ main {
   }
 }
 
-/* The roster demo: a dark terminal card, like a real app window sitting on the
-   desktop. Wider than the hero's text column, so it gets its own full-width
-   band that scrolls sideways on phones instead of forcing the whole page to
-   scroll. It is what the fold's scroll must land on — keep it the next thing
-   after the hero. A hair of extra top space over the uniform column gap. */
+/* The roster demo: a dark terminal card sitting as the hero's right-hand
+   product shot. Its window carries a fixed 920px min-width so the internal
+   layout never collapses; `zoom` shrinks the whole thing proportionally AND
+   reflows its layout box (unlike transform: scale, which would leave the full
+   footprint behind), so the flex row centres cleanly around the scaled window.
+   Tune the shrink here in one place. */
 .roster-demo {
-  margin-top: 0.25rem;
+  --demo-zoom: 0.68;
+  zoom: var(--demo-zoom);
+  flex: none;
+  /* An explicit width equal to the window's min-width. The scroll wrapper is
+     overflow-x:auto, so it contributes no intrinsic width to a flex:none item
+     and would otherwise collapse to zero; pinning the width to 920px shows the
+     whole window with no internal scroll, and `zoom` then scales the box down
+     to its ~534px footprint. */
+  width: 920px;
   /* A static screenshot, not a real terminal — nothing in it should look
      grabbable, so no text (sidebar, pane, or composer) is selectable. */
   -webkit-user-select: none;
   user-select: none;
-  width: 100%;
-  max-width: 1120px;
-  padding: 0 clamp(12px, 4vw, 40px);
+}
+
+/* Stacked below 1200px (the layout stack line), the demo becomes the full-width
+   band under the copy, and the scroll wrapper carries the 920px window on the
+   narrowest phones. The section stays UNZOOMED here (--demo-zoom: 1): zoom on
+   the section breaks the scroll wrapper's containment, so the window forces
+   horizontal page overflow instead of scrolling inside its band. The shrink
+   moves onto the window itself, which the wrapper still clips normally. A touch
+   larger (0.72) than the desktop 0.68 since it no longer shares the row. */
+@media (max-width: 1200px) {
+  .roster-demo {
+    --demo-zoom: 1;
+    width: 100%;
+  }
+
+  .roster-window {
+    zoom: 0.72;
+  }
 }
 
 /* The composer's real <input> stays focusable and its text selectable even
@@ -319,55 +379,24 @@ main {
 
 /* Keeps the window's proportions intact on narrow screens: the frame holds its
    min-width and this wrapper scrolls, so the layout never collapses to mush.
-   overflow visible so the window's soft glass shadow isn't clipped away. */
+   overflow-y visible so the window's soft drop shadow isn't clipped away. */
 .roster-demo-scroll {
   overflow-x: auto;
   overflow-y: visible;
-  border-radius: 16px;
+  border-radius: 12px;
 }
 
-/* The window as a pane of liquid glass rather than a flat card: a translucent
-   light rim, a faint specular sheen down the top edge, and a deep soft shadow
-   so it reads as floating over the page. Contrast of the terminal content is
-   left untouched — the glass is all in the frame, not the surfaces. The light
-   rim is also what separates the card from the dark page: a dark border would
-   vanish against it, which is why the glass treatment and the dark background
-   suit each other rather than fight. */
+/* The window as a plain solid card: a flat dark surface, a single dark border,
+   and a soft drop shadow so it reads as an app window floating over the page.
+   The liquid-glass treatment (translucent surfaces, backdrop-blur, specular
+   sheen, bright rims) was pulled out for now — to be revisited. */
 .roster-window {
-  position: relative;
   min-width: 920px;
-  border-radius: 16px;
+  border-radius: 12px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  /* The frost: the window's surfaces are translucent, so this blurs the dark
-     page behind them and the whole thing reads as one pane of liquid glass.
-     saturate lifts it so it isn't a flat grey wash. */
-  -webkit-backdrop-filter: blur(30px) saturate(1.4);
-  backdrop-filter: blur(30px) saturate(1.4);
-  box-shadow:
-    /* bright top rim — light catching the edge of the glass on the dark page */
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.16),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
-    /* deep, soft, floating shadow (black on the near-black page) */
-    0 40px 80px -30px rgba(0, 0, 0, 0.7),
-    0 14px 30px -18px rgba(0, 0, 0, 0.5);
-}
-
-/* Specular sheen down the very top edge — the light on the glass. Very low
-   alpha, pointer-events:none, and faded out before the terminal transcript, so
-   it adds gloss without ever touching legibility. */
-.roster-window::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: inherit;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.07) 0%,
-    rgba(255, 255, 255, 0.02) 5%,
-    transparent 10%
-  );
+  border: 1px solid #2a2b3a;
+  box-shadow: 0 24px 60px -20px rgba(20, 20, 30, 0.45),
+    0 8px 20px -12px rgba(20, 20, 30, 0.35);
 }
 
 .wordmark {
@@ -412,7 +441,7 @@ main {
   font-size: clamp(13px, 3.1vw, 16px);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .tagline {
     text-align: center;
   }
@@ -473,11 +502,18 @@ main {
   flex-direction: column;
   align-items: flex-start;
   gap: 14px;
+  /* Nested under .hero-copy's zoom, so the install method switch and the script
+     pill land smaller still than the rest of the column. */
+  zoom: 0.9;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1200px) {
   .install-block {
     align-items: center;
+    /* Drop the extra shrink zoom when stacked, matching .hero-copy — the
+       method switch and pill return to full size with nothing to make room
+       for. */
+    zoom: 1;
   }
 }
 
@@ -494,7 +530,7 @@ main {
      an auto-width grid fr tracks collapse to content size (Homebrew wider than
      Script), throwing the labels toward opposite edges. A fixed track wide
      enough for the longer label keeps the two halves identical. */
-  grid-template-columns: repeat(2, 6.5rem);
+  grid-template-columns: repeat(2, 6rem);
   padding: 4px;
   border: 1px solid #26333d;
   border-radius: 10px;
@@ -533,9 +569,9 @@ main {
   width: 100%;
   border: none;
   border-radius: 7px;
-  padding: 6px 20px;
+  padding: 6px 16px;
   font-family: inherit;
-  font-size: clamp(12px, 3vw, 14px);
+  font-size: clamp(12px, 2.8vw, 14px);
   color: #93a0ab;
   background: transparent;
   cursor: pointer;
@@ -578,14 +614,17 @@ main {
 .install {
   position: relative;
   display: inline-block;
-  max-width: 92vw;
+  /* Bounded by the copy column (not the viewport) so the long script command
+     scrolls inside the pill instead of bleeding across the hero toward the
+     demo. */
+  max-width: 100%;
   overflow-x: auto;
   border: 1px solid #26333d;
-  border-radius: 10px;
+  border-radius: 9px;
   background: rgba(255, 255, 255, 0.06);
   backdrop-filter: blur(6px);
   font-family: inherit;
-  font-size: clamp(12px, 3.2vw, 15px);
+  font-size: clamp(11px, 2.6vw, 13px);
   cursor: pointer;
   transition: border-color 260ms ease;
 }
@@ -604,8 +643,8 @@ main {
 .install-layer {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 12px 16px;
+  gap: 10px;
+  padding: 9px 13px;
   white-space: nowrap;
 }
 

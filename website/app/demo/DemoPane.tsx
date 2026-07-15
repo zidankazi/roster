@@ -44,7 +44,7 @@ export function DemoPaneBody() {
             Claude Code <span style={{ color: GRAY }}>v2.1.209</span>
           </div>
           <div style={{ color: GRAY }}>Fable 5 with high effort · Claude Max</div>
-          <div style={{ color: GRAY }}>~/code/storefront</div>
+          <div style={{ color: GRAY }}>~/storefront/packages</div>
         </div>
       </div>
 

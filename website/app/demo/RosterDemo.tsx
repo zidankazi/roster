@@ -21,14 +21,12 @@ const MUTED = "#828282"; // fg 244 — ages, paths, reasons
 
 // Neutral dark surfaces + the inverted selection roster uses: the focused card
 // flips to a light bar with dark text (SELECTED_BG 254 / SELECTED_FG 235).
-// On the dark landing page these surfaces are slightly translucent so the
-// window (which carries the backdrop-blur) reads as frosted liquid glass rather
-// than a flat black box. The agent cards stay opaque so their text keeps full
-// contrast; the chrome (window, title bar, sidebar, status bar) does the glass.
-const BG = "rgba(19, 20, 26, 0.72)"; // SURFACE_BASE 233 — window + pane, frosted
-const BG_RAISED = "rgba(26, 27, 34, 0.6)"; // sidebar / status bar, frosted
+// Opaque, flat surfaces — the liquid-glass treatment was pulled back out for
+// now, so the window is a solid dark card rather than frosted glass.
+const BG = "#141414"; // SURFACE_BASE 233 — window + pane
+const BG_RAISED = "#1b1b1b"; // sidebar / status bar
 const CARD_BG = "#262626"; // SURFACE_RAISED 235 — every agent card is a filled box
-const TITLEBAR = "rgba(46, 47, 56, 0.55)"; // frosted glass title bar
+const TITLEBAR = "#2c2c2c"; // title bar
 const BORDER = "#333333";
 const SELECTED_BG = "#e4e4e4"; // 254
 const SELECTED_FG = "#1f1f1f"; // 235
@@ -209,10 +207,11 @@ export function RosterDemo() {
               <span className="h-3.5 w-3.5 rounded-full" style={{ background: "#28c840" }} />
             </div>
             <div
-              className="flex flex-1 items-center justify-center gap-2 text-[12px] font-semibold"
+              className="flex flex-1 items-center justify-center text-[12px] font-semibold"
               style={{ color: BRIGHT }}
             >
-              <span>roster</span>
+              {/* The window title, styled like the invocation that launched it. */}
+              <span>roster attach storefront</span>
             </div>
             <div className="w-[64px]" />
           </div>
@@ -237,7 +236,7 @@ export function RosterDemo() {
                   </span>
                 </div>
                 <div className="mt-1 truncate px-1 text-[10px]" style={{ color: MUTED }}>
-                  ~/code/storefront
+                  ~/storefront/packages
                 </div>
 
                 {/* Agents header: the label + a live blocked count (roster

@@ -12,16 +12,21 @@ export default function Home() {
           need it — a shorter band centre-crops the bright top margin away
           first and leaves the black hollow the type reads against intact. The
           height is kept, but nothing here depends on it any more; see
-          docs/04-website.md ("The hero"). */}
+          docs/04-website.md ("The hero").
+
+          Two columns on wide screens: the copy (wordmark/tagline/install) on
+          the left, and the roster demo — a living picture of what installs —
+          scaled down on the right. Below the stacking breakpoint they return
+          to a single centred column. */}
       <section className="hero">
         <HeroBackdrop />
-        <Wordmark />
-        <Tagline />
-        <InstallCommand />
+        <div className="hero-copy">
+          <Wordmark />
+          <Tagline />
+          <InstallCommand />
+        </div>
+        <RosterDemo />
       </section>
-      {/* A living picture of what installs: roster watching a fleet of agents,
-          its focused pane a real Claude Code session built from brainless. */}
-      <RosterDemo />
     </main>
   );
 }
