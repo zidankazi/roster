@@ -9,9 +9,8 @@ export default function Home() {
       <Wordmark />
       <Tagline />
       <InstallCommand />
-      {/* A living picture of what installs: roster watching three agents, its
-          focused pane a real Claude Code session built from brainless. */}
-      <p className="demo-caption">this is what you&apos;re installing</p>
+      {/* A living picture of what installs: roster watching a fleet of agents,
+          its focused pane a real Claude Code session built from brainless. */}
       <RosterDemo />
     </main>
   );
