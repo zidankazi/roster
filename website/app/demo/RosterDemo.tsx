@@ -23,6 +23,7 @@ const MUTED = "#828282"; // fg 244 — ages, paths, reasons
 // flips to a light bar with dark text (SELECTED_BG 254 / SELECTED_FG 235).
 const BG = "#141414"; // SURFACE_BASE 233
 const BG_RAISED = "#1b1b1b"; // sidebar / new-agent pad
+const CARD_BG = "#262626"; // SURFACE_RAISED 235 — every agent card is a filled box
 const TITLEBAR = "#2c2c2c";
 const BORDER = "#333333";
 const SELECTED_BG = "#e4e4e4"; // 254
@@ -111,18 +112,23 @@ function AgentCard({ agent }: { agent: Agent }) {
   const sparkleFg = sel ? SELECTED_FG : BRIGHT;
   return (
     <div
-      className="rounded-[5px] px-3 py-2.5"
-      style={{ background: sel ? SELECTED_BG : "transparent" }}
+      className="rounded-[6px] px-2.5 py-1.5"
+      style={{
+        // Every card is a filled box (raised surface); the focused one flips to
+        // the light bar with a red left edge, the way roster paints selection.
+        background: sel ? SELECTED_BG : CARD_BG,
+        boxShadow: sel ? `inset 3px 0 0 ${RED}` : "none",
+      }}
     >
-      <div className="flex gap-2.5">
+      <div className="flex gap-2">
         {/* Fixed dot column keeps title and reason on one left edge. Hollow ring
             for idle, filled dot otherwise — roster's own status glyphs. */}
-        <span aria-hidden className="mt-[4px] text-[11px] leading-none" style={{ color: dot }}>
+        <span aria-hidden className="mt-[3px] text-[10px] leading-none" style={{ color: dot }}>
           {idle ? "○" : "●"}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <span aria-hidden className="text-[13px]" style={{ color: sparkleFg }}>
+          <div className="flex items-baseline gap-1.5">
+            <span aria-hidden className="text-[12px]" style={{ color: sparkleFg }}>
               ✳
             </span>
             <span
@@ -131,11 +137,12 @@ function AgentCard({ agent }: { agent: Agent }) {
             >
               {agent.title}
             </span>
-            <span className="shrink-0 whitespace-nowrap text-[12px]" style={{ color: metaFg }}>
+            <span className="shrink-0 whitespace-nowrap text-[11px]" style={{ color: metaFg }}>
+              <span aria-hidden>⧉ </span>
               {agent.elapsed}
             </span>
           </div>
-          <div className="mt-1 flex items-center gap-2">
+          <div className="mt-0.5 flex items-center gap-1.5">
             <span className="min-w-0 flex-1 truncate text-[12px]">
               <span style={{ color: dot }}>{agent.state}</span>
               <span style={{ color: metaFg }}> · {agent.reason}</span>
@@ -222,7 +229,7 @@ export function RosterDemo() {
 
                 {/* Agents header: the label + a live blocked count (roster
                     surfaces how many need you, in red) + the global toggle. */}
-                <div className="mb-2.5 mt-6 flex items-center gap-2.5 px-1">
+                <div className="mb-2 mt-5 flex items-center gap-2.5 px-1">
                   <span className="text-[13px]" style={{ color: TEXT }}>
                     agents
                   </span>
