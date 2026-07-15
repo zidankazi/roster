@@ -36,7 +36,7 @@ export function ClaudeTodoList({
   className?: string;
 }) {
   return (
-    <ol className={cn("font-mono text-[15px] leading-[1.6]", className)}>
+    <ol className={cn("font-mono text-[13px] leading-[1.6]", className)}>
       {todos.map((t, i) => {
         const iconColor =
           t.status === "done"

@@ -109,10 +109,10 @@ export function ClaudePrompt({
   const rainbow = Boolean(e?.rainbow);
 
   return (
-    <div className={cn("min-w-0 font-mono text-[15px] leading-[1.6]", className)}>
+    <div className={cn("min-w-0 font-mono text-[13px] leading-[1.6]", className)}>
       {e ? (
         <div
-          className="flex justify-end px-1 pb-1 text-[12px]"
+          className="flex justify-end px-1 pb-1 text-[11px]"
           style={{ color: GRAY }}
         >
           <span className="min-w-0 break-words text-right">
@@ -155,7 +155,7 @@ export function ClaudePrompt({
         />
       </div>
 
-      <div className="mt-1.5 min-w-0 break-words px-1 text-[12px]">
+      <div className="mt-1.5 min-w-0 break-words px-1 text-[11px]">
         <span style={{ color: m.color }}>
           <span aria-hidden>{m.glyph} </span>
           {m.label}

@@ -14,7 +14,7 @@ import { ClaudePrompt } from "@/components/brainless/claude/claude-prompt";
  */
 export function ClaudeSession() {
   return (
-    <div className="space-y-3 font-mono text-[15px] leading-[1.6] text-[#e6e6e6]">
+    <div className="space-y-3 font-mono text-[13px] leading-[1.6] text-[#e6e6e6]">
       <ClaudeHeader cwd="~/dev/acme-app" />
 
       <div style={{ color: "#e0af68" }}>

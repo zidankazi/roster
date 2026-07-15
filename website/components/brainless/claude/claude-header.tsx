@@ -91,7 +91,7 @@ export function ClaudeHeader({
   return (
     <fieldset
       className={cn(
-        "min-w-0 rounded-[6px] border px-3 pb-3.5 pt-1 font-mono text-[15px] leading-[1.5] text-[#e6e6e6] sm:px-4",
+        "min-w-0 rounded-[6px] border px-3 pb-3.5 pt-1 font-mono text-[13px] leading-[1.5] text-[#e6e6e6] sm:px-4",
         className,
       )}
       style={{ borderColor: ROSE }}
