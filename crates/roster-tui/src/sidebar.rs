@@ -103,7 +103,9 @@ impl SidebarEntry {
 /// identifies as a configured agent, ranked globally by
 /// `roster_core::attention` — blocked first (longest wait leading), then
 /// done, idle, and working at the bottom — across all workspaces at once,
-/// so the most blocked agent anywhere rises to the top.
+/// so the most blocked agent anywhere rises to the top. Inside every tier
+/// but blocked the most recent arrival leads, so a card that just finished
+/// or just fell idle sits above one that did so an hour ago.
 pub fn sidebar_entries(session: &Session, detector: &Detector, now: Instant) -> Vec<SidebarEntry> {
     let mut entries: Vec<SidebarEntry> = session
         .panes()

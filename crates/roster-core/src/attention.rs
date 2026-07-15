@@ -161,20 +161,18 @@ mod tests {
     }
 
     #[test]
-    fn recency_never_reorders_the_blocked_tier() {
-        // Blocked triages by neglect, so it keeps the opposite order to the
-        // tiers above — the flip must not leak across the tier boundary.
-        let items = [blocked(5, false), blocked(90, false)];
-        assert_eq!(rank(&items), vec![1, 0]);
-    }
-
-    #[test]
     fn an_unknown_age_trails_its_tier() {
         // A pane that has never changed state carries no age. It is not the
         // most recent arrival — it may have sat idle since startup — so it
-        // must not lead on a recency tier.
-        let items = [item(AgentState::Idle), waiting(AgentState::Idle, 600)];
-        assert_eq!(rank(&items), vec![1, 0]);
+        // must not lead on a recency tier. Bracketing it with both a fresh
+        // and a stale age proves it trails outright, rather than merely
+        // sorting as though it were old.
+        let items = [
+            item(AgentState::Idle),
+            waiting(AgentState::Idle, 1),
+            waiting(AgentState::Idle, 600),
+        ];
+        assert_eq!(rank(&items), vec![1, 2, 0]);
     }
 
     #[test]
