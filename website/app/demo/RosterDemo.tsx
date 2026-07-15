@@ -87,7 +87,7 @@ const BLOCKED_COUNT = AGENTS.filter((a) => a.state === "blocked").length;
 function Badge({ children, small }: { children: React.ReactNode; small?: boolean }) {
   return (
     <span
-      className={`rounded-[4px] font-semibold uppercase leading-none tracking-wide ${
+      className={`shrink-0 rounded-[4px] font-semibold uppercase leading-none tracking-wide ${
         small ? "px-1.5 py-[3px] text-[10px]" : "px-2 py-[3px] text-[11px]"
       }`}
       style={{ background: RED, color: "#fff" }}
@@ -131,7 +131,7 @@ function AgentCard({ agent }: { agent: Agent }) {
             >
               {agent.title}
             </span>
-            <span className="whitespace-nowrap text-[12px]" style={{ color: metaFg }}>
+            <span className="shrink-0 whitespace-nowrap text-[12px]" style={{ color: metaFg }}>
               {agent.elapsed}
             </span>
           </div>
@@ -179,7 +179,7 @@ export function RosterDemo() {
         >
           {/* Title bar */}
           <div
-            className="flex h-12 items-center px-5"
+            className="flex h-12 items-center px-6"
             style={{ background: TITLEBAR, borderBottom: "1px solid #00000040" }}
           >
             <div className="flex items-center gap-2.5" aria-hidden>
@@ -203,10 +203,10 @@ export function RosterDemo() {
           <div className="flex" style={{ minHeight: 560 }}>
             {/* Sidebar */}
             <aside
-              className="flex w-[300px] flex-none flex-col"
+              className="flex w-[332px] flex-none flex-col"
               style={{ background: BG_RAISED, borderRight: `1px solid ${BORDER}` }}
             >
-              <div className="flex-1 overflow-hidden px-4 py-5">
+              <div className="flex-1 overflow-hidden px-6 py-5">
                 {/* Workspace + clock */}
                 <div className="flex items-baseline justify-between px-1">
                   <span className="text-[16px] font-bold" style={{ color: BRIGHT }}>
@@ -244,7 +244,7 @@ export function RosterDemo() {
 
               {/* Usage meters + new-agent affordance, pinned to the sill */}
               <div
-                className="space-y-2.5 px-4 py-5"
+                className="space-y-2.5 px-6 py-5"
                 style={{ borderTop: `1px solid ${BORDER}` }}
               >
                 <Meter label="5h" pct={2} note="resets 2h57m" />
@@ -270,7 +270,7 @@ export function RosterDemo() {
               >
                 {/* Pane title: the focused agent's task, in brand red */}
                 <div
-                  className="flex flex-none items-center gap-2.5 px-4 py-3 text-[13px]"
+                  className="flex flex-none items-center gap-2.5 px-6 py-3.5 text-[13px]"
                   style={{ borderBottom: `1px solid ${RED}33` }}
                 >
                   <span aria-hidden style={{ color: MUTED }}>
@@ -285,12 +285,12 @@ export function RosterDemo() {
                 </div>
 
                 {/* The session transcript scrolls in the middle (flex-1)… */}
-                <div className="min-h-0 flex-1 overflow-hidden px-6 pt-5">
+                <div className="min-h-0 flex-1 overflow-hidden px-7 pt-6">
                   <DemoPaneBody />
                 </div>
                 {/* …and the composer is pinned to the pane bottom (flex-none),
                     calm space between it and the transcript above. */}
-                <div className="flex-none px-6 pb-5 pt-4">
+                <div className="flex-none px-7 pb-6 pt-4">
                   <DemoComposer />
                 </div>
               </div>
@@ -299,7 +299,7 @@ export function RosterDemo() {
 
           {/* Status bar */}
           <div
-            className="relative flex h-11 items-center justify-center px-4 text-[13px]"
+            className="relative flex h-11 items-center justify-center px-6 text-[13px]"
             style={{ background: BG_RAISED, borderTop: `1px solid ${BORDER}`, color: MUTED }}
           >
             <span>

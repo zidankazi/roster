@@ -38,10 +38,18 @@
   --sidebar-ring: oklch(0.708 0 0);
 }
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/* The site reset lives in @layer base so it stays BELOW Tailwind's utilities
+   layer. Unlayered, `* { margin:0; padding:0 }` would beat every Tailwind
+   padding/margin/space-y/mt-auto class (unlayered CSS outranks any cascade
+   layer), which silently flattened all spacing in the RosterDemo. The
+   hand-written landing chrome uses unlayered .nav/.install/etc. rules, so it
+   still overrides this reset as before. */
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
 }
 
 html,
