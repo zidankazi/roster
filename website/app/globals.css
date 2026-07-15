@@ -337,14 +337,19 @@ main {
   min-width: 920px;
   border-radius: 16px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  /* The frost: the window's surfaces are translucent, so this blurs the dark
+     page behind them and the whole thing reads as one pane of liquid glass.
+     saturate lifts it so it isn't a flat grey wash. */
+  -webkit-backdrop-filter: blur(30px) saturate(1.4);
+  backdrop-filter: blur(30px) saturate(1.4);
   box-shadow:
-    /* top inner highlight — light catching the top edge of the glass */
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.14),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.02),
-    /* deep, soft, floating shadow */
-    0 34px 70px -28px rgba(22, 22, 32, 0.6),
-    0 12px 26px -16px rgba(22, 22, 32, 0.42);
+    /* bright top rim — light catching the edge of the glass on the dark page */
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.16),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    /* deep, soft, floating shadow (black on the near-black page) */
+    0 40px 80px -30px rgba(0, 0, 0, 0.7),
+    0 14px 30px -18px rgba(0, 0, 0, 0.5);
 }
 
 /* Specular sheen down the very top edge — the light on the glass. Very low

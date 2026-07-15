@@ -21,10 +21,14 @@ const MUTED = "#828282"; // fg 244 — ages, paths, reasons
 
 // Neutral dark surfaces + the inverted selection roster uses: the focused card
 // flips to a light bar with dark text (SELECTED_BG 254 / SELECTED_FG 235).
-const BG = "#141414"; // SURFACE_BASE 233
-const BG_RAISED = "#1b1b1b"; // sidebar / new-agent pad
+// On the dark landing page these surfaces are slightly translucent so the
+// window (which carries the backdrop-blur) reads as frosted liquid glass rather
+// than a flat black box. The agent cards stay opaque so their text keeps full
+// contrast; the chrome (window, title bar, sidebar, status bar) does the glass.
+const BG = "rgba(19, 20, 26, 0.72)"; // SURFACE_BASE 233 — window + pane, frosted
+const BG_RAISED = "rgba(26, 27, 34, 0.6)"; // sidebar / status bar, frosted
 const CARD_BG = "#262626"; // SURFACE_RAISED 235 — every agent card is a filled box
-const TITLEBAR = "#2c2c2c";
+const TITLEBAR = "rgba(46, 47, 56, 0.55)"; // frosted glass title bar
 const BORDER = "#333333";
 const SELECTED_BG = "#e4e4e4"; // 254
 const SELECTED_FG = "#1f1f1f"; // 235
