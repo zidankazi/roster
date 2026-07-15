@@ -22,10 +22,10 @@ const GRAY = "#8a8a8a";
 // at terminal density instead of dwarfing the window frame around it.
 const PANE_SCALE = { zoom: 0.82 } as React.CSSProperties;
 
-// The pasted /goal prompt, parked in the composer — mirrors the real screenshot
-// where the launch prompt sits waiting with the cursor after it.
+// The next-step prompt, parked in the composer with the cursor after it — the
+// natural follow-up once the fix lands, so the pane reads like work in motion.
 const GOAL =
-  "rebuild the roster UI on the website — use brainless for the agent chrome";
+  "open a PR with the before/after query timings once the tests pass";
 
 /** The session transcript — header, warning, a short turn. Scrolls; the
     composer is rendered separately by RosterDemo so it can pin to the bottom. */
@@ -44,7 +44,7 @@ export function DemoPaneBody() {
             Claude Code <span style={{ color: GRAY }}>v2.1.209</span>
           </div>
           <div style={{ color: GRAY }}>Fable 5 with high effort · Claude Max</div>
-          <div style={{ color: GRAY }}>~/Desktop/roster</div>
+          <div style={{ color: GRAY }}>~/code/storefront</div>
         </div>
       </div>
 
@@ -53,19 +53,20 @@ export function DemoPaneBody() {
       </div>
 
       <ClaudeMessage role="user">
-        rebuild the roster UI on the website
+        the orders dashboard takes 4s to load — profile it and fix the slow query
       </ClaudeMessage>
 
       <ClaudeMessage>
-        I&apos;ll pull in the brainless Claude Code components and assemble the
-        sidebar and pane around them.
+        The list view runs a separate query per order to fetch its line items.
+        I&apos;ll fold them into one join and pull the totals in the same
+        round-trip.
       </ClaudeMessage>
 
       <ClaudeTodoList
         todos={[
-          { label: "Register the @brainless registry", status: "done" },
-          { label: "Build the sidebar + agent cards", status: "active" },
-          { label: "Wire the pane to the Claude session", status: "todo" },
+          { label: "Reproduce the slow load with EXPLAIN ANALYZE", status: "done" },
+          { label: "Batch the per-order lookups into one join", status: "active" },
+          { label: "Add a regression test at 500 orders", status: "todo" },
         ]}
       />
 

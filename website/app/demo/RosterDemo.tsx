@@ -58,33 +58,35 @@ type Agent = {
 };
 
 // A busy roster — blocked sorted to the top the way roster orders by attention.
-// A full column of tiny cards is the point: one person fanning out many agents,
-// the blocked one's "Allow …?" the only thing actually asking for you.
+// A full column of tiny cards is the point: one person fanning out many agents.
+// The blocked one is on auto too, so it isn't stopped on a permission (auto
+// would grant that) — it's stopped on a design call only a human can make, and
+// its reason shows the exact question, which is the only thing asking for you.
 const AGENTS: Agent[] = [
   {
-    title: "Tune the detection fixtures",
+    title: "Add rate limiting to the public API",
     state: "blocked",
-    reason: "Allow Bash(cargo test)?",
-    elapsed: "40s",
-  },
-  {
-    title: "Rebuild the roster UI on the website",
-    state: "working",
-    reason: "Herding… (esc to interrupt)",
-    elapsed: "53s",
-    selected: true,
-  },
-  {
-    title: "Update the install script",
-    state: "working",
-    reason: "Percolating… (esc to interrupt)",
+    reason: "Redis or in-memory store?",
     elapsed: "1m",
   },
   {
-    title: "Add shell commands to the launcher",
+    title: "Fix the N+1 query on the orders dashboard",
+    state: "working",
+    reason: "Herding… (esc to interrupt)",
+    elapsed: "40s",
+    selected: true,
+  },
+  {
+    title: "Backfill missing user avatars",
+    state: "working",
+    reason: "Percolating… (esc to interrupt)",
+    elapsed: "2m",
+  },
+  {
+    title: "Write tests for the auth middleware",
     state: "idle",
     reason: "waiting for your input",
-    elapsed: "2m",
+    elapsed: "5m",
   },
 ];
 
@@ -207,7 +209,7 @@ export function RosterDemo() {
               style={{ color: BRIGHT }}
             >
               <span aria-hidden>📁</span>
-              <span>cargo run -p roster</span>
+              <span>storefront</span>
             </div>
             <div className="w-[64px]" />
           </div>
@@ -225,14 +227,14 @@ export function RosterDemo() {
                 {/* Workspace + clock */}
                 <div className="flex items-baseline justify-between px-1">
                   <span className="text-[13px] font-bold" style={{ color: BRIGHT }}>
-                    roster
+                    storefront
                   </span>
                   <span className="text-[10px]" style={{ color: MUTED }}>
                     13:12
                   </span>
                 </div>
                 <div className="mt-1 truncate px-1 text-[10px]" style={{ color: MUTED }}>
-                  ~/Desktop/roster
+                  ~/code/storefront
                 </div>
 
                 {/* Agents header: the label + a live blocked count (roster
@@ -292,7 +294,7 @@ export function RosterDemo() {
                     ○
                   </span>
                   <span className="min-w-0 flex-1 truncate font-semibold" style={{ color: RED }}>
-                    <span aria-hidden>✳ </span>Rebuild the roster UI on the website
+                    <span aria-hidden>✳ </span>Fix the N+1 query on the orders dashboard
                   </span>
                   <span aria-hidden style={{ color: MUTED }}>
                     ×
