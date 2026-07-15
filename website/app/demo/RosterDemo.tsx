@@ -208,8 +208,7 @@ export function RosterDemo() {
               className="flex flex-1 items-center justify-center gap-2 text-[12px] font-semibold"
               style={{ color: BRIGHT }}
             >
-              <span aria-hidden>📁</span>
-              <span>storefront</span>
+              <span>roster</span>
             </div>
             <div className="w-[64px]" />
           </div>

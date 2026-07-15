@@ -141,10 +141,10 @@ main {
 /* The roster demo: a dark terminal card framed on the cream page, like a real
    app window sitting on the desktop. Wider than the install pill, so it gets
    its own full-width band that scrolls sideways on phones instead of forcing
-   the whole page to scroll. Pulled up a touch to sit closer under the install
-   pill than the uniform column gap would place it. */
+   the whole page to scroll. Pulled up a hair from the uniform column gap so it
+   sits a touch closer under the install pill. */
 .roster-demo {
-  margin-top: -1rem;
+  margin-top: -0.25rem;
   width: 100%;
   max-width: 1120px;
   padding: 0 clamp(12px, 4vw, 40px);
