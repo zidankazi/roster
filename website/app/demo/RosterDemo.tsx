@@ -86,24 +86,6 @@ const AGENTS: Agent[] = [
     reason: "waiting for your input",
     elapsed: "2m",
   },
-  {
-    title: "Fix the sidebar hit targets",
-    state: "done",
-    reason: "done · +18 −6",
-    elapsed: "5m",
-  },
-  {
-    title: "Draft the v0.0.9 release notes",
-    state: "idle",
-    reason: "waiting for your input",
-    elapsed: "8m",
-  },
-  {
-    title: "Sweep the false-blocked patterns",
-    state: "done",
-    reason: "done · 3 fixtures added",
-    elapsed: "12m",
-  },
 ];
 
 /** How many agents are blocked — surfaced next to the agents header, in red. */
