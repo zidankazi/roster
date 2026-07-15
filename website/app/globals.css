@@ -57,14 +57,21 @@ body {
   height: 100%;
 }
 
+/* The page is dark so the hero photo reads as lit rather than pasted on: the
+   background is pitched below the image's darkest tone (#1d2d36, sampled from
+   its bottom-left) so the picture is always the brightest thing on screen. */
 body {
-  background: #fbfaf7;
+  background: #0b1117;
   color: #df2c2c;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
 }
 
-/* Sticky top navigation. */
+/* Sticky top navigation, transparent so the hero photo runs unbroken to the top
+   of the page. There is deliberately no backdrop-filter: it would still blur the
+   photo behind it despite the transparent background, painting a visible 56px
+   band across the top of the image. The hero scrim already darkens this strip,
+   and the label shadows below cover the rest. */
 .nav {
   position: sticky;
   top: 0;
@@ -74,17 +81,20 @@ body {
   justify-content: space-between;
   height: 56px;
   padding: 0 clamp(16px, 4vw, 40px);
-  background: rgba(251, 250, 247, 0.85);
-  backdrop-filter: saturate(180%) blur(8px);
-  border-bottom: 1px solid #ece9e2;
+  background: transparent;
 }
 
+/* The nav has no fill of its own, so its labels carry their own contrast — the
+   same travelling halo the hero type uses, for the same reason: what sits
+   behind them is a photo that moves with the crop, and later the demo window
+   scrolling underneath. */
 .nav-brand {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.01em;
   color: #df2c2c;
   text-decoration: none;
+  text-shadow: 0 0 18px rgba(11, 17, 23, 0.95), 0 0 6px rgba(11, 17, 23, 0.8);
 }
 
 .nav-links {
@@ -95,9 +105,10 @@ body {
 
 .nav-link {
   font-size: 14px;
-  color: #4a463f;
+  color: #c2ccd4;
   text-decoration: none;
   transition: color 160ms ease;
+  text-shadow: 0 0 18px rgba(11, 17, 23, 0.95), 0 0 6px rgba(11, 17, 23, 0.8);
 }
 
 .nav-link:hover {
@@ -110,10 +121,10 @@ body {
   gap: 8px;
   padding: 7px 12px;
   font-size: 14px;
-  color: #2b2b2b;
+  color: #dfe6ec;
   text-decoration: none;
-  background: #fff;
-  border: 1px solid #e0ddd5;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid #2a3742;
   border-radius: 8px;
   transition: border-color 160ms ease, color 160ms ease;
 }
@@ -133,16 +144,140 @@ main {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding-top: 9vh;
   padding-bottom: 6rem;
   gap: 2.75rem;
 }
 
-/* The roster demo: a dark terminal card framed on the cream page, like a real
-   app window sitting on the desktop. Wider than the install pill, so it gets
-   its own full-width band that scrolls sideways on phones instead of forcing
-   the whole page to scroll. A hair of extra top space over the column gap to
-   give it a little more room under the install pill. */
+/* The hero owns a full viewport height so the 3:2 photo can be shown close to
+   whole. It cannot be both uncropped and short: at this width the full frame
+   needs ~960px of height, and the band above the demo is only ~570px — so a
+   shorter hero necessarily centre-crops away the composition.
+
+   `position: relative; z-index: 0` makes it a stacking context so the backdrop
+   can sit at z-index -1: inside it the image paints above the section's own
+   (absent) background but below every sibling, which keeps the hero content
+   readable without giving each component its own z-index. */
+.hero {
+  position: relative;
+  z-index: 0;
+  display: flex;
+  flex-direction: column;
+  /* Type left, rider right: the photo's subject sits centre-right with clean
+     gradient beside him, and centred text lands squarely on the bike. Only the
+     hero goes asymmetric — the demo below stays centred on main's axis. */
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2.75rem;
+  width: 100%;
+  min-height: calc(100vh - 56px);
+  padding: 2rem clamp(20px, 5vw, 64px) 3rem;
+}
+
+/* Below the point where the text column and the rider would fight for the same
+   pixels, the crop has nowhere left to put him — so the hero recentres and the
+   photo goes back to being a backdrop rather than a partner to the type. */
+@media (max-width: 900px) {
+  .hero {
+    align-items: center;
+  }
+}
+
+/* The hero photo — the focal point of the page, not a texture behind it. It
+   fills the hero section edge to edge and dissolves at the very bottom, so the
+   demo below is read against flat background and never the photo. */
+.hero-backdrop {
+  position: absolute;
+  z-index: -1;
+  /* The hero starts below the 56px sticky nav, so top:0 would leave a bare strip
+     across the top of the page. Pulling up by the nav's height runs the photo
+     under it instead — the nav is transparent precisely so this shows through. */
+  top: -56px;
+  left: 0;
+  right: 0;
+  height: calc(100% + 56px);
+  overflow: hidden;
+  pointer-events: none;
+  /* Only the last stretch fades. The earlier 48% fade was eating the bike from
+     the wheels up — most of what the picture is. The image's bottom edge runs
+     mid-grey on the right (#727f87), so it can't simply be cut against the
+     near-black page; this dissolves the last of the wheels into the background,
+     which reads as speed rather than as a crop. */
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    #000 0%,
+    #000 82%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, #000 0%, #000 82%, transparent 100%);
+}
+
+/* No zoom, deliberately. An earlier pass scaled up and translated to push the
+   rider out from under the centred text, which worked but cropped away the
+   whole bike and the negative space around it — the composition is the reason
+   this picture is worth showing at all. The hero is sized tall enough that
+   `cover` at 1:1 crops only a sliver, so the frame arrives close to intact and
+   the text simply sits over it.
+
+   The brightness knock-down is what makes the picture work on a dark page. The
+   rider is near-black and the air around him is near-white haze; dimming pushes
+   that haze to a mid grey the light tagline can sit on, while he stays black
+   and reads as a silhouette inside the glow. */
+.hero-backdrop img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  filter: brightness(0.9) contrast(1.06);
+}
+
+/* Two scrims, stacked. The horizontal one beds the left text column in shadow
+   and clears before the rider, so the type gets contrast without dimming the
+   subject — the photo's own gradient runs the other way (dark left, bright
+   haze right), so this deepens what is already there rather than fighting it.
+   The vertical one seats the frame into the page top and bottom; its bottom
+   fade is left to the mask rather than doubled up here, so it only has to keep
+   the nav's strip readable and stop the top edge reading as a line. */
+.hero-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+      to right,
+      rgba(11, 17, 23, 0.82) 0%,
+      rgba(11, 17, 23, 0.55) 26%,
+      rgba(11, 17, 23, 0) 52%
+    ),
+    linear-gradient(
+      to bottom,
+      rgba(11, 17, 23, 0.5) 0%,
+      rgba(11, 17, 23, 0.06) 34%,
+      rgba(11, 17, 23, 0.06) 70%,
+      rgba(11, 17, 23, 0.45) 100%
+    );
+}
+
+/* The hero recentres below 900px, so a left-weighted scrim would darken the
+   wrong side of the type. It is also much heavier here, on purpose: at phone
+   aspect ratios `cover` crops a 3:2 frame to roughly a third of its width, so
+   the composition is gone whatever we do and only a busy fragment remains.
+   Once the picture can't be the subject, the type should win outright. */
+@media (max-width: 900px) {
+  .hero-backdrop::after {
+    background: linear-gradient(
+      to bottom,
+      rgba(11, 17, 23, 0.72) 0%,
+      rgba(11, 17, 23, 0.58) 34%,
+      rgba(11, 17, 23, 0.58) 70%,
+      rgba(11, 17, 23, 0.75) 100%
+    );
+  }
+}
+
+/* The roster demo: a dark terminal card, like a real app window sitting on the
+   desktop. Wider than the hero's text column, so it gets its own full-width
+   band that scrolls sideways on phones instead of forcing the whole page to
+   scroll. It is what the fold's scroll must land on — keep it the next thing
+   after the hero. A hair of extra top space over the uniform column gap. */
 .roster-demo {
   margin-top: 0.25rem;
   /* A static screenshot, not a real terminal — nothing in it should look
@@ -175,7 +310,10 @@ main {
 /* The window as a pane of liquid glass rather than a flat card: a translucent
    light rim, a faint specular sheen down the top edge, and a deep soft shadow
    so it reads as floating over the page. Contrast of the terminal content is
-   left untouched — the glass is all in the frame, not the surfaces. */
+   left untouched — the glass is all in the frame, not the surfaces. The light
+   rim is also what separates the card from the dark page: a dark border would
+   vanish against it, which is why the glass treatment and the dark background
+   suit each other rather than fight. */
 .roster-window {
   position: relative;
   min-width: 920px;
@@ -212,17 +350,27 @@ main {
   font-size: clamp(8px, 2.6vw, 18px);
   line-height: 1.05;
   user-select: none;
+  /* Same reason as .tagline: the red has to hold against the photo's bright
+     haze as well as its dark rider. */
+  text-shadow: 0 0 28px rgba(11, 17, 23, 0.95), 0 0 10px rgba(11, 17, 23, 0.85);
 }
 
 /* Tagline block between the wordmark and the install pill. */
 .tagline {
-  text-align: center;
+  text-align: left;
   line-height: 1.55;
-  padding: 0 1rem;
+  /* The photo's haze runs near-white on the right, where light text would
+     otherwise disappear. The halo travels with the glyphs, so it holds contrast
+     wherever the crop happens to put the bright patch — a fixed scrim behind
+     the block can't, since the bright patch moves with the viewport. It has to
+     be an unoffset glow rather than a drop shadow: a directional shadow leaves
+     the glyph's top edge sitting bare on the haze. */
+  text-shadow: 0 0 26px rgba(11, 17, 23, 0.98), 0 0 12px rgba(11, 17, 23, 0.95),
+    0 1px 3px rgba(11, 17, 23, 0.9);
 }
 
 .tagline-lead {
-  color: #2b2b2b;
+  color: #eef3f7;
   font-size: clamp(14px, 3.4vw, 18px);
   font-weight: 700;
 }
@@ -236,8 +384,19 @@ main {
   justify-content: center;
   gap: 0.15rem 0.5ch;
   margin-top: 6px;
-  color: #6f6a63;
+  color: #9aa7b2;
   font-size: clamp(13px, 3.1vw, 16px);
+  justify-content: flex-start;
+}
+
+@media (max-width: 900px) {
+  .tagline {
+    text-align: center;
+  }
+
+  .tagline-sub {
+    justify-content: center;
+  }
 }
 
 .nowrap {
@@ -270,17 +429,18 @@ main {
   color: #df2c2c;
 }
 
-/* A deeper, richer red for the shine sweep. On the off-white background a
-   lighter tint would read as fading, so the glint goes darker to pop. */
+/* A hot, bright red for the shine sweep. This inverts on the dark page: against
+   the old off-white the glint had to go darker to pop, but on near-black a
+   darker tint would read as fading, so it goes lighter instead. */
 .c-shine {
-  color: #a01717;
+  color: #ff6b6b;
   font-weight: 700;
 }
 
-/* A faded red for a flickering cell — dimmed toward the light background,
-   like a loose-filament bulb. */
+/* A dimmed red for a flickering cell — faded toward the dark background, like a
+   loose-filament bulb. Inverted with .c-shine for the same reason. */
 .c-flicker {
-  color: #ecabab;
+  color: #6e1f1f;
 }
 
 /* Toggle + pill share one block so main's 2.75rem gap sits around the pair,
@@ -288,8 +448,14 @@ main {
 .install-block {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .install-block {
+    align-items: center;
+  }
 }
 
 /* Segmented control choosing the install method — built as a switch. The two
@@ -307,9 +473,12 @@ main {
      enough for the longer label keeps the two halves identical. */
   grid-template-columns: repeat(2, 6.5rem);
   padding: 4px;
-  border: 1px solid #e7e4dd;
+  border: 1px solid #26333d;
   border-radius: 10px;
-  background: #f2f0eb;
+  /* Translucent so the photo shows through the control instead of punching a
+     flat card out of it. */
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(6px);
 }
 
 /* The travelling indicator. It sits behind the labels (pointer-events off so
@@ -322,8 +491,8 @@ main {
   left: 4px;
   width: calc((100% - 8px) / 2);
   border-radius: 7px;
-  background: #fdfcfa;
-  box-shadow: 0 1px 2px rgba(43, 43, 43, 0.08);
+  background: #29373f;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   pointer-events: none;
   transition: transform 420ms cubic-bezier(0.34, 1.56, 0.64, 1),
     background-color 240ms ease, box-shadow 240ms ease;
@@ -344,23 +513,23 @@ main {
   padding: 6px 20px;
   font-family: inherit;
   font-size: clamp(12px, 3vw, 14px);
-  color: #6f6a63;
+  color: #93a0ab;
   background: transparent;
   cursor: pointer;
   transition: color 200ms ease;
 }
 
 .install-method:hover {
-  color: #2b2b2b;
+  color: #e8edf1;
 }
 
-/* Homebrew active: dark label on the neutral pad. */
+/* Homebrew active: bright label on the neutral pad. */
 .install-method.is-active {
-  color: #2b2b2b;
+  color: #e8edf1;
 }
 
 /* Script active: white label on red — but delayed, so the text flips only once
-   the red thumb has travelled under it, never flashing white on the light pill.
+   the red thumb has travelled under it, never flashing white on the bare pill.
    Leaving reverts to the rule above (no delay), so red clears before white does
    on the way back. */
 .install-methods[data-active="script"] .install-method.is-active {
@@ -388,9 +557,10 @@ main {
   display: inline-block;
   max-width: 92vw;
   overflow-x: auto;
-  border: 1px solid #e7e4dd;
+  border: 1px solid #26333d;
   border-radius: 10px;
-  background: #f2f0eb;
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(6px);
   font-family: inherit;
   font-size: clamp(12px, 3.2vw, 15px);
   cursor: pointer;
@@ -416,9 +586,9 @@ main {
   white-space: nowrap;
 }
 
-/* Resting layer: charcoal on the off-white pill. */
+/* Resting layer: near-white on the translucent pill. */
 .install-base {
-  color: #2b2b2b;
+  color: #dfe6ec;
 }
 
 /* Fill layer: warm white on brand red, revealed left-to-right by a clip-path
