@@ -55,6 +55,20 @@
 html,
 body {
   height: 100%;
+  /* Locked to a single non-scrolling screen for now: at desktop widths the site
+     is one hero section that fits the viewport, so there is nothing below the
+     fold to reach. Restored to scrolling below the stacking breakpoint (see
+     below), where the demo drops under the copy and no longer fits one screen. */
+  overflow: hidden;
+}
+
+/* Below 1200px the two columns stack, so the demo sits below the copy and is
+   taller than one screen — restore scrolling there so it stays reachable. */
+@media (max-width: 1200px) {
+  html,
+  body {
+    overflow: auto;
+  }
 }
 
 /* The page is dark so the hero photo reads as lit rather than pasted on: the
@@ -108,6 +122,9 @@ body {
   display: flex;
   align-items: center;
   gap: clamp(14px, 3vw, 24px);
+  /* Pinned right: with the brand removed the nav has a single child, so this
+     keeps the links against the right edge instead of the space-between start. */
+  margin-left: auto;
 }
 
 .nav-link {

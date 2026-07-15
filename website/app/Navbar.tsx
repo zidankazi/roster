@@ -1,13 +1,11 @@
 const REPO = "https://github.com/zidankazi/roster";
 
-// Top navigation: the wordmark on the left, supporting links + a GitHub
-// button on the right.
+// Top navigation: supporting links + a GitHub button, kept to the right. The
+// left-hand "roster" wordmark is omitted for now — redundant with the hero
+// wordmark directly below it on this single-section page.
 export function Navbar() {
   return (
     <header className="nav">
-      <a className="nav-brand" href="/" aria-label="roster home">
-        roster
-      </a>
       <nav className="nav-links">
         <a
           className="nav-link"
