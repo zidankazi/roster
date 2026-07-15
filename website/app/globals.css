@@ -67,11 +67,18 @@ body {
     "Liberation Mono", monospace;
 }
 
+/* The nav's height is load-bearing geometry, not just the nav's own size: main
+   and the hero size themselves against it, and the backdrop offsets by it to
+   reach the page top. Kept in one place so those four uses cannot drift apart. */
+:root {
+  --nav-h: 56px;
+}
+
 /* Sticky top navigation, transparent so the hero photo runs unbroken to the top
    of the page. There is deliberately no backdrop-filter: it would still blur the
-   photo behind it despite the transparent background, painting a visible 56px
-   band across the top of the image. The hero scrim already darkens this strip,
-   and the label shadows below cover the rest. */
+   photo behind it despite the transparent background, painting a visible band
+   across the top of the image. The hero scrim already darkens this strip, and
+   the label shadows below cover the rest. */
 .nav {
   position: sticky;
   top: 0;
@@ -79,7 +86,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 56px;
+  height: var(--nav-h);
   padding: 0 clamp(16px, 4vw, 40px);
   background: transparent;
 }
@@ -140,7 +147,7 @@ body {
 }
 
 main {
-  min-height: calc(100% - 56px);
+  min-height: calc(100% - var(--nav-h));
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -169,7 +176,13 @@ main {
   justify-content: center;
   gap: 2.75rem;
   width: 100%;
-  min-height: calc(100vh - 56px);
+  /* svh, not vh. On mobile Safari `100vh` is the URL-bar-hidden height, so a
+     vh-sized hero stands taller than the screen and — being centred — pushes
+     the install line below the fold on the very first paint. `100svh` is the
+     height actually visible on load. The vh line stays as the fallback for
+     browsers without svh. */
+  min-height: calc(100vh - var(--nav-h));
+  min-height: calc(100svh - var(--nav-h));
   padding: 2rem clamp(20px, 5vw, 64px) 3rem;
 }
 
@@ -188,13 +201,13 @@ main {
 .hero-backdrop {
   position: absolute;
   z-index: -1;
-  /* The hero starts below the 56px sticky nav, so top:0 would leave a bare strip
+  /* The hero starts below the sticky nav, so top:0 would leave a bare strip
      across the top of the page. Pulling up by the nav's height runs the photo
      under it instead — the nav is transparent precisely so this shows through. */
-  top: -56px;
+  top: calc(-1 * var(--nav-h));
   left: 0;
   right: 0;
-  height: calc(100% + 56px);
+  height: calc(100% + var(--nav-h));
   overflow: hidden;
   pointer-events: none;
   /* Only the last stretch fades. The earlier 48% fade was eating the bike from
@@ -214,9 +227,14 @@ main {
 /* No zoom, deliberately. An earlier pass scaled up and translated to push the
    rider out from under the centred text, which worked but cropped away the
    whole bike and the negative space around it — the composition is the reason
-   this picture is worth showing at all. The hero is sized tall enough that
-   `cover` at 1:1 crops only a sliver, so the frame arrives close to intact and
-   the text simply sits over it.
+   this picture is worth showing at all. A viewport-tall hero leaves `cover` at
+   1:1 little to trim, so the frame arrives close to intact.
+
+   How little depends on the window, and short wide ones are the weak case: at
+   1440x900 the band trims ~12% vertically, but at 1920x800 it trims ~42% and
+   takes the wheels with it. Nothing here can fix that — a 3:2 frame in a 2.6:1
+   band has to lose something — so if that shape matters, it wants an art
+   direction call (a second crop of the source), not a tweak to this rule.
 
    The brightness knock-down is what makes the picture work on a dark page. The
    rider is near-black and the air around him is near-white haze; dimming pushes
@@ -381,12 +399,11 @@ main {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 0.15rem 0.5ch;
   margin-top: 6px;
   color: #9aa7b2;
   font-size: clamp(13px, 3.1vw, 16px);
-  justify-content: flex-start;
 }
 
 @media (max-width: 900px) {
