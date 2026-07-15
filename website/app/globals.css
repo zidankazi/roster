@@ -332,8 +332,14 @@ main {
 }
 
 /* The hero photo — the focal point of the page, not a texture behind it. It
-   fills the hero section edge to edge and dissolves at the very bottom, so the
-   demo below is read against flat background and never the photo. */
+   fills the hero section edge to edge and dissolves at the very bottom into the
+   page below.
+
+   It is also the demo window's backdrop, and not incidentally: the demo shares
+   the hero and sits on the bloom side, so the photo is what the window's glass
+   has to blur. Anything that empties this region — remasking it away from the
+   right column, or dropping the photo for a flat fill — takes the glass with it
+   and leaves the window a flat dark card. */
 .hero-backdrop {
   position: absolute;
   z-index: -1;
@@ -485,17 +491,64 @@ main {
   border-radius: 12px;
 }
 
-/* The window as a plain solid card: a flat dark surface, a single dark border,
-   and a soft drop shadow so it reads as an app window floating over the page.
-   The liquid-glass treatment (translucent surfaces, backdrop-blur, specular
-   sheen, bright rims) was pulled out for now — to be revisited. */
+/* The window as one pane of dark glass over the hero photo's bloom. This is the
+   ONLY backdrop-filter in the demo: it blurs the photo once, and the surfaces in
+   RosterDemo.tsx are translucent tints layered over that single blurred
+   backdrop. Giving the sidebar or the cards their own backdrop-filter would
+   blur an already-blurred backdrop and flatten the depth this buys.
+
+   The tuning that matters, and the ditch the first attempt (c014a28/e6bf3aa)
+   fell into: it frosted the glass with white — a 0.16 white rim over
+   saturate(1.4) — which on a dark page reads as a milky grey wash rather than
+   glass, and it got pulled (7f77c3c). Dark tint under a restrained blur is what
+   keeps the window black while still letting the red move through it. The rim is
+   the one white here, and it stays a hairline: it exists to catch the edge, and
+   past ~0.08 it starts silvering the frame instead. */
 .roster-window {
   min-width: 920px;
   border-radius: 12px;
   overflow: hidden;
-  border: 1px solid #2a2b3a;
-  box-shadow: 0 24px 60px -20px rgba(20, 20, 30, 0.45),
-    0 8px 20px -12px rgba(20, 20, 30, 0.35);
+  /* SURFACE_BASE 233 as a tint — the base of the stack the chrome in
+     RosterDemo.tsx layers onto. It is this light because it now only has to
+     serve the chrome: the pane paints its own opaque fill over this, so the
+     tint no longer has to hold the bloom back from under the transcript, and
+     the sidebar is free to be glass. */
+  background: rgba(20, 20, 20, 0.5);
+  /* A wide blur and NO saturation lift. The first attempt reached for
+     saturate(1.4) to keep the frost off grey, but that was a fix for white
+     frost on a dead page; here the backdrop is the bloom at its hottest, and
+     lifting it only pushes the pane further towards maroon. The blur is wide
+     enough that what comes through is a gradient of light, with none of the
+     photo's structure legible through the chrome. */
+  -webkit-backdrop-filter: blur(40px) saturate(1);
+  backdrop-filter: blur(40px) saturate(1);
+  /* A light rim, not a dark border: on this ground a dark edge would bed the
+     window into the photo instead of lifting it off. */
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.07),
+    0 24px 60px -20px rgba(0, 0, 0, 0.6), 0 8px 20px -12px rgba(0, 0, 0, 0.45);
+}
+
+/* Without backdrop-filter the translucency has nothing to blur, and the photo
+   would come through the chrome in focus — a sharp bloom behind live chrome,
+   which is worse than no glass at all. Opaquing the window alone is the whole
+   fallback: every surface above it is a tint with no filter of its own, so they
+   composite against this fill instead of the photo, and the window goes back to
+   being a solid dark card with the photo fully hidden.
+
+   It lands near roster's palette rather than on it — the chrome tints are cut
+   for glass, so over an opaque base they settle a few shades flat (the sidebar
+   at ~#161616 against its true #1b1b1b, the title bar ~#1e1e1e against #2c2c2c).
+   That is accepted, not overlooked: matching exactly would mean every surface
+   carrying a second opaque hex through a var, and backdrop-filter has been
+   baseline across Chrome/Safari/Firefox since 2022 — this path is deep
+   insurance, and a slightly flatter dark card is a fine way to lose. */
+@supports not (
+  (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))
+) {
+  .roster-window {
+    background: #141414;
+  }
 }
 
 .wordmark {

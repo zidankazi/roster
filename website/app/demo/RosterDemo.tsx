@@ -21,13 +21,47 @@ const MUTED = "#828282"; // fg 244 — ages, paths, reasons
 
 // Neutral dark surfaces + the inverted selection roster uses: the focused card
 // flips to a light bar with dark text (SELECTED_BG 254 / SELECTED_FG 235).
-// Opaque, flat surfaces — the liquid-glass treatment was pulled back out for
-// now, so the window is a solid dark card rather than frosted glass.
-const BG = "#141414"; // SURFACE_BASE 233 — window + pane
-const BG_RAISED = "#1b1b1b"; // sidebar / status bar
-const CARD_BG = "#262626"; // SURFACE_RAISED 235 — every agent card is a filled box
-const TITLEBAR = "#2c2c2c"; // title bar
-const BORDER = "#333333";
+//
+// The glass is on the CHROME only — sidebar, title bar, status bar are
+// translucent tints over the one backdrop-filter on .roster-window (which blurs
+// the hero photo behind it); the pane keeps roster's flat opaque hex. That line
+// is the design, not a compromise, and it is drawn where it is for three
+// reasons. The pane is the one surface with a live transcript on it, and text
+// wants a still ground. The pane also straddles the bloom's hot centre, where
+// any real transparency washes it maroon — which spends red, the one colour
+// this chrome reserves for state, on decoration. And the sidebar sits over the
+// bloom's cooler left, so it can take far more glass and still read black. Glass
+// on chrome, solid under text, is also what the macOS windows this apes do.
+//
+// Dark tints, never white: white frost over a dark page is what made the first
+// attempt read as milky grey (c014a28/e6bf3aa, pulled back out in 7f77c3c).
+// Black tint + blur is what keeps it glassy AND still black.
+//
+// Alphas are cumulative, so read them as a stack: a card sits on the sidebar,
+// which sits on the window's own tint (rgba(20, 20, 20, 0.5), over in
+// globals.css beside the blur it pairs with — the fallback has to swap those
+// two together). The bleed each is left with is the tuning: the sidebar keeps
+// (1 - 0.5) * (1 - 0.28) ≈ 36%, its cards ≈ 12%, so the cards read as solid
+// chips floating on glass rather than more glass. Raising any one compounds
+// down the stack; tune against a screenshot, never on the hex alone.
+//
+// SURFACE_BASE 233 therefore appears twice, and the two are not interchangeable:
+// as that tint it is the chrome's glass, and as the opaque hex below it is the
+// pane's fill. Only the tint has the photo behind it.
+//
+// One asymmetry the stack cannot express: BG_RAISED is only raised while there
+// is bloom under it. Stacked below 1200px the window clears the photo and sits
+// on the page's own #0b1117, where the sidebar composites to ~rgb(19, 21, 23)
+// against the pane's rgb(20, 20, 20) — a step of ~1/255 where roster's flat
+// palette had 7. The sidebar is still a column beside the pane there, so what
+// separates them is the border alone. Accepted, but it is the thing to fix
+// first (a lighter hex at the same alpha adds light instead of subtracting it)
+// if that view ever has to carry the demo on its own.
+const BG = "#141414"; // SURFACE_BASE 233 — the pane's fill; opaque, unlike the chrome
+const BG_RAISED = "rgba(27, 27, 27, 0.28)"; // sidebar / status bar — the glass
+const CARD_BG = "rgba(38, 38, 38, 0.66)"; // SURFACE_RAISED 235 — every agent card is a filled box
+const TITLEBAR = "rgba(44, 44, 44, 0.35)"; // title bar — glassiest, as on a real window
+const BORDER = "rgba(255, 255, 255, 0.08)";
 const SELECTED_BG = "#e4e4e4"; // 254
 const SELECTED_FG = "#1f1f1f"; // 235
 const SELECTED_MUTED = "#565656"; // 240
@@ -194,7 +228,7 @@ export function RosterDemo() {
       <div className="roster-demo-scroll">
         <div
           className="roster-window"
-          style={{ background: BG, color: TEXT }}
+          style={{ color: TEXT }}
         >
           {/* Title bar */}
           <div
@@ -272,7 +306,7 @@ export function RosterDemo() {
                     so nothing here should advertise a clickable action. */}
                 <div
                   className="mt-2 w-full rounded-[6px] px-3 py-2 text-left text-[11px]"
-                  style={{ color: TEXT, background: "#262626" }}
+                  style={{ color: TEXT, background: CARD_BG }}
                   aria-hidden
                 >
                   + new agent
@@ -282,10 +316,16 @@ export function RosterDemo() {
 
             {/* Focused pane — red border signals it holds keyboard focus.
                 Flex all the way down so the composer pins to the pane bottom. */}
-            <div className="flex min-w-0 flex-1 flex-col p-3.5">
+            {/* The opaque fill is carried here, on the whole pane column, not on
+                the framed pane inside it: the gutter and the pane were one flat
+                field before the glass and have to stay one, or the glass leaks
+                between them and draws a seam the red border never asked for. */}
+            <div className="flex min-w-0 flex-1 flex-col p-3.5" style={{ background: BG }}>
               <div
                 className="flex flex-1 flex-col overflow-hidden rounded-[8px]"
-                style={{ border: `1px solid ${RED}`, background: BG }}
+                // No fill of its own — the column above already paints BG, and
+                // painting it again here would just composite the same hex twice.
+                style={{ border: `1px solid ${RED}` }}
               >
                 {/* Pane title: the focused agent's task, in brand red */}
                 <div
