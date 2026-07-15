@@ -54,7 +54,7 @@ export function ClaudePermission({
   return (
     <fieldset
       className={cn(
-        "rounded-none border px-3.5 py-2.5 font-mono text-[13px] leading-[1.6]",
+        "rounded-none border px-3.5 py-2.5 font-mono text-[12px] leading-[1.6]",
         className,
       )}
       style={{ borderColor: ROSE }}

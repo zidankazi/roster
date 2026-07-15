@@ -26,7 +26,7 @@ export function ClaudeDiff({
   className?: string;
 }) {
   return (
-    <div className={cn("min-w-0 font-mono text-[13px] leading-[1.55]", className)}>
+    <div className={cn("min-w-0 font-mono text-[12px] leading-[1.55]", className)}>
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
         <span aria-hidden className="shrink-0" style={{ color: GREEN }}>
           ⏺
