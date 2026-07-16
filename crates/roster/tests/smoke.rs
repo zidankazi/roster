@@ -1025,6 +1025,45 @@ fn typing_into_the_backdrop_shell_does_not_save_it() {
 }
 
 #[test]
+fn a_shell_pane_takes_its_name_from_the_terminal_title() {
+    let (_dir, mut pty, rx, mut screen) = bare_start();
+
+    // Dismiss the launcher and let it flush as a lone Esc (a following byte
+    // would coalesce into an Alt-chord) before typing into the shell.
+    pty.write(b"\x1b").expect("close launcher");
+    assert!(
+        drain_while(&mut screen, "run a command", false, &rx),
+        "launcher never closed:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    // The placeholder shell is /bin/sh, so its card reads the command's
+    // basename until the guest says otherwise.
+    assert!(
+        drain_while(&mut screen, "○ sh", true, &rx),
+        "shell pane never took its command basename:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // A shell is not an agent, and the title scrape used to skip every pane
+    // the detector could not identify — so this title reached the screen and
+    // died there. The needle is assembled from two printf arguments: the
+    // echoed command line holds "roster-title needle", never the joined
+    // form, so matching the echo instead of the chrome cannot pass this.
+    pty.write(b"printf '\\033]0;%s%s\\007' roster-title needle\r")
+        .expect("set title");
+    assert!(
+        drain_while(&mut screen, "○ roster-titleneedle", true, &rx),
+        "shell pane never took the terminal title:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
+#[test]
 fn closing_a_live_agent_asks_first() {
     let dir = fake_agent_dir();
     let path = format!(

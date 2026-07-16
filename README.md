@@ -102,9 +102,11 @@ to the top no matter where it lives — with more than one workspace each card
 carries a `⧉N` tag naming its home. any non-agent pane (a shell, a dev
 server) surfaces above it in its own `shells` section instead — context, not
 signal, so no glyph or triage order, just a name to click and jump to. cards
-and pane title bars name
-themselves after the task Claude Code is working on (`fix auth bug`, not
-`claude-code`) — the card truncates to its column, the title bar has the
+and pane title bars name themselves after whatever the program running in the
+pane sets as its terminal title — for an agent that's the task Claude Code is
+working on (`fix auth bug`, not `claude-code`); for a shell it's whatever your
+prompt broadcasts, falling back to the command's name (`zsh`) when it
+broadcasts nothing. the card truncates to its column, the title bar has the
 pane's width for it. when Claude Code never broadcasts a task title (a
 session started with a slash command, say), the card falls back to Claude
 Code's own name for the session from the statusline feed.

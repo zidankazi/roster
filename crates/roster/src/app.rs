@@ -1520,6 +1520,17 @@ impl App {
             self.session.mark_seen(focused);
         }
         for (id, rt) in &mut self.runtimes {
+            // The live terminal title labels the pane's card, for agents and
+            // shells alike — whoever owns the PTY is the only one who can say
+            // what it is doing. A reset title clears it so the card falls back
+            // to the agent name (or the command's basename) rather than a
+            // stale task.
+            let title = rt
+                .screen
+                .title()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty());
+            self.session.set_title(*id, title);
             let Some(kind) = rt.kind else {
                 continue;
             };
@@ -1531,15 +1542,6 @@ impl App {
             // and a `None` clears the model, mirroring the tracker's aging
             // instead of freezing the last numbers on screen.
             self.session.set_telemetry(*id, reading.telemetry);
-            // The live terminal title labels the pane's sidebar card; a
-            // reset title clears it so the card falls back to the agent
-            // name rather than a stale task.
-            let title = rt
-                .screen
-                .title()
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty());
-            self.session.set_title(*id, title);
             // The hook wins on freshness and richness, the screen wins on
             // settled reality — a missed clear (an interrupt at the prompt
             // fires no hook) self-heals here. See `hook_pin_wins`.
