@@ -97,7 +97,7 @@ OPTIONS:
 
 KEYS (prefix: ctrl-b):
   prefix c   new agent (launcher)      prefix x   close pane
-  prefix %   split side by side        prefix \"   split stacked
+  prefix r   split right               prefix b   split below
   prefix o   focus next pane           prefix n/p next/previous window
   prefix j   jump via sidebar (j/k move, enter jump, a auto-approve, esc cancel)
   prefix d   detach (persistent sessions)

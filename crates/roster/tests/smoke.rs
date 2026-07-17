@@ -953,6 +953,135 @@ fn bare_start_first_launch_replaces_the_placeholder_shell() {
     assert!(status.success, "exit: {status:?}");
 }
 
+/// Total occurrences of the rounded-panel top-left corner across the grid —
+/// one per pane panel, so this counts panels regardless of their arrangement.
+fn panel_count(screen: &Screen) -> usize {
+    screen
+        .grid()
+        .lines()
+        .iter()
+        .map(|l| l.matches('╭').count())
+        .sum()
+}
+
+#[test]
+fn prefix_r_splits_the_focused_pane_side_by_side() {
+    let dir = fake_agent_dir();
+    std::env::set_var(
+        "PATH",
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+    std::env::set_var("SHELL", "/bin/sh");
+
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty = Pty::spawn(&format!("'{}' 'sleep 60'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+    let mut screen = Screen::new(cols, rows);
+
+    // One full-width panel: a content row shows just its two side borders.
+    assert!(
+        drain_while(&mut screen, "focused ▸ sleep 60  ·  ctrl-b", true, &rx),
+        "single pane never settled:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert_eq!(screen.grid().lines()[5].matches('│').count(), 2);
+
+    // prefix-r: the new shell lands to the RIGHT, so the same content row now
+    // crosses two panels — four side borders.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"r").expect("split right");
+    let start = Instant::now();
+    let mut rules = 2;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        rules = screen.grid().lines()[5].matches('│').count();
+        if rules == 4 {
+            break;
+        }
+    }
+    assert_eq!(
+        rules,
+        4,
+        "prefix-r should split side by side:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
+#[test]
+fn prefix_b_splits_the_focused_pane_stacked() {
+    let dir = fake_agent_dir();
+    std::env::set_var(
+        "PATH",
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+    std::env::set_var("SHELL", "/bin/sh");
+
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty = Pty::spawn(&format!("'{}' 'sleep 60'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+    let mut screen = Screen::new(cols, rows);
+
+    assert!(
+        drain_while(&mut screen, "focused ▸ sleep 60  ·  ctrl-b", true, &rx),
+        "single pane never settled:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert_eq!(panel_count(&screen), 1);
+
+    // prefix-b: the new shell lands BELOW, so a second panel appears while an
+    // upper content row still crosses only the top panel (two side borders,
+    // not four — that would be a side-by-side split).
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"b").expect("split below");
+    let start = Instant::now();
+    let mut panels = 1;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        panels = panel_count(&screen);
+        if panels == 2 {
+            break;
+        }
+    }
+    assert_eq!(
+        panels,
+        2,
+        "prefix-b should add a second panel:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert_eq!(
+        screen.grid().lines()[5].matches('│').count(),
+        2,
+        "prefix-b should stack, not sit side by side:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
 #[test]
 fn typing_into_the_backdrop_shell_does_not_save_it() {
     let (_dir, mut pty, rx, mut screen) = bare_start();

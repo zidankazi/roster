@@ -1956,8 +1956,14 @@ impl App {
                 self.mode = Mode::Normal;
                 match key.code {
                     KeyCode::Char('c') => self.mode = Mode::Launch(LauncherState::new()),
-                    KeyCode::Char('%') => self.split(SplitDirection::Horizontal),
-                    KeyCode::Char('"') => self.split(SplitDirection::Vertical),
+                    // Unshifted split keys named for the outcome, not the axis:
+                    // r puts the new pane to the right, b puts it below. The b
+                    // arm excludes ctrl so ctrl-b still passes the prefix
+                    // through (the arm below), independent of match order.
+                    KeyCode::Char('r') => self.split(SplitDirection::Horizontal),
+                    KeyCode::Char('b') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.split(SplitDirection::Vertical)
+                    }
                     KeyCode::Char('o') => self.session.focus_next(),
                     KeyCode::Char('n') => self.session.next_window(),
                     KeyCode::Char('p') => self.session.prev_window(),
@@ -2795,7 +2801,7 @@ impl App {
             }
             Mode::Prefix => (
                 Some("PREFIX"),
-                "c: new agent · n/p: windows · z: solo · %/\": split · o: focus · j: jump · x: close agent · d: detach · q: quit roster"
+                "c: new agent · n/p: windows · z: solo · r: split right · b: split below · o: next pane · j: jump · x: close agent · d: detach · q: quit roster"
                     .to_string(),
             ),
             Mode::Jump => (
