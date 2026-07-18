@@ -454,12 +454,15 @@ pub fn render(frame: &mut Frame, view: &View) {
         // vocabulary with the sidebar's inverted card. The title rides the
         // top border.
         let panel = Rect::new(panes.x + rect.x, panes.y + rect.y, rect.width, rect.height);
-        // A card dragged over this pane lights its border too: the same accent
-        // that means "focused" now means "drop here", so the drag has a
-        // visible target under the ghost.
-        let drag_over = view.card_drag.is_some_and(|drag| {
-            drag.pane != id && panel.contains(Position::new(drag.cursor.0, drag.cursor.1))
+        // A card dragged over this pane's content (the same region the binary
+        // hit-tests for the drop) lights its border and, below, previews the
+        // landing half. Content, not panel, so the preview matches exactly
+        // where a release would actually put the pane.
+        let drag_cursor = view.card_drag.and_then(|drag| {
+            (drag.pane != id && content.contains(Position::new(drag.cursor.0, drag.cursor.1)))
+                .then_some(drag.cursor)
         });
+        let drag_over = drag_cursor.is_some();
         if panelled(rect) {
             let border_style = if focused == Some(id) || drag_over {
                 Style::default().fg(style::ACCENT)
@@ -495,6 +498,13 @@ pub fn render(frame: &mut Frame, view: &View) {
             _ => None,
         };
         frame.render_widget(PaneView::new(grid).selection(selection), content);
+
+        // The drop preview: an accent-outlined box over the half where a
+        // release right now would land the dragged pane, so the drag shows its
+        // destination before you let go. Over the content, under the ghost.
+        if let Some(cursor) = drag_cursor {
+            draw_drop_preview(frame, content, cursor);
+        }
 
         // A chip in the pane's top-right corner while scrolled into
         // history: how far back, and that the view isn't live.
@@ -711,6 +721,26 @@ fn draw_title(
         buf.set_string(cols.start + 1, span.y, "✕", style);
         buf.set_string(cols.start + 2, span.y, " ", style::muted());
     }
+}
+
+/// The drop preview: an accent-outlined box over the half of `content` where
+/// a release at `cursor` would land the dragged pane. Shares `roster_core`'s
+/// `drop_zone` with the binary's release handler, so the outline can't
+/// disagree with where the pane actually goes. Border only — the pane's live
+/// output still shows through, so it reads as "the pane will split here", not
+/// a blanking overlay.
+fn draw_drop_preview(frame: &mut Frame, content: Rect, cursor: (u16, u16)) {
+    let core = roster_core::Rect::new(content.x, content.y, content.width, content.height);
+    let (_side, zone) = roster_core::drop_zone(core, cursor.0, cursor.1);
+    if zone.width == 0 || zone.height == 0 {
+        return;
+    }
+    frame.render_widget(
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(style::ACCENT)),
+        Rect::new(zone.x, zone.y, zone.width, zone.height),
+    );
 }
 
 /// The lifted-card overlay: a small rounded box tracking the cursor while a

@@ -12,7 +12,7 @@ use ratatui::Terminal;
 use roster_core::{AgentState, Grid, Session, SplitDirection};
 use roster_detect::Detector;
 use roster_tui::{
-    launch_items, muted, panes_area, render, selected, selected_muted, shell_entries,
+    content_rect, launch_items, muted, panes_area, render, selected, selected_muted, shell_entries,
     sidebar_entries, state_color, CardDrag, Hit, LauncherState, SidebarSide, View, ACCENT,
 };
 
@@ -1460,4 +1460,90 @@ fn dragging_a_card_lifts_a_ghost_and_lights_the_drop_target() {
         label_row.contains("claude"),
         "ghost should carry the dragged card's name, got: {label_row}"
     );
+}
+
+#[test]
+fn dragging_over_a_pane_previews_the_landing_half() {
+    let now = Instant::now();
+    let (mut session, left, right) = two_agent_session(now);
+    session.focus(left);
+
+    let mut grids = HashMap::new();
+    grids.insert(left, Grid::from_text("left agent output"));
+    grids.insert(right, Grid::from_text("right agent output"));
+    let exited = HashMap::new();
+    let scrolled = HashMap::new();
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+
+    // The right pane's absolute content rect — the region the preview boxes
+    // are carved from — mirroring render's own geometry.
+    let area = Rect::new(0, 0, 80, 24);
+    let panes = panes_area(area, SidebarSide::Left);
+    let rects = session.layout(panes.width, panes.height);
+    let (_, rrect) = rects.iter().find(|(id, _)| *id == right).unwrap();
+    let local = content_rect(*rrect);
+    let content = roster_core::Rect::new(
+        panes.x + local.x,
+        panes.y + local.y,
+        local.width,
+        local.height,
+    );
+
+    // Drag with the cursor in the right third, then the left third, of that
+    // pane; the preview box should hug the matching half each time.
+    let render_with = |cursor: (u16, u16)| {
+        let view = View {
+            session: &session,
+            grids: &grids,
+            exited: &exited,
+            entries: &entries,
+            shells: &[],
+            selected: None,
+            hover: None,
+            zoomed: false,
+            side: SidebarSide::Left,
+            launcher: None,
+            confirm: None,
+            context_menu: None,
+            toasts: &[],
+            rate_limits: None,
+            selection: None,
+            scrolled: &scrolled,
+            welcome: false,
+            mode_badge: None,
+            status: "dragging",
+            tick: 0,
+            workspace: None,
+            clock: None,
+            card_drag: Some(CardDrag { pane: left, cursor }),
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|frame| render(frame, &view)).unwrap();
+        terminal.backend().buffer().clone()
+    };
+
+    let mid_row = content.y + content.height / 2;
+
+    // Right third → the drop zone is the right half, so its outline's top-left
+    // corner sits at the pane's horizontal midpoint, in the accent.
+    let cursor = (content.x + content.width - 2, mid_row);
+    let (side, zone) = roster_core::drop_zone(content, cursor.0, cursor.1);
+    assert_eq!(side, roster_core::DropSide::Right);
+    let buf = render_with(cursor);
+    let corner = buf.cell((zone.x, zone.y)).unwrap();
+    assert_eq!(corner.symbol(), "╭", "right-half preview corner");
+    assert_eq!(corner.style().fg, Some(ACCENT), "preview outline is accent");
+    // The left edge of the pane is untouched by a right-half preview.
+    assert_ne!(buf.cell((content.x, zone.y)).unwrap().symbol(), "╭");
+
+    // Left third → the outline hugs the left half instead, its corner at the
+    // pane's own left edge.
+    let cursor = (content.x + 1, mid_row);
+    let (side, zone) = roster_core::drop_zone(content, cursor.0, cursor.1);
+    assert_eq!(side, roster_core::DropSide::Left);
+    let buf = render_with(cursor);
+    let corner = buf.cell((zone.x, zone.y)).unwrap();
+    assert_eq!(corner.symbol(), "╭", "left-half preview corner");
+    assert_eq!(corner.style().fg, Some(ACCENT));
 }

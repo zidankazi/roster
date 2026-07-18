@@ -8,7 +8,9 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::layout::{layout, replace_leaf, LayoutNode, Rect, RemoveOutcome, SplitDirection};
+use crate::layout::{
+    layout, replace_leaf, DropSide, LayoutNode, Rect, RemoveOutcome, SplitDirection,
+};
 use crate::telemetry::Telemetry;
 
 /// Stable identifier for a pane, unique within a [`Session`].
@@ -227,7 +229,7 @@ impl Session {
         let window_idx = self.window_of(target)?;
         let new = self.adopt_pane(raw)?;
         let window = &mut self.windows[window_idx];
-        if window.root.split_leaf(target, new, direction) {
+        if window.root.split_leaf(target, new, direction, false) {
             window.focused = new;
             self.active = window_idx;
             Some(new)
@@ -367,7 +369,7 @@ impl Session {
         let window_idx = self.window_of(target)?;
         let new = self.alloc_pane();
         let window = &mut self.windows[window_idx];
-        if window.root.split_leaf(target, new, direction) {
+        if window.root.split_leaf(target, new, direction, false) {
             window.focused = new;
             self.active = window_idx;
             Some(new)
@@ -378,19 +380,15 @@ impl Session {
     }
 
     /// Move the existing pane `moved` in beside `target`, splitting `target`'s
-    /// window along `direction` and focusing `moved`. The pane keeps its id
-    /// and process — only its place in the layout changes; if it was the last
-    /// pane of its old window, that window is removed. Returns `false` when
-    /// either id is missing or they are the same pane.
+    /// window against the chosen `side` and focusing `moved`. The pane keeps
+    /// its id and process — only its place in the layout changes; if it was
+    /// the last pane of its old window, that window is removed. Returns `false`
+    /// when either id is missing or they are the same pane.
     ///
     /// This is how a sidebar card dragged onto a pane brings two agents from
-    /// different windows onto one screen.
-    pub fn move_pane_beside(
-        &mut self,
-        target: PaneId,
-        moved: PaneId,
-        direction: SplitDirection,
-    ) -> bool {
+    /// different windows onto one screen; `side` is the drop edge the cursor
+    /// picked, so the moved pane lands on the half the user aimed at.
+    pub fn move_pane_beside(&mut self, target: PaneId, moved: PaneId, side: DropSide) -> bool {
         if moved == target || self.window_of(moved).is_none() || self.window_of(target).is_none() {
             return false;
         }
@@ -417,7 +415,9 @@ impl Session {
         // target and split `moved` in beside it.
         let into = self.window_of(target).expect("checked above");
         let window = &mut self.windows[into];
-        window.root.split_leaf(target, moved, direction);
+        window
+            .root
+            .split_leaf(target, moved, side.direction(), side.before());
         window.focused = moved;
         self.active = into;
         true
@@ -1438,7 +1438,7 @@ mod tests {
         let b = s.new_window();
         assert_eq!(s.window_count(), 2);
 
-        assert!(s.move_pane_beside(a, b, SplitDirection::Horizontal));
+        assert!(s.move_pane_beside(a, b, DropSide::Right));
         // b's window is gone; both panes now share a's window, b focused.
         assert_eq!(s.window_count(), 1);
         assert_eq!(s.window_of(a), Some(0));
@@ -1457,7 +1457,7 @@ mod tests {
         assert_eq!(s.window_count(), 2);
 
         // Move c out of its window (which still holds b) beside a.
-        assert!(s.move_pane_beside(a, c, SplitDirection::Vertical));
+        assert!(s.move_pane_beside(a, c, DropSide::Bottom));
         assert_eq!(s.window_count(), 2);
         assert_eq!(s.window_of(c), s.window_of(a));
         assert_ne!(s.window_of(c), s.window_of(b));
@@ -1468,9 +1468,38 @@ mod tests {
     fn move_pane_beside_rejects_self_and_missing_panes() {
         let mut s = Session::new();
         let a = s.focused().unwrap();
-        assert!(!s.move_pane_beside(a, a, SplitDirection::Horizontal));
-        assert!(!s.move_pane_beside(a, PaneId::from_raw(999), SplitDirection::Horizontal));
-        assert!(!s.move_pane_beside(PaneId::from_raw(999), a, SplitDirection::Horizontal));
+        assert!(!s.move_pane_beside(a, a, DropSide::Right));
+        assert!(!s.move_pane_beside(a, PaneId::from_raw(999), DropSide::Right));
+        assert!(!s.move_pane_beside(PaneId::from_raw(999), a, DropSide::Right));
+    }
+
+    #[test]
+    fn move_pane_beside_docks_on_the_chosen_side() {
+        // Left drop: the moved pane tiles to the left of the target.
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        let b = s.new_window();
+        assert!(s.move_pane_beside(a, b, DropSide::Left));
+        let l = s.layout(20, 10);
+        let ax = l.iter().find(|(p, _)| *p == a).unwrap().1.x;
+        let bx = l.iter().find(|(p, _)| *p == b).unwrap().1.x;
+        assert!(
+            bx < ax,
+            "left drop should tile the moved pane left of target"
+        );
+
+        // Bottom drop: the moved pane tiles below the target.
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        let b = s.new_window();
+        assert!(s.move_pane_beside(a, b, DropSide::Bottom));
+        let l = s.layout(20, 10);
+        let ay = l.iter().find(|(p, _)| *p == a).unwrap().1.y;
+        let by = l.iter().find(|(p, _)| *p == b).unwrap().1.y;
+        assert!(
+            by > ay,
+            "bottom drop should tile the moved pane below target"
+        );
     }
 
     #[test]

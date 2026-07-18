@@ -1296,6 +1296,103 @@ fn dragging_a_card_onto_a_pane_shows_both_agents_side_by_side() {
 }
 
 #[test]
+fn dropping_on_the_left_edge_lands_the_pane_on_the_left() {
+    let dir = fake_agent_dir();
+    std::env::set_var(
+        "PATH",
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+    std::env::set_var("SHELL", "/bin/sh");
+
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty = Pty::spawn(&format!("'{}' 'sleep 300'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+    let mut screen = Screen::new(cols, rows);
+
+    assert!(
+        drain_while(&mut screen, "focused ▸ sleep 300", true, &rx),
+        "first shell never settled:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"c").expect("new agent");
+    assert!(
+        drain_while(&mut screen, "run a command", true, &rx),
+        "launcher never opened:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    pty.write(b"cat").expect("type command");
+    pty.write(b"\r").expect("launch");
+    assert!(
+        drain_while(&mut screen, "focused ▸ cat", true, &rx),
+        "second shell never took focus:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    let card_y = screen
+        .grid()
+        .lines()
+        .iter()
+        .position(|l| l.chars().take(33).collect::<String>().contains("sleep"))
+        .unwrap_or_else(|| {
+            panic!(
+                "sleep card not in the sidebar:\n{}",
+                screen.grid().lines().join("\n")
+            )
+        }) as u16;
+
+    // Drag the sleep card onto the LEFT third of the cat pane and release.
+    // The drop side follows the cursor, so sleep must land as the left pane.
+    pty.write(format!("\x1b[<0;6;{}M", card_y + 1).as_bytes())
+        .expect("press card");
+    pty.write(b"\x1b[<32;42;15M")
+        .expect("drag into the pane's left third");
+    pty.write(b"\x1b[<0;42;15m").expect("release on the left");
+
+    assert!(
+        drain_while(&mut screen, "focused ▸ sleep 300", true, &rx),
+        "drop never focused the dragged pane:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert_eq!(
+        panel_count(&screen),
+        2,
+        "left-edge drop should still split the screen:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Both pane titles ride the same top-border row; sleep sitting at a lower
+    // column than cat proves it docked on the left, not the (default) right.
+    let title_row = screen
+        .grid()
+        .lines()
+        .into_iter()
+        .find(|l| l.contains("sleep") && l.contains("cat"))
+        .unwrap_or_else(|| {
+            panic!(
+                "no row holds both pane titles:\n{}",
+                screen.grid().lines().join("\n")
+            )
+        });
+    let sleep_col = title_row.find("sleep").unwrap();
+    let cat_col = title_row.find("cat").unwrap();
+    assert!(
+        sleep_col < cat_col,
+        "sleep should be the left pane (sleep@{sleep_col} vs cat@{cat_col}):\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
+#[test]
 fn dragging_a_card_lifts_a_ghost_that_snaps_back_on_an_invalid_drop() {
     let dir = fake_agent_dir();
     std::env::set_var(

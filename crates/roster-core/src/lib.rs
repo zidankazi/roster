@@ -18,7 +18,7 @@ mod telemetry;
 pub use attention::{rank, AttentionItem, Priority};
 pub use context::{context_alert, ContextAlert, CRITICAL_THRESHOLD_PCT, WARN_THRESHOLD_PCT};
 pub use grid::{Cell, CellStyle, Color, Cursor, Grid};
-pub use layout::{Rect, SplitDirection};
+pub use layout::{drop_zone, DropSide, Rect, SplitDirection};
 pub use session::{AgentState, Pane, PaneId, Session};
 pub use telemetry::{
     carry_rate_limit, fleet_rate_limit, rate_limit_alert, LimitNotice, LimitNotifier, LimitWindow,

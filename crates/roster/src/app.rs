@@ -2413,8 +2413,17 @@ impl App {
                         _ => None,
                     };
                     let moved = onto.is_some_and(|target| {
-                        self.session
-                            .move_pane_beside(target, pane, SplitDirection::Horizontal)
+                        // Land the pane on the half the cursor aimed at, using
+                        // the same drop-zone math the preview box drew — the
+                        // outline and the result can't disagree.
+                        let side = self
+                            .pane_content_rect(target)
+                            .map(|c| {
+                                let core = roster_core::Rect::new(c.x, c.y, c.width, c.height);
+                                roster_core::drop_zone(core, x, y).0
+                            })
+                            .unwrap_or(roster_core::DropSide::Right);
+                        self.session.move_pane_beside(target, pane, side)
                     });
                     if moved {
                         // Two agents share the screen now: leave solo so both

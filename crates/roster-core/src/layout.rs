@@ -47,6 +47,92 @@ pub enum SplitDirection {
     Vertical,
 }
 
+/// Which edge of a pane a dragged pane docks against — the four half-pane
+/// landing spots a drop can choose from. Maps to a [`SplitDirection`] and
+/// whether the moved pane takes the leading (`first`) side of that split.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropSide {
+    /// Left half: horizontal split, moved pane leading.
+    Left,
+    /// Right half: horizontal split, moved pane trailing.
+    Right,
+    /// Top half: vertical split, moved pane leading.
+    Top,
+    /// Bottom half: vertical split, moved pane trailing.
+    Bottom,
+}
+
+impl DropSide {
+    /// The split direction this edge produces.
+    pub fn direction(self) -> SplitDirection {
+        match self {
+            DropSide::Left | DropSide::Right => SplitDirection::Horizontal,
+            DropSide::Top | DropSide::Bottom => SplitDirection::Vertical,
+        }
+    }
+
+    /// Whether the moved pane takes the split's leading (`first`) side.
+    pub fn before(self) -> bool {
+        matches!(self, DropSide::Left | DropSide::Top)
+    }
+}
+
+/// The drop edge a cursor at (`x`, `y`) selects over pane `rect`, and the
+/// half-pane rect where the dropped pane would land — the landing preview.
+///
+/// The nearest edge wins, measured as a fraction of each axis so the
+/// terminal's ~2:1 cell aspect doesn't bias the choice toward top/bottom. A
+/// cursor outside the rect (or a degenerate rect) still yields a valid side —
+/// callers clamp to the pane before asking, but the math never panics.
+pub fn drop_zone(rect: Rect, x: u16, y: u16) -> (DropSide, Rect) {
+    let w = rect.width.max(1);
+    let h = rect.height.max(1);
+    // Distance from each edge, as a fraction of the axis, clamped to [0, 1].
+    let fx = f32::from(x.saturating_sub(rect.x).min(w - 1)) / f32::from(w);
+    let fy = f32::from(y.saturating_sub(rect.y).min(h - 1)) / f32::from(h);
+    let dist = [
+        (DropSide::Left, fx),
+        (DropSide::Right, 1.0 - fx),
+        (DropSide::Top, fy),
+        (DropSide::Bottom, 1.0 - fy),
+    ];
+    // Ties resolve to the earlier edge (left/right before top/bottom), so a
+    // dead-center drop is a horizontal split — the drag's usual intent.
+    let side = dist
+        .iter()
+        .copied()
+        .reduce(|a, b| if b.1 < a.1 { b } else { a })
+        .map(|(side, _)| side)
+        .unwrap_or(DropSide::Right);
+    (side, side.preview(rect))
+}
+
+impl DropSide {
+    /// The half-pane rect the dropped pane would occupy on this edge, at the
+    /// 0.5 ratio a fresh split uses. Halving rounds the moved pane's share up
+    /// so it is never a zero-width sliver on an odd-sized pane.
+    pub fn preview(self, rect: Rect) -> Rect {
+        let half_w = rect.width.div_ceil(2);
+        let half_h = rect.height.div_ceil(2);
+        match self {
+            DropSide::Left => Rect::new(rect.x, rect.y, half_w, rect.height),
+            DropSide::Right => Rect::new(
+                rect.x + rect.width.saturating_sub(half_w),
+                rect.y,
+                half_w,
+                rect.height,
+            ),
+            DropSide::Top => Rect::new(rect.x, rect.y, rect.width, half_h),
+            DropSide::Bottom => Rect::new(
+                rect.x,
+                rect.y + rect.height.saturating_sub(half_h),
+                rect.width,
+                half_h,
+            ),
+        }
+    }
+}
+
 /// A node in a window's split tree.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum LayoutNode {
@@ -62,27 +148,32 @@ pub(crate) enum LayoutNode {
 
 impl LayoutNode {
     /// Replace the leaf holding `target` with a split of `target` and `new`.
+    /// `before` puts `new` on the leading side of the split (the `first`
+    /// child — left for a horizontal split, top for a vertical one); the
+    /// default `false` keeps the historical placement of `new` as `second`.
     /// Returns `true` if the target was found.
     pub(crate) fn split_leaf(
         &mut self,
         target: PaneId,
         new: PaneId,
         direction: SplitDirection,
+        before: bool,
     ) -> bool {
         match self {
             LayoutNode::Leaf(id) if *id == target => {
+                let (first, second) = if before { (new, target) } else { (target, new) };
                 *self = LayoutNode::Split {
                     direction,
                     ratio: 0.5,
-                    first: Box::new(LayoutNode::Leaf(target)),
-                    second: Box::new(LayoutNode::Leaf(new)),
+                    first: Box::new(LayoutNode::Leaf(first)),
+                    second: Box::new(LayoutNode::Leaf(second)),
                 };
                 true
             }
             LayoutNode::Leaf(_) => false,
             LayoutNode::Split { first, second, .. } => {
-                first.split_leaf(target, new, direction)
-                    || second.split_leaf(target, new, direction)
+                first.split_leaf(target, new, direction, before)
+                    || second.split_leaf(target, new, direction, before)
             }
         }
     }
@@ -447,15 +538,56 @@ mod tests {
     #[test]
     fn split_leaf_replaces_target() {
         let mut node = LayoutNode::Leaf(pid(1));
-        assert!(node.split_leaf(pid(1), pid(2), SplitDirection::Horizontal));
+        assert!(node.split_leaf(pid(1), pid(2), SplitDirection::Horizontal, false));
         assert_eq!(node.leaves(), vec![pid(1), pid(2)]);
     }
 
     #[test]
     fn split_leaf_misses_unknown_target() {
         let mut node = LayoutNode::Leaf(pid(1));
-        assert!(!node.split_leaf(pid(9), pid(2), SplitDirection::Horizontal));
+        assert!(!node.split_leaf(pid(9), pid(2), SplitDirection::Horizontal, false));
         assert_eq!(node.leaves(), vec![pid(1)]);
+    }
+
+    #[test]
+    fn split_leaf_before_puts_the_new_pane_first() {
+        let mut node = LayoutNode::Leaf(pid(1));
+        assert!(node.split_leaf(pid(1), pid(2), SplitDirection::Horizontal, true));
+        // The new pane leads, so it tiles to the left of the target.
+        assert_eq!(node.leaves(), vec![pid(2), pid(1)]);
+    }
+
+    #[test]
+    fn drop_zone_picks_the_nearest_edge_by_axis_fraction() {
+        // A wide, short pane — raw-cell distance would bias toward the near
+        // top/bottom edges, but the fraction-based rule reads the real intent.
+        let r = Rect::new(0, 0, 20, 10);
+        assert_eq!(drop_zone(r, 3, 5).0, DropSide::Left);
+        assert_eq!(drop_zone(r, 17, 5).0, DropSide::Right);
+        assert_eq!(drop_zone(r, 10, 1).0, DropSide::Top);
+        assert_eq!(drop_zone(r, 10, 8).0, DropSide::Bottom);
+    }
+
+    #[test]
+    fn drop_zone_previews_the_landing_half() {
+        let r = Rect::new(4, 2, 20, 10);
+        assert_eq!(DropSide::Left.preview(r), Rect::new(4, 2, 10, 10));
+        assert_eq!(DropSide::Right.preview(r), Rect::new(14, 2, 10, 10));
+        assert_eq!(DropSide::Top.preview(r), Rect::new(4, 2, 20, 5));
+        assert_eq!(DropSide::Bottom.preview(r), Rect::new(4, 7, 20, 5));
+    }
+
+    #[test]
+    fn drop_zone_never_panics_on_a_degenerate_pane() {
+        // Zero-sized and one-cell panes, cursor inside and out — a valid side
+        // and an on-pane preview must come back, never a panic.
+        for r in [Rect::new(0, 0, 0, 0), Rect::new(5, 5, 1, 1)] {
+            for (x, y) in [(0, 0), (5, 5), (255, 255)] {
+                let (_side, preview) = drop_zone(r, x, y);
+                assert!(preview.width <= r.width.max(1));
+                assert!(preview.height <= r.height.max(1));
+            }
+        }
     }
 
     #[test]
