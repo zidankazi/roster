@@ -99,6 +99,7 @@ KEYS (prefix: ctrl-b):
   prefix c   new agent (launcher)      prefix x   close pane
   prefix r   split right               prefix b   split below
   prefix o   focus next pane           prefix n/p next/previous window
+  prefix z   solo / grid view          prefix s   collapse the sidebar
   prefix j   jump via sidebar (j/k move, enter jump, a auto-approve, esc cancel)
   prefix d   detach (persistent sessions)
   prefix q   quit

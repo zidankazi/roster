@@ -547,6 +547,59 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
 }
 
 #[test]
+fn collapsed_sidebar_shrinks_to_a_rail_and_widens_the_panes() {
+    let now = Instant::now();
+    let (mut session, left, right) = two_agent_session(now);
+    session.focus(right);
+    let mut grids = HashMap::new();
+    grids.insert(left, Grid::from_text("left agent output"));
+    grids.insert(right, Grid::from_text("right agent output"));
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+    let exited = HashMap::new();
+    let scrolled = HashMap::new();
+    let view = View {
+        session: &session,
+        grids: &grids,
+        exited: &exited,
+        entries: &entries,
+        shells: &[],
+        selected: None,
+        hover: None,
+        zoomed: false,
+        side: SidebarSide::CollapsedLeft,
+        launcher: None,
+        confirm: None,
+        context_menu: None,
+        toasts: &[],
+        rate_limits: None,
+        selection: None,
+        scrolled: &scrolled,
+        welcome: false,
+        mode_badge: None,
+        status: "collapsed",
+        tick: 0,
+        workspace: None,
+        clock: None,
+    };
+
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    terminal.draw(|frame| render(frame, &view)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    // The rail is a hairline: the re-expand chevron sits at its top cell and
+    // the agent cards are gone (no "claude-code" text in the rail columns).
+    assert_eq!(buf.cell((2, 1)).unwrap().symbol(), "›");
+    let rail: String = (0..30).map(|y| region_text(&buf, 0, 4, y)).collect();
+    assert!(!rail.contains("claude"), "rail still shows cards:\n{rail}");
+
+    // The panes reclaim the width the sidebar gave up: the first panel's left
+    // border sits at column 4, where the expanded sidebar (32 wide) would put
+    // it at 34.
+    assert_eq!(buf.cell((4, 5)).unwrap().symbol(), "│");
+}
+
+#[test]
 fn degenerate_frames_render_without_panicking() {
     let now = Instant::now();
     let (mut session, left, right) = two_agent_session(now);

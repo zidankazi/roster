@@ -12,8 +12,8 @@ use crate::sidebar::{
     sidebar_rows, ShellEntry, SidebarEntry, SidebarRow,
 };
 use crate::{
-    chrome_area, close_button_cols, panes_area, sidebar_button_row, sidebar_inner, status_controls,
-    SidebarSide, StatusControls, STATUS_HEIGHT,
+    chrome_area, close_button_cols, panes_area, sidebar_button_row, sidebar_inner,
+    sidebar_toggle_cell, status_controls, SidebarSide, StatusControls, STATUS_HEIGHT,
 };
 
 /// What a screen position corresponds to.
@@ -32,6 +32,9 @@ pub enum Hit {
     SidebarAutoAll,
     /// The sidebar's pinned `+ new agent` button.
     SidebarNewAgent,
+    /// The collapse/expand chevron: the pane-facing corner when expanded, or
+    /// anywhere on the rail when collapsed. Click toggles the sidebar.
+    SidebarToggle,
     /// The workspace row of the title banner — hovering it reveals the
     /// full path on the divider row below when the shown path was cut to
     /// fit.
@@ -96,6 +99,7 @@ pub fn pointer_for(hit: Hit) -> Pointer {
         | Hit::SidebarAuto(_)
         | Hit::SidebarAutoAll
         | Hit::SidebarNewAgent
+        | Hit::SidebarToggle
         | Hit::StatusViewGrid
         | Hit::StatusViewSolo
         | Hit::PaneTitle(_)
@@ -185,6 +189,15 @@ pub fn hit_test(
 
     let bar = sidebar_inner(area, side);
     if x >= bar.x && x < bar.x + bar.width && y >= bar.y && y < bar.y + bar.height {
+        // Collapsed: the whole hairline rail is the re-expand target.
+        if side.is_collapsed() {
+            return Hit::SidebarToggle;
+        }
+        // The collapse chevron on the pane-facing top corner wins over the
+        // header controls that sit on the same row beneath it.
+        if sidebar_toggle_cell(area, side) == Some((x, y)) {
+            return Hit::SidebarToggle;
+        }
         // Mirror render: the bottom rows belong to the pinned button and
         // its breathing row — not to agent cards.
         let mut cards = bar;
@@ -636,7 +649,9 @@ mod tests {
                 },
                 (32, 1)
             ),
-            Hit::Sidebar
+            // The rightmost header cell, one past the auto-yes toggle, is the
+            // collapse chevron.
+            Hit::SidebarToggle
         );
         assert_eq!(
             hit_test(

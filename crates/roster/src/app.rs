@@ -1968,6 +1968,7 @@ impl App {
                     KeyCode::Char('n') => self.session.next_window(),
                     KeyCode::Char('p') => self.session.prev_window(),
                     KeyCode::Char('z') => self.zoomed = !self.zoomed,
+                    KeyCode::Char('s') => self.side = self.side.toggled(),
                     KeyCode::Char('x') => {
                         if let Some(id) = self.session.focused() {
                             self.request_close(id);
@@ -2246,6 +2247,7 @@ impl App {
                     Hit::SidebarNewAgent => {
                         self.mode = Mode::Launch(LauncherState::new());
                     }
+                    Hit::SidebarToggle => self.side = self.side.toggled(),
                     Hit::StatusViewGrid => self.zoomed = false,
                     Hit::StatusViewSolo => self.zoomed = true,
                     Hit::StatusWindows => self.session.next_window(),
@@ -2804,7 +2806,7 @@ impl App {
             }
             Mode::Prefix => (
                 Some("PREFIX"),
-                "c: new agent · n/p: windows · z: solo · r: split right · b: split below · o: next pane · j: jump · x: close agent · d: detach · q: quit roster"
+                "c: new agent · n/p: windows · z: solo · s: sidebar · r: split right · b: split below · o: next pane · j: jump · x: close agent · d: detach · q: quit roster"
                     .to_string(),
             ),
             Mode::Jump => (

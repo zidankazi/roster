@@ -55,7 +55,11 @@ pub const SIDEBAR_WIDTH: u16 = 32;
 /// Rows reserved at the bottom for the status line.
 pub const STATUS_HEIGHT: u16 = 1;
 
-/// Which edge the sidebar occupies.
+/// Which edge the sidebar occupies, and whether it is collapsed to a rail.
+///
+/// The collapsed variants keep their edge so a re-expand restores the same
+/// side; [`on_left`](Self::on_left) and [`is_collapsed`](Self::is_collapsed)
+/// let the geometry read edge and state without matching every variant.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SidebarSide {
     /// Sidebar on the left, panes to its right (the default).
@@ -63,7 +67,41 @@ pub enum SidebarSide {
     Left,
     /// Sidebar on the right, panes to its left.
     Right,
+    /// Collapsed to a thin rail on the left; the rail re-expands to `Left`.
+    CollapsedLeft,
+    /// Collapsed to a thin rail on the right; the rail re-expands to `Right`.
+    CollapsedRight,
 }
+
+impl SidebarSide {
+    /// True when the sidebar sits on the left edge (expanded or collapsed).
+    pub fn on_left(self) -> bool {
+        matches!(self, SidebarSide::Left | SidebarSide::CollapsedLeft)
+    }
+
+    /// True when the sidebar is collapsed to a rail.
+    pub fn is_collapsed(self) -> bool {
+        matches!(
+            self,
+            SidebarSide::CollapsedLeft | SidebarSide::CollapsedRight
+        )
+    }
+
+    /// Flip between the expanded sidebar and the collapsed rail, keeping the
+    /// same edge so a re-expand lands where it started.
+    pub fn toggled(self) -> Self {
+        match self {
+            SidebarSide::Left => SidebarSide::CollapsedLeft,
+            SidebarSide::CollapsedLeft => SidebarSide::Left,
+            SidebarSide::Right => SidebarSide::CollapsedRight,
+            SidebarSide::CollapsedRight => SidebarSide::Right,
+        }
+    }
+}
+
+/// The width of the collapsed sidebar rail: a hairline the re-expand chevron
+/// sits in, leaving the rest of the frame to the panes.
+pub const SIDEBAR_RAIL: u16 = 2;
 
 /// Everything one frame needs: the model, each pane's screen, and the
 /// prepared sidebar rows.
@@ -165,11 +203,8 @@ pub fn chrome_area(frame_area: Rect) -> Rect {
 /// and above the status line, within the chrome inset.
 pub fn panes_area(frame_area: Rect, side: SidebarSide) -> Rect {
     let area = chrome_area(frame_area);
-    let bar = sidebar_width(area.width);
-    let x = match side {
-        SidebarSide::Left => area.x + bar,
-        SidebarSide::Right => area.x,
-    };
+    let bar = sidebar_bar(area.width, side);
+    let x = if side.on_left() { area.x + bar } else { area.x };
     Rect::new(
         x,
         area.y,
@@ -178,13 +213,23 @@ pub fn panes_area(frame_area: Rect, side: SidebarSide) -> Rect {
     )
 }
 
+/// The sidebar's occupied width: the collapsed rail, or the full width.
+fn sidebar_bar(total_width: u16, side: SidebarSide) -> u16 {
+    if side.is_collapsed() {
+        SIDEBAR_RAIL.min(total_width / 2)
+    } else {
+        sidebar_width(total_width)
+    }
+}
+
 /// The absolute region the sidebar occupies, within the chrome inset.
 fn sidebar_area(frame_area: Rect, side: SidebarSide) -> Rect {
     let area = chrome_area(frame_area);
-    let bar = sidebar_width(area.width);
-    let x = match side {
-        SidebarSide::Left => area.x,
-        SidebarSide::Right => area.x + area.width - bar,
+    let bar = sidebar_bar(area.width, side);
+    let x = if side.on_left() {
+        area.x
+    } else {
+        area.x + area.width - bar
     };
     Rect::new(x, area.y, bar, area.height.saturating_sub(STATUS_HEIGHT))
 }
@@ -194,10 +239,30 @@ fn sidebar_area(frame_area: Rect, side: SidebarSide) -> Rect {
 /// and background, not rules) — and where clicks on agent cards land.
 pub fn sidebar_inner(frame_area: Rect, side: SidebarSide) -> Rect {
     let bar = sidebar_area(frame_area, side);
-    match side {
-        SidebarSide::Left => Rect::new(bar.x, bar.y, bar.width.saturating_sub(1), bar.height),
-        SidebarSide::Right => Rect::new(bar.x + 1, bar.y, bar.width.saturating_sub(1), bar.height),
+    if side.on_left() {
+        Rect::new(bar.x, bar.y, bar.width.saturating_sub(1), bar.height)
+    } else {
+        Rect::new(bar.x + 1, bar.y, bar.width.saturating_sub(1), bar.height)
     }
+}
+
+/// The absolute cell the collapse/expand chevron occupies — top of the
+/// sidebar's inner region, on its pane-facing inner edge — when the sidebar
+/// is tall enough to host it. `render` draws it and `hit_test` targets it, so
+/// the drawn glyph and the click target can't drift.
+pub fn sidebar_toggle_cell(frame_area: Rect, side: SidebarSide) -> Option<(u16, u16)> {
+    let bar = sidebar_inner(frame_area, side);
+    if bar.width == 0 || bar.height == 0 {
+        return None;
+    }
+    // The chevron rides the sidebar's pane-facing inner edge: right edge when
+    // the sidebar is on the left, left edge when it's on the right.
+    let x = if side.on_left() {
+        bar.x + bar.width - 1
+    } else {
+        bar.x
+    };
+    Some((x, bar.y))
 }
 
 /// The sidebar row hosting the pinned `+ new agent` button, when the
@@ -469,58 +534,19 @@ pub fn render(frame: &mut Frame, view: &View) {
         }
     }
 
-    // The sidebar: no rule against the panes — the gap column and the
-    // surface change are the separation. (The frame-wide base fill above
-    // already covers the gap and the pinned button row; the widget fills
-    // its own card area too so it stays self-contained in tests.)
-    let bar_inner = sidebar_inner(area, view.side);
-    let mut cards = bar_inner;
-    if let Some(button_y) = sidebar_button_row(area, view.side) {
-        // Keep the cards clear of the button and its breathing row.
-        cards.height = cards.height.saturating_sub(2);
-        frame.buffer_mut().set_stringn(
-            bar_inner.x + 1,
-            button_y,
-            " + new agent ",
-            usize::from(bar_inner.width.saturating_sub(1)),
-            style::chip(false, view.hover == Some(Hit::SidebarNewAgent), false),
-        );
+    // Collapsed: a hairline rail with just the re-expand chevron; the panes
+    // above already claimed the reclaimed width via `panes_area`. The shared
+    // status/toast/overlay tail below still runs for both states.
+    if view.side.is_collapsed() {
+        if let Some((cx, cy)) = sidebar_toggle_cell(area, view.side) {
+            let hot = view.hover == Some(Hit::SidebarToggle);
+            frame
+                .buffer_mut()
+                .set_stringn(cx, cy, toggle_glyph(view.side), 1, toggle_style(hot));
+        }
+    } else {
+        draw_sidebar(frame, area, view, focused);
     }
-    let hovered_entry = match view.hover {
-        Some(Hit::SidebarEntry(index)) => Some(index),
-        _ => None,
-    };
-    let hovered_auto = match view.hover {
-        Some(Hit::SidebarAuto(index)) => Some(index),
-        _ => None,
-    };
-    let hovered_shell = match view.hover {
-        Some(Hit::SidebarShell(index)) => Some(index),
-        _ => None,
-    };
-    // The card whose pane holds focus carries the accent bar. Entries span
-    // every workspace but focus is the active window's, so at most one card
-    // matches.
-    let focused_entry = sidebar::focused_entry(view.entries, focused);
-    frame.render_widget(
-        Sidebar::new(
-            view.entries,
-            view.selected,
-            hovered_entry,
-            view.session.window_count(),
-            view.tick,
-        )
-        .shells(view.shells)
-        .focused(focused_entry)
-        .hovered_shell(hovered_shell)
-        .hovered_auto(hovered_auto)
-        .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
-        .rate_limits(view.rate_limits)
-        .workspace(view.workspace)
-        .clock(view.clock)
-        .hovered_workspace(view.hover == Some(Hit::SidebarWorkspace)),
-        cards,
-    );
 
     draw_status(frame.buffer_mut(), area, view);
     draw_toasts(frame.buffer_mut(), area, view.toasts);
@@ -655,6 +681,93 @@ fn draw_title(
         buf.set_string(cols.start, span.y, " ", style::muted());
         buf.set_string(cols.start + 1, span.y, "✕", style);
         buf.set_string(cols.start + 2, span.y, " ", style::muted());
+    }
+}
+
+/// Draw the expanded sidebar — the pinned `+ new agent` button, the agent
+/// and shell cards, and the collapse chevron on its pane-facing edge. The
+/// collapsed rail is drawn inline by [`render`]; this is the full-width case.
+fn draw_sidebar(frame: &mut Frame, area: Rect, view: &View, focused: Option<PaneId>) {
+    // The sidebar sits beside the panes with no rule between — the gap column
+    // and the surface change are the separation. (The frame-wide base fill
+    // already covers the gap and the pinned button row; the widget fills its
+    // own card area too so it stays self-contained in tests.)
+    let bar_inner = sidebar_inner(area, view.side);
+    let mut cards = bar_inner;
+    if let Some(button_y) = sidebar_button_row(area, view.side) {
+        // Keep the cards clear of the button and its breathing row.
+        cards.height = cards.height.saturating_sub(2);
+        frame.buffer_mut().set_stringn(
+            bar_inner.x + 1,
+            button_y,
+            " + new agent ",
+            usize::from(bar_inner.width.saturating_sub(1)),
+            style::chip(false, view.hover == Some(Hit::SidebarNewAgent), false),
+        );
+    }
+    let hovered_entry = match view.hover {
+        Some(Hit::SidebarEntry(index)) => Some(index),
+        _ => None,
+    };
+    let hovered_auto = match view.hover {
+        Some(Hit::SidebarAuto(index)) => Some(index),
+        _ => None,
+    };
+    let hovered_shell = match view.hover {
+        Some(Hit::SidebarShell(index)) => Some(index),
+        _ => None,
+    };
+    // The card whose pane holds focus carries the accent bar. Entries span
+    // every workspace but focus is the active window's, so at most one card
+    // matches.
+    let focused_entry = sidebar::focused_entry(view.entries, focused);
+    frame.render_widget(
+        Sidebar::new(
+            view.entries,
+            view.selected,
+            hovered_entry,
+            view.session.window_count(),
+            view.tick,
+        )
+        .shells(view.shells)
+        .focused(focused_entry)
+        .hovered_shell(hovered_shell)
+        .hovered_auto(hovered_auto)
+        .hovered_auto_all(view.hover == Some(Hit::SidebarAutoAll))
+        .rate_limits(view.rate_limits)
+        .workspace(view.workspace)
+        .clock(view.clock)
+        .hovered_workspace(view.hover == Some(Hit::SidebarWorkspace)),
+        cards,
+    );
+    // The collapse chevron rides the sidebar's pane-facing top corner.
+    if let Some((cx, cy)) = sidebar_toggle_cell(area, view.side) {
+        let hot = view.hover == Some(Hit::SidebarToggle);
+        frame
+            .buffer_mut()
+            .set_stringn(cx, cy, toggle_glyph(view.side), 1, toggle_style(hot));
+    }
+}
+
+/// The collapse/expand chevron glyph: points toward the edge it hides into
+/// when expanded, and toward the panes it reveals when collapsed.
+fn toggle_glyph(side: SidebarSide) -> &'static str {
+    if side.on_left() != side.is_collapsed() {
+        "‹"
+    } else {
+        "›"
+    }
+}
+
+/// The chevron's style: accent when hovered, muted at rest, so it reads as a
+/// live control without shouting over the cards beside it.
+fn toggle_style(hot: bool) -> Style {
+    if hot {
+        Style::default()
+            .fg(style::ACCENT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        style::muted()
     }
 }
 

@@ -224,7 +224,12 @@ fn mouse_clicks_focus_launch_and_jump() {
     // The second command has focus at startup; solo is the default view, so
     // the footer offers the sidebar as the switcher.
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 70  ·  click a card", true, &rx),
+        drain_while(
+            &mut screen,
+            "focused ▸ sleep 70  ·  click a card",
+            true,
+            &rx
+        ),
         "first frame:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -1004,7 +1009,12 @@ fn prefix_r_splits_the_focused_pane_side_by_side() {
 
     // One full-width panel: a content row shows just its two side borders.
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 60  ·  click a card", true, &rx),
+        drain_while(
+            &mut screen,
+            "focused ▸ sleep 60  ·  click a card",
+            true,
+            &rx
+        ),
         "single pane never settled:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -1059,7 +1069,12 @@ fn prefix_b_splits_the_focused_pane_stacked() {
     let mut screen = Screen::new(cols, rows);
 
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 60  ·  click a card", true, &rx),
+        drain_while(
+            &mut screen,
+            "focused ▸ sleep 60  ·  click a card",
+            true,
+            &rx
+        ),
         "single pane never settled:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -1093,6 +1108,95 @@ fn prefix_b_splits_the_focused_pane_stacked() {
         screen.grid().lines()[5].matches('│').count(),
         2,
         "prefix-b should stack, not sit side by side:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
+#[test]
+fn prefix_s_collapses_the_sidebar_and_widens_the_panes() {
+    let dir = fake_agent_dir();
+    std::env::set_var(
+        "PATH",
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+    std::env::set_var("SHELL", "/bin/sh");
+
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty = Pty::spawn(&format!("'{}' 'sleep 60'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+    let mut screen = Screen::new(cols, rows);
+
+    // Expanded, the sole panel's left border sits past the 32-wide sidebar
+    // near column 34; column 4 is sidebar space (no rule there).
+    assert!(
+        drain_while(
+            &mut screen,
+            "focused ▸ sleep 60  ·  click a card",
+            true,
+            &rx
+        ),
+        "single pane never settled:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    let border_at_col_4 =
+        |screen: &Screen| screen.grid().lines().get(5).and_then(|l| l.chars().nth(4)) == Some('│');
+    assert!(
+        !border_at_col_4(&screen),
+        "panel already at the left edge:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // prefix-s collapses the sidebar to a rail; the panel's left border slides
+    // to column 4 as the pane reclaims the freed width.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"s").expect("collapse sidebar");
+    let start = Instant::now();
+    let mut collapsed = false;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if border_at_col_4(&screen) {
+            collapsed = true;
+            break;
+        }
+    }
+    assert!(
+        collapsed,
+        "prefix-s did not widen the panes:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // prefix-s again restores the sidebar; the border returns rightward.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"s").expect("expand sidebar");
+    let start = Instant::now();
+    let mut expanded = false;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if !border_at_col_4(&screen) {
+            expanded = true;
+            break;
+        }
+    }
+    assert!(
+        expanded,
+        "prefix-s did not restore the sidebar:\n{}",
         screen.grid().lines().join("\n")
     );
 
