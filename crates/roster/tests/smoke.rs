@@ -1272,21 +1272,18 @@ fn dragging_a_card_onto_a_pane_shows_both_agents_side_by_side() {
     pty.write(b"\x1b[<32;70;15M").expect("drag into panes");
     pty.write(b"\x1b[<0;70;15m").expect("release on pane");
 
-    let start = Instant::now();
-    let mut panels = 1;
-    while start.elapsed() < DEADLINE {
-        match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(chunk) => screen.advance(&chunk),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-        panels = panel_count(&screen);
-        if panels == 2 {
-            break;
-        }
-    }
+    // Wait for the drop to settle before counting panels. The move focuses the
+    // dragged pane, so the footer switches to "focused ▸ sleep 300" only once
+    // the button is released and the move ran — a frame where the lifted ghost
+    // (which also draws a ╭ corner) is already gone, so panel_count sees only
+    // real panels.
+    assert!(
+        drain_while(&mut screen, "focused ▸ sleep 300", true, &rx),
+        "drop never focused the dragged pane:\n{}",
+        screen.grid().lines().join("\n")
+    );
     assert_eq!(
-        panels,
+        panel_count(&screen),
         2,
         "drag did not bring both agents side by side:\n{}",
         screen.grid().lines().join("\n")

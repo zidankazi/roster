@@ -637,7 +637,7 @@ fn degenerate_frames_render_without_panicking() {
     // every overlay — no overlay, the mid-session launcher, the welcome
     // launcher, and the confirm dialog.
     for (w, h) in [
-        (1, 1),
+        (1u16, 1u16),
         (5, 2),
         (10, 3),
         (23, 7),
@@ -655,6 +655,13 @@ fn degenerate_frames_render_without_panicking() {
         for overlay in 0..4 {
             let launcher = (overlay == 1 || overlay == 2).then_some((items.as_slice(), &state));
             let confirm = (overlay == 3).then_some(None);
+            // Drag a card with the cursor pinned to the far corner, so the
+            // ghost box's clamp and tiny-frame guard get swept at every size
+            // too (the smallest frames must skip it, not write past the edge).
+            let card_drag = (overlay == 0).then_some(CardDrag {
+                pane: left,
+                cursor: (w.saturating_sub(1), h.saturating_sub(1)),
+            });
             let view = View {
                 session: &session,
                 grids: &grids,
@@ -678,7 +685,7 @@ fn degenerate_frames_render_without_panicking() {
                 tick: 0,
                 workspace: None,
                 clock: None,
-                card_drag: None,
+                card_drag,
             };
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             terminal
