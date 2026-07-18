@@ -32,9 +32,9 @@ use roster_term::Screen;
 use roster_tui::{
     confirm_button_at, confirm_contains, content_rect, exited_buttons, hit_test, launch_items,
     menu_contains, menu_fits, menu_item_at, panes_area, pin_to_top, pointer_for, render,
-    shell_entries, sidebar_entries, toast_rects, ConfirmButton, ContextMenuItem, ContextMenuView,
-    Hit, HitContext, LaunchItem, Launcher, LauncherState, Message, Pointer, ShellEntry,
-    SidebarEntry, SidebarSide, SidebarState, ToastLevel, View,
+    shell_entries, sidebar_entries, toast_rects, CardDrag, ConfirmButton, ContextMenuItem,
+    ContextMenuView, Hit, HitContext, LaunchItem, Launcher, LauncherState, Message, Pointer,
+    ShellEntry, SidebarEntry, SidebarSide, SidebarState, ToastLevel, View,
 };
 
 use crate::keys::encode_key;
@@ -961,6 +961,13 @@ impl App {
                 })
                 .collect();
             let clock = local_clock(SystemTime::now());
+            // A pressed card only becomes a lifted ghost once the pointer has
+            // left its press anchor: a stationary click (down and up in place)
+            // is a focus, not a drag, and must not flash a ghost.
+            let card_drag = self.card_drag.and_then(|(pane, anchor)| {
+                let cursor = self.last_mouse?;
+                (cursor != anchor).then_some(CardDrag { pane, cursor })
+            });
             let view = View {
                 session: &self.session,
                 grids: &grids,
@@ -986,6 +993,7 @@ impl App {
                 tick: started.elapsed().as_millis() as u64 / 125,
                 workspace: self.workspace.as_deref(),
                 clock: Some(&clock),
+                card_drag,
             };
             terminal.draw(|frame| render(frame, &view))?;
 

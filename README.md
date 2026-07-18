@@ -88,8 +88,9 @@ you first: blocked (longest wait leading), then done, then idle, working at the
 bottom. inside every tier but blocked the most recent arrival leads, so the
 agent that just finished or just fell idle is the one you see first. by
 default you watch one agent full size with the sidebar as the switcher; drag a
-sidebar card onto the pane to bring a second agent alongside it, or tile every
-pane with the `grid` pill (`solo · grid` in the status bar, or double-click a
+sidebar card — it lifts off and rides the cursor — onto the pane to bring a
+second agent alongside it (let go anywhere else and it snaps back), or tile
+every pane with the `grid` pill (`solo · grid` in the status bar, or double-click a
 title bar). the sidebar itself collapses to a rail — the `‹` chevron, a click
 on the rail, or `ctrl-b s` — to hand its width to the panes. `ctrl-b` is the
 prefix; hold it and the status bar shows the full key palette, and

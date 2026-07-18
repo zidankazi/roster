@@ -1299,6 +1299,116 @@ fn dragging_a_card_onto_a_pane_shows_both_agents_side_by_side() {
 }
 
 #[test]
+fn dragging_a_card_lifts_a_ghost_that_snaps_back_on_an_invalid_drop() {
+    let dir = fake_agent_dir();
+    std::env::set_var(
+        "PATH",
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+    std::env::set_var("SHELL", "/bin/sh");
+
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty = Pty::spawn(&format!("'{}' 'sleep 300'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+    let mut screen = Screen::new(cols, rows);
+
+    assert!(
+        drain_while(&mut screen, "focused ▸ sleep 300", true, &rx),
+        "first shell never settled:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // A second shell with a distinct name, shown solo, so only its panel is on
+    // screen and "sleep" lives only in the sidebar card.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"c").expect("new agent");
+    assert!(
+        drain_while(&mut screen, "run a command", true, &rx),
+        "launcher never opened:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    pty.write(b"cat").expect("type command");
+    pty.write(b"\r").expect("launch");
+    assert!(
+        drain_while(&mut screen, "focused ▸ cat", true, &rx),
+        "second shell never took focus:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert_eq!(panel_count(&screen), 1, "expected one solo panel");
+
+    let card_y = screen
+        .grid()
+        .lines()
+        .iter()
+        .position(|l| l.chars().take(33).collect::<String>().contains("sleep"))
+        .unwrap_or_else(|| {
+            panic!(
+                "sleep card not in the sidebar:\n{}",
+                screen.grid().lines().join("\n")
+            )
+        }) as u16;
+
+    // Press the card and drag into the pane region WITHOUT releasing: the card
+    // lifts onto a ghost that follows the cursor, so "sleep" — which otherwise
+    // lives only in the sidebar (the first ~33 columns) — now shows out over
+    // the pane.
+    pty.write(format!("\x1b[<0;6;{}M", card_y + 1).as_bytes())
+        .expect("press card");
+    pty.write(b"\x1b[<32;80;16M").expect("drag into panes");
+
+    let ghost_over_pane = |screen: &Screen| {
+        screen
+            .grid()
+            .lines()
+            .iter()
+            .any(|l| l.chars().skip(34).collect::<String>().contains("sleep"))
+    };
+    let start = Instant::now();
+    let mut saw_ghost = false;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if ghost_over_pane(&screen) {
+            saw_ghost = true;
+            break;
+        }
+    }
+    assert!(
+        saw_ghost,
+        "the dragged card never lifted a ghost over the pane:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Release back over the sidebar — not a pane — so the drop is invalid: the
+    // ghost snaps back, no side-by-side is created, and the view stays solo.
+    pty.write(format!("\x1b[<0;6;{}m", card_y + 1).as_bytes())
+        .expect("release on sidebar");
+    assert!(
+        drain_while(&mut screen, "focused ▸ sleep 300", true, &rx),
+        "release never settled back to a solo view:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert_eq!(
+        panel_count(&screen),
+        1,
+        "an invalid drop must not split the screen:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
+#[test]
 fn typing_into_the_backdrop_shell_does_not_save_it() {
     let (_dir, mut pty, rx, mut screen) = bare_start();
 

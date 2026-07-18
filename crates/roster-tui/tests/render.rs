@@ -6,13 +6,14 @@ use std::time::{Duration, Instant};
 
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use ratatui::Terminal;
 use roster_core::{AgentState, Grid, Session, SplitDirection};
 use roster_detect::Detector;
 use roster_tui::{
-    launch_items, muted, render, selected, selected_muted, shell_entries, sidebar_entries,
-    state_color, Hit, LauncherState, SidebarSide, View, ACCENT,
+    launch_items, muted, panes_area, render, selected, selected_muted, shell_entries,
+    sidebar_entries, state_color, CardDrag, Hit, LauncherState, SidebarSide, View, ACCENT,
 };
 
 fn region_text(buf: &Buffer, x0: u16, x1: u16, y: u16) -> String {
@@ -85,6 +86,7 @@ fn panes_get_title_bars_and_content_shifts_down() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
@@ -225,6 +227,7 @@ fn pane_title_prefers_the_panes_terminal_title_over_the_agent_name() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
@@ -296,6 +299,7 @@ fn shell_panes_own_border_matches_its_sidebar_shells_row() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
@@ -354,6 +358,7 @@ fn secondary_chrome_is_muted_not_the_faint_dim_attribute() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
@@ -430,6 +435,7 @@ fn hover_lights_up_interactive_chrome() {
             tick: 0,
             workspace: None,
             clock: None,
+            card_drag: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         terminal.draw(|frame| render(frame, &view)).unwrap();
@@ -515,6 +521,7 @@ fn solo_view_fills_the_pane_region_with_the_focused_pane() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
@@ -581,6 +588,7 @@ fn collapsed_sidebar_shrinks_to_a_rail_and_widens_the_panes() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
@@ -670,6 +678,7 @@ fn degenerate_frames_render_without_panicking() {
                 tick: 0,
                 workspace: None,
                 clock: None,
+                card_drag: None,
             };
             let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
             terminal
@@ -716,6 +725,7 @@ fn launcher_modal_overlays_the_frame() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -765,6 +775,7 @@ fn welcome_screen_shows_wordmark_picker_and_command_hint() {
         tick: 99,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
@@ -827,6 +838,7 @@ fn welcome_wordmark_reveals_with_the_tick() {
             tick,
             workspace: None,
             clock: None,
+            card_drag: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|frame| render(frame, &view)).unwrap();
@@ -900,6 +912,7 @@ fn exited_pane_overlay_card_and_title_marker() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
@@ -966,6 +979,7 @@ fn exited_marker_survives_a_long_task_title() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
@@ -1029,6 +1043,7 @@ fn exited_marker_survives_a_wide_char_task_title() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
@@ -1078,6 +1093,7 @@ fn exited_pane_too_small_for_the_card_keeps_the_strip() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     // 50 wide → chrome 46, sidebar 23, panel interior 21 — too narrow for
@@ -1147,6 +1163,7 @@ fn sidebar_ranks_globally_across_workspaces_and_tags_cards() {
         tick: 0,
         workspace: None,
         clock: None,
+        card_drag: None,
     };
 
     let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -1224,6 +1241,7 @@ fn done_pulse_keeps_sidebar_and_title_glyphs_in_step() {
             tick,
             workspace: None,
             clock: None,
+            card_drag: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         terminal.draw(|frame| render(frame, &view)).unwrap();
@@ -1311,6 +1329,7 @@ fn fleet_rate_limit_footer_shows_through_the_full_frame() {
             tick: 0,
             workspace: None,
             clock: None,
+            card_drag: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         terminal.draw(|frame| render(frame, &view)).unwrap();
@@ -1337,4 +1356,101 @@ fn fleet_rate_limit_footer_shows_through_the_full_frame() {
         let row = region_text(&without, 0, 80, y);
         assert!(!row.contains('▓'), "phantom footer row {y}: {row}");
     }
+}
+
+#[test]
+fn dragging_a_card_lifts_a_ghost_and_lights_the_drop_target() {
+    let now = Instant::now();
+    let (mut session, left, right) = two_agent_session(now);
+    // Focus the dragged pane, so the right pane's accent border can only come
+    // from the drag hovering it — not from focus.
+    session.focus(left);
+
+    let mut grids = HashMap::new();
+    grids.insert(left, Grid::from_text("left agent output"));
+    grids.insert(right, Grid::from_text("right agent output"));
+    let exited = HashMap::new();
+    let scrolled = HashMap::new();
+
+    let detector = Detector::builtin();
+    let entries = sidebar_entries(&session, &detector, now);
+
+    // The cursor sits in the middle of the right pane — the same geometry the
+    // renderer lays out, so the drop-target and ghost land where the code puts
+    // them.
+    let area = Rect::new(0, 0, 80, 24);
+    let panes = panes_area(area, SidebarSide::Left);
+    let rects = session.layout(panes.width, panes.height);
+    let (_, rrect) = rects.iter().find(|(id, _)| *id == right).unwrap();
+    let panel = Rect::new(
+        panes.x + rrect.x,
+        panes.y + rrect.y,
+        rrect.width,
+        rrect.height,
+    );
+    let cursor = (panel.x + panel.width / 2, panel.y + panel.height / 2);
+
+    let view = View {
+        session: &session,
+        grids: &grids,
+        exited: &exited,
+        entries: &entries,
+        shells: &[],
+        selected: None,
+        hover: None,
+        zoomed: false,
+        side: SidebarSide::Left,
+        launcher: None,
+        confirm: None,
+        context_menu: None,
+        toasts: &[],
+        rate_limits: None,
+        selection: None,
+        scrolled: &scrolled,
+        welcome: false,
+        mode_badge: None,
+        status: "dragging",
+        tick: 0,
+        workspace: None,
+        clock: None,
+        card_drag: Some(CardDrag { pane: left, cursor }),
+    };
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal.draw(|frame| render(frame, &view)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    // The pane under the cursor lights its border in the accent — "drop here"
+    // shares the vocabulary of "focused". The right pane is unfocused, so this
+    // accent is the drag's doing.
+    let corner = buf.cell((panel.x, panel.y)).unwrap();
+    assert_eq!(corner.symbol(), "╭", "right pane top-left corner");
+    assert_eq!(
+        corner.style().fg,
+        Some(ACCENT),
+        "drop target border should be accent"
+    );
+
+    // The ghost box lifts off just past the cursor (offset +2,+1), clamped so
+    // it stays on-screen — the same math the renderer uses, so the corner
+    // lands where the code drew it. The card's name is "claude-code" (11
+    // cells), so the box is 11 + 6 = 17 wide.
+    let box_w = 17u16;
+    let box_h = 3u16;
+    let gx = (cursor.0 + 2).min(80u16 - box_w);
+    let gy = (cursor.1 + 1).min(24u16 - box_h);
+    let ghost_corner = buf.cell((gx, gy)).unwrap();
+    assert_eq!(ghost_corner.symbol(), "╭", "ghost box top-left corner");
+    assert_eq!(
+        ghost_corner.style().fg,
+        Some(ACCENT),
+        "ghost border should be accent"
+    );
+    // The dragged card's name rides the ghost's middle row, out over the right
+    // pane where the left pane's own title never reaches.
+    let label_row = region_text(&buf, gx, gx + box_w, gy + 1);
+    assert!(
+        label_row.contains("claude"),
+        "ghost should carry the dragged card's name, got: {label_row}"
+    );
 }

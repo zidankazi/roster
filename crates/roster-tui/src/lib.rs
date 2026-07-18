@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
+use ratatui::text::Span;
 use ratatui::widgets::{Block, BorderType};
 use ratatui::Frame;
 use roster_core::{Grid, PaneId, Session};
@@ -103,6 +104,18 @@ impl SidebarSide {
 /// sits in, leaving the rest of the frame to the panes.
 pub const SIDEBAR_RAIL: u16 = 2;
 
+/// A sidebar card lifted off its row and following the cursor mid-drag: the
+/// pane it stands for and the cursor cell its ghost tracks, in absolute frame
+/// coordinates. The binary only fills this once the pointer has left the
+/// press anchor, so a stationary click never flashes a ghost.
+#[derive(Clone, Copy, Debug)]
+pub struct CardDrag {
+    /// The pane whose card is being dragged.
+    pub pane: PaneId,
+    /// The cursor cell the ghost follows, in absolute frame coordinates.
+    pub cursor: (u16, u16),
+}
+
 /// Everything one frame needs: the model, each pane's screen, and the
 /// prepared sidebar rows.
 pub struct View<'a> {
@@ -165,6 +178,9 @@ pub struct View<'a> {
     /// The wall clock shown beside the workspace, pre-formatted by the
     /// caller — roster-tui does no time-of-day reads of its own.
     pub clock: Option<&'a str>,
+    /// A sidebar card being dragged, lifted onto a ghost that tracks the
+    /// cursor (see [`CardDrag`]). `None` renders exactly the pre-drag frame.
+    pub card_drag: Option<CardDrag>,
 }
 
 /// The sidebar width for a frame of `total_width`: the fixed width, or half
@@ -437,13 +453,19 @@ pub fn render(frame: &mut Frame, view: &View) {
         // The pane's rounded panel; focus reads as the accent border, one
         // vocabulary with the sidebar's inverted card. The title rides the
         // top border.
+        let panel = Rect::new(panes.x + rect.x, panes.y + rect.y, rect.width, rect.height);
+        // A card dragged over this pane lights its border too: the same accent
+        // that means "focused" now means "drop here", so the drag has a
+        // visible target under the ghost.
+        let drag_over = view.card_drag.is_some_and(|drag| {
+            drag.pane != id && panel.contains(Position::new(drag.cursor.0, drag.cursor.1))
+        });
         if panelled(rect) {
-            let border_style = if focused == Some(id) {
+            let border_style = if focused == Some(id) || drag_over {
                 Style::default().fg(style::ACCENT)
             } else {
                 style::muted()
             };
-            let panel = Rect::new(panes.x + rect.x, panes.y + rect.y, rect.width, rect.height);
             frame.render_widget(
                 Block::bordered()
                     .border_type(BorderType::Rounded)
@@ -550,6 +572,13 @@ pub fn render(frame: &mut Frame, view: &View) {
 
     draw_status(frame.buffer_mut(), area, view);
     draw_toasts(frame.buffer_mut(), area, view.toasts);
+
+    // The lifted card rides above every region — it crosses from the sidebar
+    // out over the panes — so it draws after the sidebar and panes are down.
+    // A modal never coexists with a drag, so it is fine below the launcher.
+    if let Some(drag) = view.card_drag {
+        draw_card_ghost(frame, area, view, drag);
+    }
 
     if let Some((items, state)) = view.launcher {
         let launcher = Launcher::new(items, state);
@@ -682,6 +711,70 @@ fn draw_title(
         buf.set_string(cols.start + 1, span.y, "✕", style);
         buf.set_string(cols.start + 2, span.y, " ", style::muted());
     }
+}
+
+/// The lifted-card overlay: a small rounded box tracking the cursor while a
+/// sidebar card is dragged, so the drag reads as picking the card up and
+/// carrying it toward a pane. Drawn above every region because it crosses
+/// from the sidebar out over the panes. The drop itself happens on release in
+/// the binary; this is purely the "something is moving" signal, and it uses
+/// the raised-surface + accent vocabulary (never DIM, which would vanish on a
+/// dark terminal — see `style::muted`).
+fn draw_card_ghost(frame: &mut Frame, area: Rect, view: &View, drag: CardDrag) {
+    let (glyph, glyph_style) = match view.entries.iter().find(|e| e.pane == drag.pane) {
+        Some(entry) => (
+            state_glyph(entry.state, view.tick),
+            style::state_glyph_style(entry.state, view.tick),
+        ),
+        None => ("○", style::muted()),
+    };
+    // The card's name, cell-budgeted to a third of the frame so a long task
+    // title can't stretch the ghost across the screen.
+    let name = pane_display_name(view, drag.pane);
+    let budget = usize::from(area.width / 3).max(6);
+    let label = sidebar::truncate(&name, budget);
+    let label_cells = Span::raw(&label).width() as u16;
+    // ` ⠋ label ` between the borders: 2 border columns, a pad, the glyph, a
+    // pad, the label, a trailing pad.
+    let box_w = (label_cells + 6).min(area.width);
+    let box_h = 3;
+    if area.width < box_w || area.height < box_h {
+        return;
+    }
+    // Sit just off the cursor so the pointer never covers the ghost, clamped
+    // so the whole box stays on-screen even at the frame's edges.
+    let x = drag
+        .cursor
+        .0
+        .saturating_add(2)
+        .min(area.right().saturating_sub(box_w));
+    let y = drag
+        .cursor
+        .1
+        .saturating_add(1)
+        .min(area.bottom().saturating_sub(box_h));
+    let ghost = Rect::new(x, y, box_w, box_h);
+    frame
+        .buffer_mut()
+        .set_style(ghost, Style::default().bg(style::SURFACE_RAISED));
+    frame.render_widget(
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(style::ACCENT)),
+        ghost,
+    );
+    let buf = frame.buffer_mut();
+    let row = ghost.y + 1;
+    buf.set_string(ghost.x + 1, row, " ", style::muted());
+    buf.set_string(ghost.x + 2, row, glyph, glyph_style);
+    buf.set_string(ghost.x + 3, row, " ", style::muted());
+    buf.set_stringn(
+        ghost.x + 4,
+        row,
+        &label,
+        usize::from(box_w.saturating_sub(5)),
+        style::bright(),
+    );
 }
 
 /// Draw the expanded sidebar — the pinned `+ new agent` button, the agent
