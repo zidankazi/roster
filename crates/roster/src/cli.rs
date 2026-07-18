@@ -106,11 +106,12 @@ KEYS (prefix: ctrl-b):
   prefix ctrl-b  send a literal ctrl-b
 
 MOUSE:
-  click a pane or its title to focus it; click a sidebar card to jump;
-  click a card's auto chip to toggle auto-approve; click the status bar's
-  workspace indicator to cycle windows; click launcher rows to launch;
-  drag the divider between panes to resize; wheel-scroll a pane's history;
-  drag over text to select and copy it.
+  click a pane or its title to focus it; click a sidebar card to jump, or
+  drag it onto a pane to view both agents side by side; click a card's auto
+  chip to toggle auto-approve; click the status bar's workspace indicator to
+  cycle windows; click the sidebar's chevron (or rail) to collapse/expand it;
+  click launcher rows to launch; drag the divider between panes to resize;
+  wheel-scroll a pane's history; drag over text to select and copy it.
 ";
 
 /// Parse arguments (excluding argv\[0\]).

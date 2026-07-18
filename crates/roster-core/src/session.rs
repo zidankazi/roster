@@ -377,6 +377,52 @@ impl Session {
         }
     }
 
+    /// Move the existing pane `moved` in beside `target`, splitting `target`'s
+    /// window along `direction` and focusing `moved`. The pane keeps its id
+    /// and process — only its place in the layout changes; if it was the last
+    /// pane of its old window, that window is removed. Returns `false` when
+    /// either id is missing or they are the same pane.
+    ///
+    /// This is how a sidebar card dragged onto a pane brings two agents from
+    /// different windows onto one screen.
+    pub fn move_pane_beside(
+        &mut self,
+        target: PaneId,
+        moved: PaneId,
+        direction: SplitDirection,
+    ) -> bool {
+        if moved == target || self.window_of(moved).is_none() || self.window_of(target).is_none() {
+            return false;
+        }
+        // Detach `moved` from its window, keeping the pane in `self.panes` —
+        // unlike `close`, the process lives on. `window_of` re-locates its
+        // window here because `target`'s could shift if `moved`'s is removed.
+        let from = self.window_of(moved).expect("checked above");
+        let window = self.windows.remove(from);
+        match window.root.remove_leaf(moved) {
+            RemoveOutcome::Removed(root, sibling) => {
+                let focused = if window.focused == moved {
+                    sibling
+                } else {
+                    window.focused
+                };
+                self.windows.insert(from, Window { root, focused });
+            }
+            // `moved` was the whole window; dropping it (already removed from
+            // the Vec) is the move. Nothing else references `from` now.
+            RemoveOutcome::LastLeaf => {}
+            RemoveOutcome::NotFound(_) => unreachable!("window_of found moved"),
+        }
+        // Indices may have shifted when a window was removed, so re-find the
+        // target and split `moved` in beside it.
+        let into = self.window_of(target).expect("checked above");
+        let window = &mut self.windows[into];
+        window.root.split_leaf(target, moved, direction);
+        window.focused = moved;
+        self.active = into;
+        true
+    }
+
     /// Close a pane, collapsing its split. Focus moves to the first pane of
     /// the surviving sibling subtree. Closing a window's last pane removes
     /// the window; closing the last pane of the last window empties the
@@ -1383,6 +1429,48 @@ mod tests {
         assert_eq!(s.window_of(b), Some(0));
         assert_eq!(s.window_of(c), Some(1));
         assert_eq!(s.window_of(PaneId::from_raw(999)), None);
+    }
+
+    #[test]
+    fn move_pane_beside_brings_a_pane_from_another_window() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        let b = s.new_window();
+        assert_eq!(s.window_count(), 2);
+
+        assert!(s.move_pane_beside(a, b, SplitDirection::Horizontal));
+        // b's window is gone; both panes now share a's window, b focused.
+        assert_eq!(s.window_count(), 1);
+        assert_eq!(s.window_of(a), Some(0));
+        assert_eq!(s.window_of(b), Some(0));
+        assert_eq!(s.active_window(), Some(0));
+        assert_eq!(s.focused(), Some(b));
+        assert!(s.pane(b).is_some(), "moved pane must keep its process");
+    }
+
+    #[test]
+    fn move_pane_beside_keeps_the_source_window_when_it_had_other_panes() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        let b = s.new_window();
+        let c = s.split(b, SplitDirection::Horizontal).unwrap();
+        assert_eq!(s.window_count(), 2);
+
+        // Move c out of its window (which still holds b) beside a.
+        assert!(s.move_pane_beside(a, c, SplitDirection::Vertical));
+        assert_eq!(s.window_count(), 2);
+        assert_eq!(s.window_of(c), s.window_of(a));
+        assert_ne!(s.window_of(c), s.window_of(b));
+        assert_eq!(s.focused(), Some(c));
+    }
+
+    #[test]
+    fn move_pane_beside_rejects_self_and_missing_panes() {
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        assert!(!s.move_pane_beside(a, a, SplitDirection::Horizontal));
+        assert!(!s.move_pane_beside(a, PaneId::from_raw(999), SplitDirection::Horizontal));
+        assert!(!s.move_pane_beside(PaneId::from_raw(999), a, SplitDirection::Horizontal));
     }
 
     #[test]

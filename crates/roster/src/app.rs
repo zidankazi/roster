@@ -334,6 +334,12 @@ pub struct App {
     last_area: Rect,
     /// A grabbed split divider, in pane-local coordinates, while dragging.
     dragging: Option<(u16, u16)>,
+    /// A sidebar card pressed and possibly being dragged: the pane it names
+    /// and the press cell. A release over a pane moves it in beside that pane
+    /// (side-by-side view); a release still on the sidebar is a plain click
+    /// that focuses it. Focus is deferred to the release so a drag doesn't
+    /// swap the view out from under the drop target.
+    card_drag: Option<(PaneId, (u16, u16))>,
     /// The bare-start shell pane: a backdrop for the launcher only. An
     /// ordinary shell (the launcher's `shell` row, a split) is a supported
     /// tenant and does survive as its own workspace — but this placeholder
@@ -448,6 +454,7 @@ impl App {
             last_detect: Instant::now() - DETECT_EVERY,
             last_area: Rect::new(0, 0, SPAWN_COLS, SPAWN_ROWS),
             dragging: None,
+            card_drag: None,
             placeholder: None,
             next_generation: 0,
             zoomed: true,
@@ -626,6 +633,7 @@ impl App {
             last_detect: Instant::now() - DETECT_EVERY,
             last_area: Rect::new(0, 0, SPAWN_COLS, SPAWN_ROWS),
             dragging: None,
+            card_drag: None,
             placeholder,
             next_generation: 0,
             zoomed: true,
@@ -2198,14 +2206,18 @@ impl App {
                 self.selection = None;
                 let hit = self.hit_at(x, y);
                 match hit {
+                    // Arm a card drag; the release decides between a plain
+                    // focus (dropped on the sidebar) and a move-beside
+                    // (dropped on a pane). Focus is deferred so the drag can
+                    // read the pre-drag layout under the drop point.
                     Hit::SidebarEntry(index) => {
                         if let Some(entry) = self.last_entries.get(index) {
-                            self.session.focus(entry.pane);
+                            self.card_drag = Some((entry.pane, (x, y)));
                         }
                     }
                     Hit::SidebarShell(index) => {
                         if let Some(shell) = self.last_shells.get(index) {
-                            self.session.focus(shell.pane);
+                            self.card_drag = Some((shell.pane, (x, y)));
                         }
                     }
                     Hit::SidebarAuto(index) => {
@@ -2381,6 +2393,33 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 self.dragging = None;
                 self.sel_drag = None;
+                // A pressed card released: over a pane, move it in beside that
+                // pane for a side-by-side view; anywhere else, it was a plain
+                // click that focuses the card's pane.
+                if let Some((pane, _start)) = self.card_drag.take() {
+                    let onto = match self.hit_at(x, y) {
+                        Hit::Pane(target)
+                        | Hit::PaneTitle(target)
+                        | Hit::PaneClose(target)
+                        | Hit::PaneRestart(target) => Some(target),
+                        _ => None,
+                    };
+                    let moved = onto.is_some_and(|target| {
+                        self.session
+                            .move_pane_beside(target, pane, SplitDirection::Horizontal)
+                    });
+                    if moved {
+                        // Two agents share the screen now: leave solo so both
+                        // show, and tuck the sidebar away for room.
+                        self.zoomed = false;
+                        if !self.side.is_collapsed() {
+                            self.side = self.side.toggled();
+                        }
+                    } else {
+                        self.session.focus(pane);
+                    }
+                    return;
+                }
                 // A release that ends a guest grab belongs to the guest —
                 // it finishes the guest's own selection (and its own copy);
                 // roster must not also re-copy a highlight elsewhere.

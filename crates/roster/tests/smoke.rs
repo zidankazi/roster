@@ -1207,6 +1207,98 @@ fn prefix_s_collapses_the_sidebar_and_widens_the_panes() {
 }
 
 #[test]
+fn dragging_a_card_onto_a_pane_shows_both_agents_side_by_side() {
+    let dir = fake_agent_dir();
+    std::env::set_var(
+        "PATH",
+        format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+    std::env::set_var("SHELL", "/bin/sh");
+
+    let (cols, rows) = (120u16, 30u16);
+    let mut pty = Pty::spawn(&format!("'{}' 'sleep 300'", bin()), cols, rows).expect("spawn");
+    let rx = pump(&pty);
+    let mut screen = Screen::new(cols, rows);
+
+    // One shell in its own window.
+    assert!(
+        drain_while(&mut screen, "focused ▸ sleep 300", true, &rx),
+        "first shell never settled:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    // Launch a second shell — it opens in its own window and takes focus,
+    // shown solo, so only one panel is on screen and sleep 300 is off-screen.
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"c").expect("new agent");
+    assert!(
+        drain_while(&mut screen, "run a command", true, &rx),
+        "launcher never opened:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    // A distinct first word so its card ("$ cat") can't be confused with the
+    // "$ sleep" card we later drag.
+    pty.write(b"cat").expect("type command");
+    pty.write(b"\r").expect("launch");
+    assert!(
+        drain_while(&mut screen, "focused ▸ cat", true, &rx),
+        "second shell never took focus:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    assert_eq!(panel_count(&screen), 1, "expected one solo panel");
+
+    // Find the sleep shell's sidebar card row — its name truncates to
+    // "$ sleep" (left sidebar, first ~33 columns).
+    let card_y = screen
+        .grid()
+        .lines()
+        .iter()
+        .position(|l| l.chars().take(33).collect::<String>().contains("sleep"))
+        .unwrap_or_else(|| {
+            panic!(
+                "sleep card not in the sidebar:\n{}",
+                screen.grid().lines().join("\n")
+            )
+        }) as u16;
+
+    // Press the card, drag into the pane region, release on the pane: the
+    // dragged agent moves in beside the shown one, so both share the screen.
+    pty.write(format!("\x1b[<0;6;{}M", card_y + 1).as_bytes())
+        .expect("press card");
+    pty.write(b"\x1b[<32;70;15M").expect("drag into panes");
+    pty.write(b"\x1b[<0;70;15m").expect("release on pane");
+
+    let start = Instant::now();
+    let mut panels = 1;
+    while start.elapsed() < DEADLINE {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(chunk) => screen.advance(&chunk),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        panels = panel_count(&screen);
+        if panels == 2 {
+            break;
+        }
+    }
+    assert_eq!(
+        panels,
+        2,
+        "drag did not bring both agents side by side:\n{}",
+        screen.grid().lines().join("\n")
+    );
+
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"q").expect("quit");
+    let status = pty.wait().expect("wait");
+    assert!(status.success, "exit: {status:?}");
+}
+
+#[test]
 fn typing_into_the_backdrop_shell_does_not_save_it() {
     let (_dir, mut pty, rx, mut screen) = bare_start();
 
