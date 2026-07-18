@@ -450,7 +450,7 @@ impl App {
             dragging: None,
             placeholder: None,
             next_generation: 0,
-            zoomed: false,
+            zoomed: true,
             last_mouse: None,
             last_click: None,
             pointer: Pointer::Default,
@@ -628,7 +628,7 @@ impl App {
             dragging: None,
             placeholder,
             next_generation: 0,
-            zoomed: false,
+            zoomed: true,
             last_mouse: None,
             last_click: None,
             pointer: Pointer::Default,
@@ -2610,6 +2610,9 @@ impl App {
         let Some(target) = self.session.focused() else {
             return;
         };
+        // Solo shows one pane; a split you can't see is useless, so making a
+        // second pane drops to the grid to reveal both halves.
+        self.zoomed = false;
         if let Some(remote) = &mut self.remote {
             remote
                 .pending

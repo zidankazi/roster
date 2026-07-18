@@ -221,11 +221,20 @@ fn mouse_clicks_focus_launch_and_jump() {
 
     let mut screen = Screen::new(cols, rows);
 
-    // The second command has focus at startup; the status line names it
-    // (the footer sets hints a wide gap apart).
+    // The second command has focus at startup; solo is the default view, so
+    // the footer offers the sidebar as the switcher.
+    assert!(
+        drain_while(&mut screen, "focused ▸ sleep 70  ·  click a card", true, &rx),
+        "first frame:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    // This test drives the two-pane grid (divider drag, both panes' click
+    // targets), so leave solo for the tiles via the grid pill (0-based cols
+    // 104..110 → 1-based click 108, 29).
+    pty.write(&click(108, 29)).expect("click grid");
     assert!(
         drain_while(&mut screen, "focused ▸ sleep 70  ·  ctrl-b", true, &rx),
-        "first frame:\n{}",
+        "grid never engaged:\n{}",
         screen.grid().lines().join("\n")
     );
 
@@ -348,15 +357,8 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
 
     let mut screen = Screen::new(cols, rows);
 
-    assert!(
-        drain_while(&mut screen, "focused ▸ sleep 70  ·  ctrl-b", true, &rx),
-        "first frame:\n{}",
-        screen.grid().lines().join("\n")
-    );
-
-    // Click the "solo" pill in the status row's layout switcher (status
-    // row 1-based 29, 0-based cols 111..117 → 1-based click at 115, 29).
-    pty.write(&click(115, 29)).expect("click solo");
+    // Solo is the default view: one panel, the SOLO badge, and the footer
+    // offering the sidebar as the switcher.
     assert!(
         drain_while(
             &mut screen,
@@ -364,7 +366,7 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
             true,
             &rx
         ),
-        "solo never engaged:\n{}",
+        "solo not the default:\n{}",
         screen.grid().lines().join("\n")
     );
     let lines = screen.grid().lines();
@@ -396,12 +398,12 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
         screen.grid().lines().join("\n")
     );
 
-    // Clicking the "grid" pill (0-based cols 104..110) returns to the
-    // tiles: two panels, four side borders.
+    // Clicking the "grid" pill (0-based cols 104..110 → 1-based click 108,
+    // 29) tiles the panes: two panels, four side borders.
     pty.write(&click(108, 29)).expect("click grid");
     assert!(
         drain_while(&mut screen, "focused ▸ sleep 60  ·  ctrl-b", true, &rx),
-        "grid never returned:\n{}",
+        "grid never engaged:\n{}",
         screen.grid().lines().join("\n")
     );
     let lines = screen.grid().lines();
@@ -412,10 +414,9 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
         lines.join("\n")
     );
 
-    // Double-clicking a pane's title (the top border row, 1-based 2) also
-    // goes solo.
-    pty.write(&click(40, 2)).expect("first click");
-    pty.write(&click(40, 2)).expect("second click");
+    // Clicking the "solo" pill (0-based cols 111..117 → 1-based click 115,
+    // 29) returns to the single full-size panel.
+    pty.write(&click(115, 29)).expect("click solo");
     assert!(
         drain_while(
             &mut screen,
@@ -423,7 +424,16 @@ fn solo_view_toggles_by_click_and_switches_with_focus() {
             true,
             &rx
         ),
-        "double-click did not go solo:\n{}",
+        "solo pill did not re-engage solo:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    // Double-clicking a pane's title (the top border row, 1-based 2) toggles
+    // back to the grid tiles.
+    pty.write(&click(40, 2)).expect("first click");
+    pty.write(&click(40, 2)).expect("second click");
+    assert!(
+        drain_while(&mut screen, "focused ▸ sleep 60  ·  ctrl-b", true, &rx),
+        "double-click did not toggle to grid:\n{}",
         screen.grid().lines().join("\n")
     );
 
@@ -812,6 +822,16 @@ fn guest_osc52_copy_is_relayed_only_from_the_focused_pane() {
         false
     };
 
+    // Solo is the default; this test needs both shells visible and pane 1
+    // clickable to focus, so switch to the grid first (ctrl-b z). Focus stays
+    // on pane 2, so pane 1's first write is still the unfocused case.
+    assert!(
+        drain_raw(&mut screen, &mut raw, "focused ▸"),
+        "first frame never rendered:\n{}",
+        screen.grid().lines().join("\n")
+    );
+    pty.write(&[0x02]).expect("prefix");
+    pty.write(b"z").expect("grid");
     assert!(
         drain_raw(&mut screen, &mut raw, "m-one"),
         "unfocused pane never wrote its first payload:\n{}",
@@ -984,7 +1004,7 @@ fn prefix_r_splits_the_focused_pane_side_by_side() {
 
     // One full-width panel: a content row shows just its two side borders.
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 60  ·  ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 60  ·  click a card", true, &rx),
         "single pane never settled:\n{}",
         screen.grid().lines().join("\n")
     );
@@ -1039,7 +1059,7 @@ fn prefix_b_splits_the_focused_pane_stacked() {
     let mut screen = Screen::new(cols, rows);
 
     assert!(
-        drain_while(&mut screen, "focused ▸ sleep 60  ·  ctrl-b", true, &rx),
+        drain_while(&mut screen, "focused ▸ sleep 60  ·  click a card", true, &rx),
         "single pane never settled:\n{}",
         screen.grid().lines().join("\n")
     );
