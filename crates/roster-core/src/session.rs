@@ -1474,6 +1474,22 @@ mod tests {
     }
 
     #[test]
+    fn move_pane_beside_within_one_window_rearranges_without_panicking() {
+        // Dragging a card whose pane already shares the target's window: the
+        // window is removed and reinserted around the move, so the target must
+        // still be found (no panic) and both panes stay on one window.
+        let mut s = Session::new();
+        let a = s.focused().unwrap();
+        let b = s.split(a, SplitDirection::Horizontal).unwrap();
+        assert_eq!(s.window_count(), 1);
+
+        assert!(s.move_pane_beside(b, a, DropSide::Left));
+        assert_eq!(s.window_count(), 1);
+        assert_eq!(s.window_of(a), s.window_of(b));
+        assert_eq!(s.focused(), Some(a));
+    }
+
+    #[test]
     fn move_pane_beside_docks_on_the_chosen_side() {
         // Left drop: the moved pane tiles to the left of the target.
         let mut s = Session::new();
